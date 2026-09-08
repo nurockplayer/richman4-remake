@@ -17,6 +17,7 @@ from import_original import (  # noqa: E402
     import_source,
     parse_map_payload,
     parse_mkf,
+    parse_stock_groups,
 )
 
 
@@ -107,6 +108,52 @@ def make_map_payload() -> bytes:
     return bytes(payload)
 
 
+def make_stock_pe(*, edition: str = "Game") -> bytes:
+    """Build a tiny PE32 image with the edition's fixed stock-table VA."""
+
+    table_va = {"Game": 0x47CE92, "MultiverseJourney": 0x47F072}[edition]
+    group_count = {"Game": 4, "MultiverseJourney": 8}[edition]
+    image_base = 0x400000
+    section_va = table_va - image_base
+    table_size = group_count * 12 * 0x24
+    names: list[bytes] = [f"股票 {index + 1}".encode("cp950") for index in range(12)]
+    name_offsets: list[int] = []
+    name_data = bytearray()
+    for name in names:
+        name_offsets.append(table_size + len(name_data))
+        name_data.extend(name)
+        name_data.append(0)
+    section_data = bytearray(table_size + len(name_data))
+    for group in range(group_count):
+        for index in range(12):
+            start = (group * 12 + index) * 0x24
+            pointer = image_base + section_va + name_offsets[index]
+            struct.pack_into("<I", section_data, start, pointer)
+            struct.pack_into("<H", section_data, start + 4, 1 if index < 2 else 0)
+            section_data[start + 6] = 0
+            section_data[start + 7] = 0
+            struct.pack_into("<HH", section_data, start + 8, 5000 if index == 0 else 10000, 0)
+            struct.pack_into("<6f", section_data, start + 0x0C, 100.0 + index, 100.0 + index, 100.0 + index, 1.0, 0.0, 0.0)
+    section_data[table_size:] = name_data
+
+    pe_offset = 0x80
+    optional_size = 0xE0
+    section_table_offset = pe_offset + 24 + optional_size
+    raw_offset = 0x200
+    image = bytearray(raw_offset + len(section_data))
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3C, pe_offset)
+    image[pe_offset : pe_offset + 4] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", image, pe_offset + 4, 0x14C, 1, 0, 0, 0, optional_size, 0x102)
+    optional = pe_offset + 24
+    struct.pack_into("<H", image, optional, 0x10B)
+    struct.pack_into("<I", image, optional + 28, image_base)
+    image[section_table_offset : section_table_offset + 8] = b".data\0\0\0"
+    struct.pack_into("<4I", image, section_table_offset + 8, len(section_data), section_va, len(section_data), raw_offset)
+    image[raw_offset:] = section_data
+    return bytes(image)
+
+
 class ImportOriginalTests(unittest.TestCase):
     def test_mkf_index_and_entry_span(self) -> None:
         data = make_mkf([b"abc", b"012345"])
@@ -159,6 +206,10 @@ class ImportOriginalTests(unittest.TestCase):
         self.assertEqual(
             parsed["facilities"][0]["reserved_hex"], "c8002c019001f4015802"
         )
+        self.assertEqual(parsed["companies"][0]["source_owner"], 2)
+        self.assertEqual(parsed["companies"][0]["stock_index"], 0)
+        self.assertEqual(parsed["companies"][0]["company_type"], 11)
+        self.assertEqual(parsed["companies"][0]["stock_value"], 0)
         self.assertEqual(parsed["companies"][0]["commerce_type"], 11)
         self.assertEqual(parsed["landscapes"][0]["display_name"], "CITY")
         self.assertEqual(parsed["trailing_bytes"], 0)
@@ -183,6 +234,48 @@ class ImportOriginalTests(unittest.TestCase):
             self.assertEqual(catalog["count"], 1)
             self.assertEqual(catalog["maps"][0]["entry_index"], 1)
             self.assertTrue((output_a / "raw/Game/map-01.bin").is_file())
+
+    def test_stock_pe_parser_reads_groups_and_source_word(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "rich4.exe"
+            path.write_bytes(make_stock_pe())
+            groups = parse_stock_groups(path, edition="Game")
+            self.assertEqual(len(groups), 4)
+            self.assertEqual(len(groups[0]), 12)
+            self.assertEqual(groups[0][0]["name"], "股票 1")
+            self.assertEqual(groups[0][0]["company_id"], 1)
+            self.assertEqual(groups[0][0]["source_initial_link"], 1)
+            self.assertEqual(groups[0][0]["market_supply"], 5000)
+            self.assertEqual(groups[0][1]["base_price"], 101.0)
+
+    def test_stock_pe_parser_rejects_bad_name_pointer(self) -> None:
+        image = bytearray(make_stock_pe())
+        # The first section starts at 0x200; overwrite the first row pointer.
+        struct.pack_into("<I", image, 0x200, 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "rich4.exe"
+            path.write_bytes(image)
+            with self.assertRaises(FormatError):
+                parse_stock_groups(path, edition="Game")
+
+    def test_import_source_attaches_runtime_stock_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "installation"
+            edition = source / "Game"
+            edition.mkdir(parents=True)
+            (edition / "map.mkf").write_bytes(make_mkf([make_map_payload()]))
+            (edition / "rich4.exe").write_bytes(make_stock_pe())
+            output = Path(temporary) / "out"
+            manifest = import_source(source, output)
+            self.assertEqual(manifest["editions"][0]["stock"]["status"], "available")
+            catalog = json.loads((output / "maps/catalog.json").read_text())
+            rows = catalog["maps"][0]["stock_rows"]
+            self.assertEqual(len(rows), 12)
+            # The runtime links by map company +0x19, not the static +0x04
+            # template word. The fixture company has stock_index zero.
+            self.assertEqual(rows[0]["company_id"], 1)
+            self.assertEqual(rows[0]["source_initial_link"], 1)
+            self.assertEqual(rows[1]["company_id"], 0)
 
 
 if __name__ == "__main__":

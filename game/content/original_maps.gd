@@ -7,6 +7,10 @@ const FACILITY_MIN_SOURCE_TYPE := 4001
 const FACILITY_MAX_SOURCE_TYPE := 5999
 const FACILITY_MAX_SOURCE_ID := 1999
 const FACILITY_PRICE_COUNT := 6
+const STOCK_COUNT := 12
+const COMPANY_MAX_ID := 1999
+const COMPANY_MIN_SOURCE_TYPE := 6001
+const COMPANY_MAX_SOURCE_TYPE := 7999
 const EVENT_NAMES := {
 	0: "道路", 1: "道路", 2: "新聞", 3: "命運", 4: "監獄入口", 5: "醫院入口",
 	6: "企鵝小遊戲", 7: "氣球小遊戲", 8: "接物小遊戲", 9: "彩券",
@@ -52,6 +56,9 @@ static func load_catalog(path: String = "", original_facilities: bool = false) -
 
 static func _integer(value: Variant, low: int, high: int) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and floor(float(value)) == float(value) and value >= low and value <= high
+
+static func _number(value: Variant, low: float, high: float) -> bool:
+	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) >= low and float(value) <= high
 
 static func _failure(message: String) -> Dictionary:
 	return {"ok": false, "error": message}
@@ -152,6 +159,125 @@ static func _normalize_facility_record(value: Variant) -> Dictionary:
 	normalized["fee_by_level"] = prices.fee_by_level.duplicate()
 	return {"ok": true, "error": "", "record": normalized}
 
+static func _normalize_company_record(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return _failure("企業資料無效。")
+	var company: Dictionary = value.duplicate(true)
+	if not _integer(company.get("id", null), 1, COMPANY_MAX_ID):
+		return _failure("企業身分無效。")
+	# Caches created before the company capability only have the legacy fields.
+	# Keep those records loadable; they cannot advertise the complete company
+	# capability until the source financial fields are present.
+	var has_source_state := company.has("stock_index") or company.has("stock_value") or company.has("monthly_profit") or company.has("cumulative_profit") or company.has("treasury") or company.has("company_type") or company.has("source_owner")
+	if not has_source_state:
+		if company.has("owner") and not _integer(company.get("owner"), 0, 255):
+			return _failure("企業所有者無效。")
+		if company.has("commerce_type") and not _integer(company.get("commerce_type"), 0, 255):
+			return _failure("企業類型無效。")
+		return {"ok": true, "error": "", "record": company, "complete": false}
+	for key in ["stock_index", "company_type", "stock_value", "monthly_profit", "cumulative_profit", "treasury", "toll_fee"]:
+		if not company.has(key):
+			return _failure("企業缺少 %s。" % key)
+	if not _integer(company.get("stock_index"), 0, STOCK_COUNT - 1):
+		return _failure("企業股票索引無效。")
+	if not _integer(company.get("company_type"), 0, 255):
+		return _failure("企業類型無效。")
+	if company.has("commerce_type") and (not _integer(company.get("commerce_type"), 0, 255) or int(company.commerce_type) != int(company.company_type)):
+		return _failure("企業類型別名不一致。")
+	company["commerce_type"] = int(company.company_type)
+	for key in ["stock_value", "monthly_profit", "cumulative_profit", "treasury", "toll_fee"]:
+		if not _integer(company.get(key), 0, 1000000000):
+			return _failure("企業財務欄位無效。")
+	var source_owner: Variant = company.get("source_owner", company.get("owner", null))
+	if not _integer(source_owner, 0, 255):
+		return _failure("企業所有者無效。")
+	if company.has("owner") and (not _integer(company.get("owner"), 0, 255) or int(company.owner) != int(source_owner)):
+		return _failure("企業所有者別名不一致。")
+	company["source_owner"] = int(source_owner)
+	company["owner"] = int(source_owner)
+	if company.has("display_name") and (not company.display_name is String or company.display_name.length() > 128):
+		return _failure("企業名稱無效。")
+	if company.has("name_bytes_hex") and not _hex(company.get("name_bytes_hex"), 16):
+		return _failure("企業名稱來源無效。")
+	return {"ok": true, "error": "", "record": company, "complete": true}
+
+static func _normalize_stock_row(value: Variant, expected_index: int) -> Dictionary:
+	if not value is Dictionary:
+		return _failure("股票資料無效。")
+	var row: Dictionary = value.duplicate(true)
+	if not _integer(row.get("index", null), expected_index, expected_index):
+		return _failure("股票索引順序無效。")
+	if not row.get("name") is String or row.name.is_empty() or row.name.length() > 128:
+		return _failure("股票名稱無效。")
+	if not _integer(row.get("company_id", null), 0, COMPANY_MAX_ID):
+		return _failure("股票企業連結無效。")
+	for key in ["market_supply", "turn_supply"]:
+		if not _integer(row.get(key, null), 0, 10000):
+			return _failure("股票供給數量無效。")
+	if int(row.turn_supply) > int(row.market_supply):
+		return _failure("股票本回合供給超出市場供給。")
+	for key in ["base_price", "previous_price", "price"]:
+		if not _number(row.get(key, null), 1.0, 9999.0):
+			return _failure("股票價格無效。")
+	if not _number(row.get("volatility", null), 0.0, 1000.0) or not _number(row.get("momentum", null), -10.0, 10.0) or not _number(row.get("shock", null), -100.0, 100.0):
+		return _failure("股票波動欄位無效。")
+	for key in ["suspension", "event"]:
+		if not _integer(row.get(key, null), 0, 255):
+			return _failure("股票狀態欄位無效。")
+	if row.has("source_initial_link") and not _integer(row.get("source_initial_link"), 0, 65535):
+		return _failure("股票來源連結欄位無效。")
+	return {"ok": true, "error": "", "row": row}
+
+static func _normalize_companies(raw_companies: Array, raw: Dictionary) -> Dictionary:
+	var companies: Array = []
+	var companies_by_id: Dictionary = {}
+	var company_complete: Dictionary = {}
+	for value in raw_companies:
+		var company_result := _normalize_company_record(value)
+		if not company_result.ok:
+			return _failure(company_result.error)
+		var company: Dictionary = company_result.record
+		var company_id := int(company.id)
+		if companies_by_id.has(company_id):
+			return _failure("企業身分重複。")
+		companies_by_id[company_id] = company
+		company_complete[company_id] = bool(company_result.get("complete", false))
+		companies.append(company)
+	var stock_rows: Array = []
+	var supports := false
+	if raw.has("stock_rows"):
+		if not raw.get("stock_rows") is Array or raw.stock_rows.size() != STOCK_COUNT:
+			return _failure("股票資料必須有十二列。")
+		for index in range(STOCK_COUNT):
+			var row_result := _normalize_stock_row(raw.stock_rows[index], index)
+			if not row_result.ok:
+				return _failure(row_result.error)
+			stock_rows.append(row_result.row)
+		var consistent := not companies.is_empty()
+		var seen_stock_indexes: Dictionary = {}
+		for company in companies:
+			var company_id := int(company.id)
+			if not bool(company_complete.get(company_id, false)):
+				consistent = false
+				continue
+			var stock_index := int(company.stock_index)
+			if seen_stock_indexes.has(stock_index):
+				consistent = false
+			seen_stock_indexes[stock_index] = company_id
+			if int(stock_rows[stock_index].company_id) != company_id:
+				consistent = false
+		for row in stock_rows:
+			var linked_id := int(row.company_id)
+			if linked_id == 0:
+				continue
+			if not companies_by_id.has(linked_id) or not bool(company_complete.get(linked_id, false)):
+				consistent = false
+				continue
+			if int(companies_by_id[linked_id].stock_index) != int(row.index):
+				consistent = false
+		supports = consistent
+	return {"ok": true, "error": "", "companies": companies, "stock_rows": stock_rows, "supports_original_companies": supports}
+
 ## Return the one canonical runtime classification for a source node.
 ##
 ## Keeping this mapping next to normalize_map means a graph save cannot change
@@ -192,6 +318,15 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	var nodes: Array = raw.nodes
 	if nodes.size() < 2 or nodes.size() > 4096:
 		return _failure("原版地圖節點數無效。")
+	var company_result := _normalize_companies(raw.companies, raw)
+	if not company_result.ok:
+		return _failure(company_result.error)
+	var companies: Array = company_result.companies
+	var stock_rows: Array = company_result.stock_rows
+	var supports_original_companies: bool = company_result.supports_original_companies
+	var companies_by_id: Dictionary = {}
+	for company in companies:
+		companies_by_id[int(company.id)] = company
 	var lands: Dictionary = {}
 	for land in raw.lands:
 		if not land is Dictionary or not _integer(land.get("id"), 1, 1999) or lands.has(int(land.id)):
@@ -223,6 +358,7 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	var board: Array = []
 	var referenced_lands: Dictionary = {}
 	var referenced_facilities: Dictionary = {}
+	var company_node_indexes: Dictionary = {}
 	var start_position := -1
 	for index in range(nodes.size()):
 		var node: Variant = nodes[index]
@@ -252,6 +388,16 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 			"type_and_idx": object_type, "visual_index": node.get("visual_index", 0), "event_code": event_code, "source_status_bits": int(status_bits), "source_object_id": 0,
 			"kind": "rest", "name": EVENT_NAMES.get(event_code, "未知事件 %d" % event_code), "owner": -1, "building_level": 0,
 			"cost": 0, "upgrade_cost": 0, "base_rent": 0, "rent": 0, "group": "", "tax_amount": 0}
+		if object_type >= COMPANY_MIN_SOURCE_TYPE and object_type <= COMPANY_MAX_SOURCE_TYPE:
+			var source_company_id := object_type - 6000
+			tile["source_company_id"] = source_company_id
+			if not company_node_indexes.has(source_company_id):
+				company_node_indexes[source_company_id] = index
+			tile["company_node_index"] = int(company_node_indexes[source_company_id])
+			if companies_by_id.has(source_company_id):
+				var company_state: Dictionary = companies_by_id[source_company_id]
+				tile["company_name"] = str(company_state.get("display_name", ""))
+				tile["company_state"] = company_state.duplicate(true)
 		if classification.kind == "property":
 			var land_id := object_type - 2000
 			if not lands.has(land_id) or referenced_lands.has(land_id):
@@ -330,5 +476,7 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"name": "%s · 地圖 %d" % ["原版" if raw.edition == "Game" else "超時空之旅", raw.map_number],
 		"source": source, "original_facilities": original_facilities,
 		"board": board, "start_position": start_position, "supports_new_game": supported,
-		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。"}
+		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。",
+		"companies": companies, "stock_rows": stock_rows,
+		"supports_original_companies": supports_original_companies}
 	return {"ok": true, "error": "", "definition": definition}

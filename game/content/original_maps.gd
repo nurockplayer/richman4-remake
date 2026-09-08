@@ -90,7 +90,7 @@ static func normalize_map(raw: Variant) -> Dictionary:
 		return _failure("原版地圖身分無效。")
 	if raw.get("version") != 1 or not _hash(raw.get("payload_sha256")) or not _hash(raw.get("source_file_sha256")):
 		return _failure("原版地圖來源資訊無效。")
-	if not _integer(raw.get("entry_index"), 0, 999) or raw.get("archive") != "%s/map.mkf" % raw.edition:
+	if not _integer(raw.get("entry_index"), 0, 999) or raw.get("archive") not in ["map.mkf", "%s/map.mkf" % raw.edition]:
 		return _failure("原版地圖來源位置無效。")
 	for key in ["nodes", "lands", "facilities", "companies"]:
 		if not raw.get(key) is Array:
@@ -188,7 +188,7 @@ static func normalize_map(raw: Variant) -> Dictionary:
 	var supported := not referenced_lands.is_empty()
 	var definition := {"schema": SCHEMA, "version": 1, "id": "%s:%d" % [raw.edition, raw.map_number],
 		"name": "%s · 地圖 %d" % ["原版" if raw.edition == "Game" else "超時空之旅", raw.map_number],
-		"source": {"edition": raw.edition, "map_number": int(raw.map_number), "archive": raw.get("archive", ""),
+		"source": {"edition": raw.edition, "map_number": int(raw.map_number), "archive": "%s/map.mkf" % raw.edition,
 			"entry_index": raw.get("entry_index", 0), "payload_sha256": raw.get("payload_sha256", ""), "source_file_sha256": raw.get("source_file_sha256", "")},
 		"board": board, "start_position": start_position, "supports_new_game": supported,
 		"unsupported_reason": "" if supported else "此地圖需要商業設施系統，尚未開放對局。"}

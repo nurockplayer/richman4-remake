@@ -640,6 +640,7 @@ def write_png(
     *,
     pixel_format: str,
     transparent_index_zero: bool = True,
+    transparent_word_zero: bool = False,
 ) -> None:
     """Write one chunk as a deterministic RGBA PNG using only zlib."""
 
@@ -664,10 +665,10 @@ def write_png(
             rows.append(0)
             start = row * chunk.width * 2
             for offset in range(start, start + chunk.width * 2, 2):
-                red, green, blue = _word_to_rgb(
-                    struct.unpack_from("<H", chunk.pixels, offset)[0], pixel_format
-                )
-                rows.extend((red, green, blue, 255))
+                word = struct.unpack_from("<H", chunk.pixels, offset)[0]
+                red, green, blue = _word_to_rgb(word, pixel_format)
+                alpha = 0 if transparent_word_zero and word == 0 else 255
+                rows.extend((red, green, blue, alpha))
     payload = bytearray(b"\x89PNG\r\n\x1a\n")
     payload.extend(
         _png_chunk(
@@ -1090,6 +1091,7 @@ def decode_source(
     max_chunks: int = DEFAULT_MAX_CHUNKS,
     pixel_format: str = "rgb555",
     transparent_index_zero: bool = True,
+    transparent_word_zero: bool = False,
 ) -> dict[str, Any]:
     """Decode all bounded SPR/SMP chunks from an owner installation."""
 
@@ -1152,6 +1154,7 @@ def decode_source(
                         visual,
                         pixel_format=pixel_format,
                         transparent_index_zero=transparent_index_zero,
+                        transparent_word_zero=transparent_word_zero,
                     )
                     image_records.append(
                         {
@@ -1185,6 +1188,9 @@ def decode_source(
                         "transparent_index_zero": transparent_index_zero
                         if visual.signature == "SPR"
                         else None,
+                        "transparent_word_zero": transparent_word_zero
+                        if visual.signature == "SMP"
+                        else None,
                         "images": image_records,
                     }
                 )
@@ -1201,6 +1207,7 @@ def decode_source(
             },
             "pixel_format": pixel_format,
             "transparent_index_zero": transparent_index_zero,
+            "transparent_word_zero": transparent_word_zero,
             "archives": archive_records,
             "visual_resources": visual_records,
             "gnd_resources_skipped": True,
@@ -1265,6 +1272,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep SPR palette index 0 opaque",
     )
+    parser.add_argument(
+        "--transparent-word-zero",
+        action="store_true",
+        help="treat SMP source word 0 as transparent",
+    )
     return parser
 
 
@@ -1286,6 +1298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_chunks=args.max_chunks,
             pixel_format=args.pixel_format,
             transparent_index_zero=not args.opaque_index_zero,
+            transparent_word_zero=args.transparent_word_zero,
         )
         count = len(manifest["visual_resources"])
         chunks = sum(item["chunk_count"] for item in manifest["visual_resources"])

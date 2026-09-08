@@ -19,7 +19,7 @@ jobs:
       - run: bash tools/check.sh
       - name: Reject private assets
         run: |
-          if git ls-files | grep -Ei '\.(mkf|exe|dll|avi|ogg|wav|pck|tpz)$|(^|/)(\.local|dfw4cskzl_136622)/'; then
+          if git ls-files | grep -Ei '\.(mkf|bin|exe|dll|avi|ogg|wav|pck|tpz|zip)$|(^|/)(\.local|dfw4cskzl_136622)/'; then
             echo 'Private or generated binary assets must not be tracked.' >&2
             exit 1
           fi

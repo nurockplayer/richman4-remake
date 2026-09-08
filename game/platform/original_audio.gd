@@ -37,6 +37,7 @@ func configure(path: String, persist := true) -> bool:
 	if found.is_empty():
 		return false
 	stop()
+	player.stream = null
 	source_path = path
 	tracks = found
 	current_track = -1

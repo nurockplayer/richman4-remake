@@ -18,6 +18,8 @@ func _run() -> void:
 	_test_bankruptcy_auction_and_game_over()
 	_test_non_final_bankruptcy_advances_to_next_actor()
 	_test_loan_bankruptcy_bookkeeping()
+	_test_loan_due_bankruptcy_settles_assets()
+	_test_sunday_property_actions()
 	_test_bank_and_monthly_interest()
 	_test_vehicles_and_verified_cards()
 	_test_save_load_and_validation()
@@ -254,6 +256,56 @@ func _test_loan_bankruptcy_bookkeeping() -> void:
 	_expect_equal(game.state["bank"]["loans"], 3000, "third borrower principal remains after normal repayment")
 	game._repay_due_loan(1)
 	_expect_equal(game.state["bank"]["loans"], 3000, "repeating a settled repayment does not double deduct bank loans")
+
+
+func _test_loan_due_bankruptcy_settles_assets() -> void:
+	var game: GameState = GameState.new_game(324, 2)
+	game.state["bank_landing"] = true
+	_expect(bool(game._take_loan(0, 1000).get("ok", false)), "insufficient-loan fixture can borrow")
+	game.state["phase"] = "await_action"
+	game.state["bank_access"] = true
+	_expect(bool(game._deposit(0, 300).get("ok", false)), "insufficient-loan fixture records a deposit")
+	game.state["players"][0]["cash"] = 200
+	game.state["players"][0]["loan_due_day"] = 1
+	game.state["day"] = 1
+	var bank_cash_before: int = int(game.state["bank"]["cash"])
+	game._repay_due_loan(0)
+	_expect(bool(game.state["players"][0]["bankrupt"]), "insufficient due loan declares bankruptcy")
+	_expect_equal(game.state["players"][0]["cash"], 0, "bankruptcy due settlement consumes available cash")
+	_expect_equal(game.state["players"][0]["deposit"], 0, "bankruptcy due settlement consumes available deposit")
+	_expect_equal(game.state["bank"]["deposits"], 0, "bankruptcy due settlement clears bank deposit liability")
+	_expect_equal(game.state["bank"]["cash"], bank_cash_before + 200, "bank receives available cash while applying the deposit")
+	_expect_equal(game.state["bank"]["loans"], 0, "remaining due-loan principal is written off")
+
+
+func _test_sunday_property_actions() -> void:
+	var game: GameState = GameState.new_game(325, 2)
+	game.state["day"] = 7
+	game._sync_state()
+	game.state["phase"] = "await_action"
+	game.state["current_player"] = 0
+	game.state["players"][0]["position"] = 1
+	game.state["property_action_used"] = false
+	var buy_result: Dictionary = game.choose_action("buy")
+	_expect(bool(buy_result.get("ok", false)), "Sunday permits property purchase")
+	game.state["property_action_used"] = false
+	var upgrade_result: Dictionary = game.choose_action("upgrade")
+	_expect(bool(upgrade_result.get("ok", false)), "Sunday permits property upgrade")
+	var ai: GameState = GameState.new_game(325, 2)
+	ai.set_player_ai(0, true)
+	ai.state["day"] = 7
+	ai._sync_state()
+	ai.state["phase"] = "await_action"
+	ai.state["players"][0]["position"] = 1
+	ai._ai_action(0)
+	_expect_equal(ai.state["board"][1]["owner"], 0, "AI purchases property on Sunday")
+	ai.state["phase"] = "await_action"
+	ai.state["current_player"] = 0
+	ai.state["property_action_used"] = false
+	ai.state["board"][1]["owner"] = 0
+	ai.state["players"][0]["properties"] = [1]
+	ai._ai_action(0)
+	_expect_equal(ai.state["board"][1]["building_level"], 1, "AI upgrades property on Sunday")
 
 
 func _test_bank_and_monthly_interest() -> void:

@@ -186,18 +186,60 @@ assert_safe_link_destination_relationship() {
 import os
 import sys
 
-cache = os.path.realpath(sys.argv[1])
-link = os.path.realpath(sys.argv[2])
+raw_cache = os.path.abspath(sys.argv[1])
+raw_link = os.path.abspath(sys.argv[2])
+
+
+def existing_ancestors(path: str):
+    current = os.path.abspath(path)
+    while True:
+        if os.path.exists(current):
+            yield current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+
+def same_existing(left: str, right: str) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return False
+
+
+def reject(cache_display: str, link_display: str) -> None:
+    print(
+        "private asset destination/link paths overlap by filesystem identity "
+        f"or canonical path: {cache_display} <-> {link_display}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+# Filesystem identity is authoritative for existing endpoints. This catches
+# case aliases on default macOS APFS even when realpath() preserves the two
+# different spellings. Comparing an existing endpoint with the other's existing
+# ancestors also catches identity-based ancestor/descendant overlap.
+if os.path.exists(raw_cache):
+    for ancestor in existing_ancestors(raw_link):
+        if same_existing(raw_cache, ancestor):
+            reject(raw_cache, raw_link)
+if os.path.exists(raw_link):
+    for ancestor in existing_ancestors(raw_cache):
+        if same_existing(raw_link, ancestor):
+            reject(raw_cache, raw_link)
+
+# Keep the canonical-string check for symlink aliases and overlap involving
+# path suffixes that do not exist yet.
+cache = os.path.realpath(raw_cache)
+link = os.path.realpath(raw_link)
 try:
     common = os.path.commonpath([cache, link])
 except ValueError:
     raise SystemExit(0)
 if cache == link or common == cache or common == link:
-    print(
-        f"private asset destination/link paths overlap after canonicalization: {cache} <-> {link}",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
+    reject(cache, link)
 PY
   then
     fail "--destination/cache and --link must be separate non-overlapping physical paths"
@@ -262,7 +304,8 @@ adopt_existing_worktree_cache() {
 }
 
 # No destructive migration, duplicate removal or new checkout occurs until the
-# physical path relationship has been canonicalized and proven disjoint.
+# physical path relationship has been proven disjoint by filesystem identity
+# plus canonical path overlap checks.
 assert_safe_link_destination_relationship
 adopt_existing_worktree_cache
 

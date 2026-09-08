@@ -15,6 +15,20 @@ macOS 打包輸出 `build/Richman4.zip` 與新的 `build/package.XXXXXX/*.app`�
 
 這個 public code repo 不放未確認公開分發權的第三方原版資料，也不追蹤可重建的衍生快取。擁有者可先依 [assets.md](assets.md) 從 private Git/LFS source 取回原始資料，再在 `.local/` 產生匯入結果。沒有素材時仍應可執行，但測試棋盤不代表已還原原版地圖；差異見 [fidelity.md](fidelity.md)。
 
+## THIN 與 FULL 工作樹
+
+一般 Codex worktree 預設是 **THIN**：只保留程式碼與小型測試所需資料，不因 agent isolation 複製完整原版素材、衍生 PNG、Godot import cache 或 export bundle。需要完整素材／渲染／打包驗證時，優先使用擁有者的 `~/Developer/richman4-remake` 作為單一 **FULL** validation lane。
+
+任何新 FULL materialization 前先執行：
+
+```sh
+bash tools/disk_guard.sh --operation "Richman4 FULL validation"
+```
+
+預設低於 60 GiB 會警告，不應再建立第二個 FULL lane；低於 25 GiB 會 fail closed。只有擁有者明確接受風險時才可用 `RICHMAN4_ALLOW_LOW_DISK=1` 覆寫 hard stop。門檻可用 `RICHMAN4_DISK_WARN_GIB` 與 `RICHMAN4_DISK_HARD_MIN_GIB` 調整。
+
+`.godot/`、`.local/imported-original/`、`.local/original-scenes/`、`build/`、`dist/` 與 test results 都是可重建 cache。FULL worktree 退役後應回收，不把它們當成需要長期保存的開發 authority。
+
 ## 私人素材 bootstrap
 
 重新 clone 後，擁有者可用自己的 GitHub credentials 取回 public binding 所指定的 private asset revision：
@@ -22,6 +36,28 @@ macOS 打包輸出 `build/Richman4.zip` 與新的 `build/package.XXXXXX/*.app`�
 ```sh
 bash tools/bootstrap_private_assets.sh
 asset_source="$PWD/.local/private-assets/source/dfw4cskzl_136622"
+```
+
+bootstrap 不再把 Git LFS checkout 複製到每個 worktree。預設 canonical 本機 cache 是：
+
+```text
+~/Library/Caches/richman4-remake/private-assets/<pinned-revision>/
+```
+
+目前 worktree 的 `.local/private-assets` 只是一個指向該 verified cache 的 symlink。同一部機器上的其他 worktree 執行相同 bootstrap 時會重新驗證並直接 reuse；只有該 pinned revision 尚未 materialize 時才會執行 LFS download，且下載前會通過 `tools/disk_guard.sh`。
+
+若 cache root 必須放在其他 volume，可設定：
+
+```sh
+RICHMAN4_CACHE_ROOT=/Volumes/FastSSD/richman4-cache \
+  bash tools/bootstrap_private_assets.sh
+```
+
+bootstrap 會檢查 Git LFS、固定 commit、manifest SHA-256 與每個來源檔案；缺少 private repo credentials 時會停止並顯示存取錯誤，不會改用舊機器路徑或其他同步服務。既有 shared cache 若驗證失敗也不會被自動覆寫。
+
+只有 FULL lane 需要建立衍生素材：
+
+```sh
 python3 tools/import_original.py \
   --source "$asset_source" \
   --output .local/imported-original \
@@ -31,7 +67,7 @@ python3 tools/decode_original_ground.py \
   --output .local/original-scenes
 ```
 
-bootstrap 會檢查 Git LFS、固定 commit、manifest SHA-256 與每個來源檔案；缺少 private repo credentials 時會停止並顯示存取錯誤，不會改用舊機器路徑或其他同步服務。上述 importer 產生的 catalog、PNG 與其他 cache 仍只在本機 `.local/` 使用。
+這些 catalog、PNG 與其他 derived outputs 仍是可丟棄 cache；ordinary THIN worktree 不應重建它們。
 
 ## 原版地圖的私人套件
 

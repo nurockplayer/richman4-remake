@@ -1919,6 +1919,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("graph property source mismatch %d" % index)
 				var adjacent: Variant = tile.get("adjacent", null)
 				if typeof(adjacent) != TYPE_ARRAY or adjacent.size() > 4:
+					errors.append("invalid graph adjacency %d" % index)
 					continue
 				var seen_neighbors: Dictionary = {}
 				for neighbor in adjacent:

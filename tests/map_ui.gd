@@ -241,6 +241,17 @@ func _test_saved_map_identity(ui: Control, definition: Dictionary) -> void:
 	_expect(str(ui._active_map_definition.get("id", "")) == str(validated_snapshot.get("map_id", "")), "loaded map identity uses the validated core map id")
 	_expect(str(ui._active_map_definition.get("name", "")) == str(validated_snapshot.get("map_name", "")), "tampered map identity cannot replace the validated core map name")
 	_expect(active_board == saved_board, "tampered map identity cannot replace the validated core geometry")
+	var other_source := definition.duplicate(true)
+	other_source.source.payload_sha256 = "c".repeat(64)
+	other_source.board[0].x = 999999
+	ui._map_catalog = [other_source]
+	ui._adopt_map_from_snapshot(validated_snapshot)
+	_expect(ui._active_map_definition.board == saved_board, "same map id with changed catalog provenance cannot replace saved geometry")
+	var core_script: Variant = load("res://game/core/game_state.gd")
+	var legacy_snapshot: Dictionary = core_script.new_game(31, 2).get_snapshot()
+	ui._adopt_map_from_snapshot(legacy_snapshot)
+	_expect(ui._active_map_definition.id == "test:classic40", "identity-free v1 save clears original-map identity")
+	_expect(ui._active_map_definition.board == legacy_snapshot.board, "identity-free v1 save restores actual legacy geometry")
 
 func _test_invalid_seed_preserves_game(ui: Control) -> void:
 	ui._new_game(17, 2, ui._selected_map_definition)

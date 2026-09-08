@@ -19,6 +19,7 @@ func _initialize() -> void:
 	_test_card_points_and_unsupported_tiles()
 	_test_fixed_property_economics()
 	_test_pending_route_save_load_and_validation()
+	_test_graph_save_degree_limit()
 	_test_ai_completes_pending_routes_deterministically()
 	print("Graph flow checks: %d, failures: %d" % [_checks, _failures])
 	quit(1 if _failures else 0)
@@ -212,6 +213,18 @@ func _test_fixed_property_economics() -> void:
 	_expect(bool(second_upgrade.get("ok", false)), "second graph property upgrade succeeds")
 	_expect_equal(second_upgrade["event"]["price"], 300, "graph upgrade price remains fixed at house price")
 	_expect_equal(game.state["board"][2]["rent"], 600, "second graph rent uses source rent table")
+
+
+func _test_graph_save_degree_limit() -> void:
+	var game := _new_graph(42)
+	var saved: Dictionary = game.to_dict()
+	saved.board[1].adjacent = [0, 2, 3, 4, 5]
+	for index in [0, 2, 3, 4, 5]:
+		if not saved.board[index].adjacent.has(1):
+			saved.board[index].adjacent.append(1)
+	var validation := GameState.validate_save(saved)
+	_expect(not validation.ok, "degree-five graph save is rejected despite symmetric connected edges")
+	_expect(validation.errors.has("invalid graph adjacency 1"), "oversized adjacency receives a direct shape error")
 
 
 func _test_pending_route_save_load_and_validation() -> void:

@@ -2,6 +2,14 @@
 
 素材策略的目標不是「永遠留在某一台本機」，而是讓擁有者重新 clone 專案後，可以在具備授權憑證時重建完整開發素材。這個 public code repo 不直接提交沒有合法公開分發權的第三方原版檔案；指定的 source of truth 是 private Git repository `nurockplayer/richman4-remake-assets` 與 Git LFS。`config/private-assets.json` 鎖定 asset commit、manifest SHA-256 與來源根目錄，`tools/bootstrap_private_assets.sh` 會從該 binding 取回並逐檔驗證。原版本機安裝仍可作為一次性的 import／verification source，但不再是唯一可重建來源；bootstrap 不讀取 Dropbox 或其他同步資料夾。
 
+為避免 Codex worktree 把多 GB 原始素材成倍複製，bootstrap 預設把每個 pinned revision 只 materialize 一次到 machine-wide cache：
+
+```text
+~/Library/Caches/richman4-remake/private-assets/<pinned-revision>/
+```
+
+目前 worktree 的 `.local/private-assets` 只是指向該 verified cache 的 symlink。同一部機器的其他 worktree 會重新驗證並 reuse；只有 cache 尚不存在時才需要 Git LFS download。可用 `RICHMAN4_CACHE_ROOT=/其他磁碟/路徑` 將 shared cache 放到其他 volume。
+
 先以 bootstrap 取得 owner-authorized source：
 
 ```sh
@@ -9,7 +17,9 @@ bash tools/bootstrap_private_assets.sh
 asset_source="$PWD/.local/private-assets/source/dfw4cskzl_136622"
 ```
 
-bootstrap 需要本機 Git LFS 與能讀取 private repo 的 GitHub credentials；缺少權限會清楚失敗，不會 fallback 到舊機器的絕對路徑。它只取回 manifest 所列的原始來源，衍生 catalog、raw map payload、PNG 與 build output 仍由下列工具在本機產生。
+bootstrap 需要本機 Git LFS 與能讀取 private repo 的 GitHub credentials；缺少權限會清楚失敗，不會 fallback 到舊機器的絕對路徑。新 cache materialization 前會執行 `tools/disk_guard.sh`；既有 verified cache 可直接 reuse，不必為每個 THIN worktree 重複下載。它只取回 manifest 所列的原始來源，衍生 catalog、raw map payload、PNG 與 build output 仍由下列工具在本機產生。
+
+普通 agent worktree 預設維持 **THIN**，不生成完整 derived asset tree。需要完整素材、渲染或私人打包驗證時才使用單一 **FULL** validation lane；優先使用擁有者的 `~/Developer/richman4-remake`。FULL lane 中產生的 `.local/imported-original/`、`.local/original-scenes/`、`.godot/` 與 build output 都是可重建 cache，lane 退役時可回收。
 
 如果尚未能使用 private repo，`tools/import_original.py` 仍保留相容的本機匯入路徑。它會列出來源檔案與 SHA-256，驗證 MKF 索引表，並將可安全解析的地圖資料寫到 `.local/`。
 
@@ -46,7 +56,7 @@ MKF 是小端格式。檔案第一個 32 位元整數指向檔尾索引表；索
 
 地圖 JSON 永遠保留 `name_bytes_hex`。目前所有非空的土地、設施與景觀名稱都能以 CP950（Windows Big5 擴充）嚴格解碼後再編碼回相同位元組，因此工具另外提供 `display_name`、`display_name_encoding: "cp950"` 與 `display_name_confidence: "inferred-roundtrip"`；ASCII 名稱也保留 `name_ascii`。這是跨目前地圖 payload 的編碼證據，不等同於原版 UI 顯示驗證。節點、土地、設施、企業與景觀的未知欄位也保留為十六進位欄位，供之後對照原始執行時驗證。
 
-目前 `.local/` 是本機匯入／衍生 cache，已由 `.gitignore` 排除。不要用 `git add -f` 把未確認公開分發權的第三方素材塞進這個 public code repo；指定的 private Git/LFS source 可保存 owner-authorized 原始來源。乾淨 checkout 應依 `config/private-assets.json` 的 manifest/bootstrap 取得必要素材，不必依賴原先那台電腦上的固定路徑。
+目前 `.local/` 是本機匯入／衍生 cache，已由 `.gitignore` 排除；其中 `.local/private-assets` 是 machine-wide verified source 的 worktree-local symlink。不要用 `git add -f` 把未確認公開分發權的第三方素材塞進這個 public code repo；指定的 private Git/LFS source 可保存 owner-authorized 原始來源。乾淨 checkout 應依 `config/private-assets.json` 的 manifest/bootstrap 取得必要素材，不必依賴原先那台電腦上的固定路徑。
 
 格式研究另參考 [mytbk/rich4](https://github.com/mytbk/rich4/tree/54ff26750e7e7f585da6fe68c4e8972cd22ed509) 的容器／地圖欄位記錄，再以本機資料的界線、欄位與 round-trip 結果核對。匯入器為 Python 獨立實作；該研究 repo 與解碼程式沒有納入此 repo 或遊戲包。
 

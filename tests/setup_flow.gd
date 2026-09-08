@@ -12,7 +12,9 @@ func _initialize() -> void:
 	_test_defaults_and_player_funds()
 	_test_setup_option_validation()
 	_test_calendar_and_month_boundary()
+	_test_calendar_terminal_boundary()
 	_test_deadline_and_wealth_settlement()
+	_test_zero_wealth_does_not_force_setup_winner()
 	_test_setup_save_round_trip()
 	_test_graph_setup_constructor()
 	_test_setup_ai_completion()
@@ -103,6 +105,9 @@ func _test_setup_option_validation() -> void:
 		{"start_date": {"year": 1998, "month": 1, "day": 1}, "day_limit": 1},
 		{"start_date": {"year": 1998, "month": 1, "day": 1, "extra": 1}},
 		{"start_date": {"year": 1998, "month": 2, "day": 29}},
+		{"start_date": {"year": "2063", "month": 1, "day": 1}},
+		{"start_date": {"year": 2063, "month": 1, "day": "1"}},
+		{"start_date": {"year": 2063, "month": 1, "day": true}},
 		{"start_date": {"year": 1998, "month": 1, "day": 1}, "character_ids": [0, 0]},
 		{"start_date": {"year": 1998, "month": 1, "day": 1}, "character_ids": [0, 12]},
 		{"start_date": {"year": 1998, "month": 1, "day": 1}, "character_ids": [0]},
@@ -142,6 +147,20 @@ func _test_calendar_and_month_boundary() -> void:
 	_expect_equal([game.state["players"][0]["deposit"], game.state["players"][1]["deposit"]], deposits_after, "repeating month settlement is idempotent")
 
 
+func _test_calendar_terminal_boundary() -> void:
+	var boundary: Object = _new_setup(9, 2, {"start_date": {"year": 9999, "month": 12, "day": 31}})
+	_expect(boundary != null, "maximum supported date starts")
+	if boundary == null:
+		return
+	_end_setup_round(boundary)
+	_expect_equal(boundary.state["phase"], "game_over", "calendar boundary settles the setup game")
+	_expect_equal(boundary.state["day"], 1, "calendar boundary does not advance to an unrepresentable day")
+	_expect_equal(boundary.state["elapsed"], 0, "calendar boundary keeps elapsed invariant")
+	_expect_equal(boundary.state["date"], {"year": 9999, "month": 12, "day": 31}, "calendar boundary preserves last date")
+	_expect_equal(boundary.state["last_event"].get("reason", ""), "calendar_limit", "calendar boundary records implementation limit")
+	_expect(bool(GameState.validate_save(boundary.to_dict()).get("ok", false)), "calendar boundary save remains valid")
+
+
 func _test_deadline_and_wealth_settlement() -> void:
 	var deadline_options: Dictionary = {"start_date": {"year": 1998, "month": 1, "day": 1}, "day_limit": 30}
 	var deadline: Object = _new_setup(7, 2, deadline_options)
@@ -171,6 +190,27 @@ func _test_deadline_and_wealth_settlement() -> void:
 		_expect_equal(target.get_player_wealth(0), 600000, "wealth helper includes cash")
 
 
+func _test_zero_wealth_does_not_force_setup_winner() -> void:
+	var game: Object = _new_setup(10, 2, {"start_date": {"year": 1998, "month": 1, "day": 1}, "day_limit": 30})
+	_expect(game != null, "zero wealth settlement fixture starts")
+	if game == null:
+		return
+	for player in game.state["players"]:
+		player["cash"] = 0
+		player["deposit"] = 0
+		player["loan"] = 0
+		player["properties"] = []
+		player["property_values"] = 0
+		player["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
+	game.state["bank"]["deposits"] = 0
+	game.state["day"] = 31
+	game._sync_state()
+	_expect(not game._check_setup_end_conditions(), "zero wealth deadline keeps the setup game running")
+	_expect_equal(game.state["phase"], "await_roll", "zero wealth deadline does not enter game over")
+	_expect_equal(game.state["winner"], -1, "zero wealth setup settlement has no winner")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "zero wealth setup state remains saveable")
+
+
 func _test_setup_save_round_trip() -> void:
 	var game: Object = _new_setup(99, 2, {"start_date": {"year": 1999, "month": 12, "day": 31}, "initial_fund": 100000, "character_ids": [10, 11]})
 	_expect(game != null, "save fixture starts")
@@ -198,6 +238,34 @@ func _test_setup_save_round_trip() -> void:
 	bad_deposits["bank"]["deposits"] += 1
 	_expect(not bool(GameState.validate_save(bad_deposits).get("ok", false)), "tampered setup bank deposits are rejected")
 
+	var json_payload: Variant = JSON.parse_string(game.to_json())
+	_expect(json_payload is Dictionary, "setup save parses through the JSON API")
+	var json_restored: Object = GameState.from_dict(json_payload) if json_payload is Dictionary else null
+	_expect(json_restored != null, "setup save reloads after JSON parsing")
+	if json_restored != null:
+		_expect_equal(json_restored.to_json(), game.to_json(), "JSON save reload preserves setup state")
+
+	var numeric_game: Object = _new_setup(100, 2, {"start_date": {"year": 2063, "month": 12, "day": 31}})
+	_expect(numeric_game != null, "numeric date fixture starts")
+	if numeric_game != null:
+		_end_setup_round(numeric_game)
+		var numeric_payload: Variant = JSON.parse_string(numeric_game.to_json())
+		_expect(numeric_payload is Dictionary, "numeric date save parses through JSON")
+		if numeric_payload is Dictionary:
+			var float_payload: Dictionary = numeric_payload.duplicate(true)
+			for date_key in ["start_date", "date"]:
+				var date_value: Dictionary = float_payload[date_key]
+				for field in ["year", "month", "day"]:
+					date_value[field] = float(date_value[field])
+			var float_restored: Object = GameState.from_dict(float_payload)
+			_expect(float_restored != null, "integral float dates reload after JSON parsing")
+			if float_restored != null:
+				_expect_equal(float_restored.state["date"], {"year": 2064, "month": 1, "day": 1}, "numeric date reload canonicalizes date fields")
+		var ui_path := "user://richman4_save.json"
+		_expect(numeric_game.save_to_path(ui_path), "UI save path accepts setup JSON")
+		var ui_path_restored: Object = GameState.load_from_path(ui_path)
+		_expect(ui_path_restored != null, "UI save path reloads setup JSON")
+
 
 func _test_graph_setup_constructor() -> void:
 	var normalized: Dictionary = Maps.normalize_map(Fixture.make())
@@ -224,6 +292,21 @@ func _test_setup_ai_completion() -> void:
 	_expect(int(game.state["winner"]) >= 0 and int(game.state["winner"]) < 2, "AI setup settlement has a valid winner")
 	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "AI setup final save validates")
 
+	var long_game: Object = _new_setup(2, 4, {"start_date": {"year": 1998, "month": 1, "day": 1}, "initial_fund": 300000, "day_limit": 730})
+	_expect(long_game != null, "730-day AI setup fixture starts")
+	if long_game == null:
+		return
+	var long_result: Dictionary = long_game.run_ai_match(5000)
+	_expect(bool(long_result.get("ok", false)), "730-day AI setup match reaches its deadline")
+	_expect_equal(long_game.state["elapsed"], 730, "730-day AI setup match advances through all elapsed days")
+	_expect(int(long_game.state["bank"].get("cash", -1)) >= 0, "730-day AI setup bank cash remains non-negative")
+	_expect(bool(GameState.validate_save(long_game.to_dict()).get("ok", false)), "730-day AI setup final save validates")
+	var long_json_payload: Variant = JSON.parse_string(long_game.to_json())
+	var long_restored: Object = GameState.from_dict(long_json_payload) if long_json_payload is Dictionary else null
+	_expect(long_restored != null, "730-day AI setup JSON reloads")
+	if long_restored != null:
+		_expect_equal(long_restored.to_json(), long_game.to_json(), "730-day AI setup JSON reload preserves final state")
+
 
 func _test_legacy_versions_remain_unchanged() -> void:
 	var legacy: Object = GameState.new_game(42, 2)
@@ -232,6 +315,10 @@ func _test_legacy_versions_remain_unchanged() -> void:
 		_expect_equal(legacy.state["version"], 1, "legacy constructor keeps version one")
 		_expect(not legacy.state.has("start_date"), "legacy state has no setup fields")
 		_expect(bool(GameState.validate_save(legacy.to_dict()).get("ok", false)), "legacy v1 save validates")
+		legacy.state["players"][0]["cash"] = 0
+		legacy.state["players"][1]["cash"] = 0
+		legacy._set_action_options(0)
+		_expect_equal(legacy._richest_alive_player(), 0, "legacy richest-player behavior keeps zero-wealth fallback")
 		var legacy_copy: Object = GameState.from_dict(legacy.to_dict())
 		_expect(legacy_copy != null, "legacy v1 save restores")
 		if legacy_copy != null:

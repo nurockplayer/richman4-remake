@@ -3,6 +3,8 @@ extends RefCounted
 ## Weekdays use Monday=1 through Sunday=7. No system clock enters simulation.
 
 const MONTH_DAYS := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+const MIN_YEAR := 1998
+const MAX_YEAR := 9999
 
 static func _integer(value: Variant, low: int, high: int) -> bool:
 	if typeof(value) not in [TYPE_INT, TYPE_FLOAT]:
@@ -18,9 +20,14 @@ static func days_in_month(year: int, month: int) -> int:
 static func is_valid(date: Variant) -> bool:
 	if typeof(date) != TYPE_DICTIONARY:
 		return false
-	if not _integer(date.get("year"), 1998, 9999) or not _integer(date.get("month"), 1, 12):
+	if not _integer(date.get("year"), MIN_YEAR, MAX_YEAR) or not _integer(date.get("month"), 1, 12):
 		return false
 	return _integer(date.get("day"), 1, days_in_month(int(date.year), int(date.month)))
+
+static func is_last_supported_date(date: Variant) -> bool:
+	if not is_valid(date):
+		return false
+	return int(date.year) == MAX_YEAR and int(date.month) == 12 and int(date.day) == 31
 
 static func _serial(date: Dictionary) -> int:
 	var year := int(date.year)
@@ -44,7 +51,7 @@ static func add_days(date: Dictionary, elapsed: int) -> Dictionary:
 	while remainder >= (366 if year % 4 == 0 else 365):
 		remainder -= 366 if year % 4 == 0 else 365
 		year += 1
-	if year > 9999:
+	if year > MAX_YEAR:
 		return {}
 	var month := 1
 	while remainder >= days_in_month(year, month):

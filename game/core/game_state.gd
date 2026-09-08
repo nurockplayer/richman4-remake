@@ -148,19 +148,9 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	if not options.has("start_date") or typeof(options.get("start_date")) != TYPE_DICTIONARY:
 		return {}
 	var start_date: Dictionary = options["start_date"]
-	var date_keys: Array = ["year", "month", "day"]
-	if start_date.size() != date_keys.size():
+	var normalized_start_date: Dictionary = _canonical_setup_date(start_date)
+	if normalized_start_date.is_empty():
 		return {}
-	for key in date_keys:
-		if not start_date.has(key):
-			return {}
-	if not GameCalendar.is_valid(start_date):
-		return {}
-	var normalized_start_date: Dictionary = {
-		"year": int(start_date["year"]),
-		"month": int(start_date["month"]),
-		"day": int(start_date["day"]),
-	}
 
 	var initial_fund: int = 200000
 	if options.has("initial_fund"):
@@ -1410,6 +1400,13 @@ func _advance_to_next_alive(previous_id: int) -> void:
 		return
 	var wraps: bool = next_id <= previous_id
 	if wraps:
+		if _is_setup():
+			var current_elapsed: int = int(state.get("elapsed", max(0, int(state.get("day", 1)) - 1)))
+			var next_date: Dictionary = GameCalendar.add_days(state.get("start_date", {}), current_elapsed + 1)
+			if next_date.is_empty():
+				_sync_state()
+				_check_setup_end_conditions()
+				return
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
 		if _is_setup():
@@ -1483,8 +1480,8 @@ func _apply_deposit_interest() -> void:
 		player["deposit"] = deposit + interest
 		var bank: Dictionary = state.get("bank", {})
 		bank["deposits"] = int(bank.get("deposits", 0)) + interest
-		bank["cash"] = int(bank.get("cash", 0)) - interest
 		state["bank"] = bank
+		_bank_subtract_cash(interest)
 		_record_event("monthly_interest", {"player_id": int(player["id"]), "amount": interest})
 
 
@@ -1615,13 +1612,18 @@ func get_player_wealth(player_id: int) -> int:
 
 func _richest_alive_player() -> int:
 	var winner: int = -1
-	var best_wealth: int = INT64_MIN
+	var setup_save: bool = _is_setup()
+	var best_wealth: int = 0 if setup_save else INT64_MIN
+	# v3 only reports a winner for positive wealth; older saves retain their
+	# original first-player fallback when every alive player has no wealth.
 	for player in _players():
 		if not bool(player.get("alive", false)):
 			continue
 		var player_id: int = int(player.get("id", -1))
 		var wealth: int = _player_wealth(player_id)
 		# Strictly greater preserves the earlier player on a tie.
+		if setup_save and wealth <= 0:
+			continue
 		if winner < 0 or wealth > best_wealth:
 			winner = player_id
 			best_wealth = wealth
@@ -1642,20 +1644,26 @@ func _check_setup_end_conditions() -> bool:
 				target_reached = true
 				break
 	var deadline_reached: bool = day_limit > 0 and elapsed >= day_limit
-	if not deadline_reached and not target_reached:
+	var calendar_limit_reached: bool = GameCalendar.is_last_supported_date(state.get("date", {}))
+	if not deadline_reached and not target_reached and not calendar_limit_reached:
 		return false
 	var winner: int = _richest_alive_player()
+	if winner < 0 and not calendar_limit_reached:
+		return false
 	state["winner"] = winner
 	state["phase"] = "game_over"
 	state["action_options"] = []
-	var reason: String = "day_limit" if deadline_reached else "wealth_target"
-	_record_event("game_over", {
+	var reason: String = "day_limit" if deadline_reached else "wealth_target" if target_reached else "calendar_limit"
+	var game_over_event: Dictionary = {
 		"winner": winner,
 		"reason": reason,
 		"elapsed": elapsed,
 		"wealth_target": wealth_target,
 		"winner_wealth": _player_wealth(winner),
-	})
+	}
+	if calendar_limit_reached:
+		game_over_event["calendar_boundary"] = true
+	_record_event("game_over", game_over_event)
 	return true
 
 
@@ -1955,16 +1963,32 @@ static func _valid_string(value: Variant) -> bool:
 	return typeof(value) == TYPE_STRING
 
 
-static func _valid_setup_date(value: Variant) -> bool:
+static func _canonical_setup_date(value: Variant) -> Dictionary:
 	if typeof(value) != TYPE_DICTIONARY:
-		return false
+		return {}
 	var date: Dictionary = value
 	if date.size() != 3:
-		return false
-	for key in ["year", "month", "day"]:
-		if not date.has(key):
-			return false
-	return GameCalendar.is_valid(date)
+		return {}
+	if not _valid_int(date.get("year", null), GameCalendar.MIN_YEAR, GameCalendar.MAX_YEAR):
+		return {}
+	if not _valid_int(date.get("month", null), 1, 12):
+		return {}
+	var year: int = int(date["year"])
+	var month: int = int(date["month"])
+	if not _valid_int(date.get("day", null), 1, GameCalendar.days_in_month(year, month)):
+		return {}
+	var canonical: Dictionary = {
+		"year": year,
+		"month": month,
+		"day": int(date["day"]),
+	}
+	if not GameCalendar.is_valid(canonical):
+		return {}
+	return canonical
+
+
+static func _valid_setup_date(value: Variant) -> bool:
+	return not _canonical_setup_date(value).is_empty()
 
 
 static func validate_save(data: Dictionary) -> Dictionary:
@@ -2043,9 +2067,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if setup_save:
 		var start_date: Variant = data.get("start_date", null)
 		var current_date: Variant = data.get("date", null)
-		if not _valid_setup_date(start_date):
+		var canonical_start_date: Dictionary = _canonical_setup_date(start_date)
+		var canonical_current_date: Dictionary = _canonical_setup_date(current_date)
+		if canonical_start_date.is_empty():
 			errors.append("invalid start_date")
-		if not _valid_setup_date(current_date):
+		if canonical_current_date.is_empty():
 			errors.append("invalid date")
 		var elapsed_value: Variant = data.get("elapsed", null)
 		if not _valid_int(elapsed_value, 0, 3000000):
@@ -2060,9 +2086,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid last_settled_month")
 		if _valid_int(day_value, 1, day_max) and _valid_int(elapsed_value, 0, 3000000) and int(elapsed_value) != int(day_value) - 1:
 			errors.append("elapsed mismatch")
-		if _valid_setup_date(start_date) and _valid_int(elapsed_value, 0, 3000000):
-			var expected_date: Dictionary = GameCalendar.add_days(start_date, int(elapsed_value))
-			if expected_date.is_empty() or typeof(current_date) != TYPE_DICTIONARY or current_date != expected_date:
+		if not canonical_start_date.is_empty() and _valid_int(elapsed_value, 0, 3000000):
+			var expected_date: Dictionary = GameCalendar.add_days(canonical_start_date, int(elapsed_value))
+			if expected_date.is_empty() or canonical_current_date.is_empty() or canonical_current_date != expected_date:
 				errors.append("date mismatch")
 			elif not _valid_int(day_of_month_value, 1, 31) or int(day_of_month_value) != int(expected_date["day"]):
 				errors.append("day_of_month mismatch")
@@ -2560,7 +2586,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if not _valid_bool(current_actor.get("alive", null)) or not bool(current_actor.get("alive", false)) or not _valid_bool(current_actor.get("bankrupt", null)) or bool(current_actor.get("bankrupt", false)):
 			errors.append("dead current player")
 	if phase_name == "game_over":
-		if winner < 0 or winner >= player_count or typeof(players[winner]) != TYPE_DICTIONARY or not bool(players[winner].get("alive", false)):
+		if winner < 0 and not setup_save:
+			errors.append("invalid game over winner")
+		elif winner >= 0 and (winner >= player_count or typeof(players[winner]) != TYPE_DICTIONARY or not bool(players[winner].get("alive", false))):
 			errors.append("invalid game over winner")
 	elif winner != -1:
 		errors.append("winner set before game over")

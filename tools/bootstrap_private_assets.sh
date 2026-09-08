@@ -171,6 +171,34 @@ print(os.path.realpath(sys.argv[1]))
 PY
 }
 
+assert_safe_link_destination_relationship() {
+  [[ -n "$link_path" ]] || return 0
+  # A previously managed symlink pointing at destination is the normal reuse
+  # state and is checked again by ensure_worktree_link(). The dangerous case is
+  # a real directory (or not-yet-created path) that aliases/overlaps the cache.
+  [[ -L "$link_path" ]] && return 0
+  if ! python3 - "$destination" "$link_path" <<'PY'
+import os
+import sys
+
+cache = os.path.realpath(sys.argv[1])
+link = os.path.realpath(sys.argv[2])
+try:
+    common = os.path.commonpath([cache, link])
+except ValueError:
+    raise SystemExit(0)
+if cache == link or common == cache or common == link:
+    print(
+        f"private asset destination/link paths overlap after canonicalization: {cache} <-> {link}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+  then
+    fail "--destination/cache and --link must be separate non-overlapping physical paths"
+  fi
+}
+
 ensure_worktree_link() {
   [[ -n "$link_path" ]] || return 0
   link_parent="$(dirname -- "$link_path")"
@@ -228,6 +256,9 @@ adopt_existing_worktree_cache() {
   exit 0
 }
 
+# No destructive migration, duplicate removal or new checkout occurs until the
+# physical path relationship has been canonicalized and proven disjoint.
+assert_safe_link_destination_relationship
 adopt_existing_worktree_cache
 
 if [[ -e "$destination" || -L "$destination" ]]; then

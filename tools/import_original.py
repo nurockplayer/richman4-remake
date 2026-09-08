@@ -372,6 +372,7 @@ def _parse_map_facilities(payload: bytes, offset: int, count: int) -> list[dict[
     for record_id in range(1, count + 1):
         start = offset + record_id * size
         x, y = struct.unpack_from("<HH", payload, start)
+        facility_prices = list(struct.unpack_from("<6H", payload, start + 36))
         record: dict[str, Any] = {"id": record_id, "x": x, "y": y}
         record.update(_name_fields(payload[start + 4 : start + 20]))
         record.update(
@@ -382,8 +383,14 @@ def _parse_map_facilities(payload: bytes, offset: int, count: int) -> list[dict[
                 "field_0x1b": payload[start + 27],
                 "tmp_state": payload[start + 28],
                 "land_price": struct.unpack_from("<H", payload, start + 34)[0],
-                "house_price": struct.unpack_from("<H", payload, start + 36)[0],
-                "price_per_level": struct.unpack_from("<H", payload, start + 36)[0],
+                # The six u16 values at +0x24 are shared by the original
+                # upgrade/fee table: index 0 is the level-zero upgrade cost,
+                # while indexes 1..5 are the corresponding service fees.
+                # Keep price_per_level as the schema-v1 compatibility alias.
+                "house_price": facility_prices[0],
+                "price_per_level": facility_prices[0],
+                "upgrade_cost": facility_prices[0],
+                "fee_by_level": facility_prices,
                 "reserved_hex": payload[start + 38 : start + 48].hex(),
                 "field_0x30": struct.unpack_from("<I", payload, start + 48)[0],
                 "expired_date": struct.unpack_from("<I", payload, start + 52)[0],

@@ -18,7 +18,7 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	ui.set_process(false)
-	expect(int(ui.state.get("version", 0)) == 4, "UI new game opts into original inventory")
+	expect(int(ui.state.get("version", 0)) == (5 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "UI uses facility graph or classic inventory save for selected map")
 	ui._on_cards_pressed()
 	expect(ui.cards_popup.visible, "backpack opens before rolling")
 	await process_frame

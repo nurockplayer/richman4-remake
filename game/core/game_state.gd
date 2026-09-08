@@ -12,6 +12,7 @@ const SAVE_VERSION = 1
 const GRAPH_SAVE_VERSION = 2
 const SETUP_SAVE_VERSION = 3
 const INVENTORY_SAVE_VERSION = 4
+const FACILITY_SAVE_VERSION = 5
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -24,6 +25,17 @@ const MAX_PLAYERS = 4
 const START_CASH = 15000
 const START_POSITION = 0
 const MAX_PROPERTY_LEVEL = 5
+const FACILITY_TYPE_COUNT = 5
+const FACILITY_MAX_LEVELS = [1, 5, 5, 1, 5]
+const FACILITY_NAMES = ["公園", "旅館", "購物中心", "加油站", "研究所"]
+const FACILITY_RAISED_BASE_STATE = 0x50
+const FACILITY_SEALED_BASE_STATE = 0x51
+const FACILITY_STATE_STEP = 0x10
+const FACILITY_STATE_HIGH_MASK = 0xf0
+const FACILITY_STATE_LOW_MASK = 0x0f
+const FACILITY_LAB_TYPE = 4
+const FACILITY_SOURCE_TYPE_MIN = 4000
+const FACILITY_SOURCE_TYPE_MAX = 5999
 const MAX_GRAPH_STEPS = 18
 const MAX_AI_TURN_ITERATIONS = 16
 const MAX_GRAPH_POINTS = 1000000000000
@@ -48,7 +60,7 @@ const SETUP_CHARACTER_NAMES = [
 const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
-const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑"]
+const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封"]
 const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "遙控骰子", "機器工人"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
@@ -124,7 +136,7 @@ static func new_game(seed_value: int, player_count: int = 4, options: Dictionary
 		return null
 	if not options.is_empty():
 		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
-		if setup_options.is_empty():
+		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)):
 			return null
 		var setup_game = new()
 		setup_game._initialize_setup(seed_value, player_count, setup_options)
@@ -139,11 +151,24 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		return null
-	var validation: Dictionary = validate_board_definition(definition)
+	if options.has("original_inventory") and typeof(options.get("original_inventory")) != TYPE_BOOL:
+		return null
+	if options.has("original_facilities") and typeof(options.get("original_facilities")) != TYPE_BOOL:
+		return null
+	var original_facilities: bool = bool(options.get("original_facilities", false))
+	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
+		original_facilities = true
+	if original_facilities and options.is_empty():
+		return null
+	var validation: Dictionary = validate_board_definition(definition, original_facilities)
 	if not bool(validation.get("ok", false)):
 		return null
 	if not options.is_empty():
-		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
+		var effective_options: Dictionary = options.duplicate(true)
+		if original_facilities:
+			effective_options["original_facilities"] = true
+			effective_options["original_inventory"] = true
+		var setup_options: Dictionary = _normalize_setup_options(effective_options, player_count)
 		if setup_options.is_empty():
 			return null
 		var setup_game = new()
@@ -155,7 +180,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -207,6 +232,13 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		if typeof(options["original_inventory"]) != TYPE_BOOL:
 			return {}
 		original_inventory = bool(options["original_inventory"])
+	var original_facilities: bool = false
+	if options.has("original_facilities"):
+		if typeof(options["original_facilities"]) != TYPE_BOOL:
+			return {}
+		original_facilities = bool(options["original_facilities"])
+	if original_facilities:
+		original_inventory = true
 
 	return {
 		"initial_fund": initial_fund,
@@ -215,6 +247,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"start_date": normalized_start_date,
 		"character_ids": character_ids,
 		"original_inventory": original_inventory,
+		"original_facilities": original_facilities,
 	}
 
 
@@ -229,7 +262,12 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
-	state["version"] = INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	var original_facilities: bool = bool(options.get("original_facilities", false))
+	state["version"] = FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	state["original_facilities"] = original_facilities
+	if original_facilities:
+		state["price_index"] = 1
+		state["last_roll_total"] = 0
 	state["initial_fund"] = int(options["initial_fund"])
 	state["day_limit"] = int(options["day_limit"])
 	state["wealth_multiplier"] = int(options["wealth_multiplier"])
@@ -285,11 +323,15 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) == INVENTORY_SAVE_VERSION
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION]
+
+
+func _is_facilities() -> bool:
+	return int(state.get("version", 0)) == FACILITY_SAVE_VERSION
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -620,6 +662,18 @@ func _set_action_options(player_id: int) -> void:
 			var level: int = int(tile.get("building_level", 0))
 			if level < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and not bool(state.get("property_action_used", false)):
+		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+		var facility_owner: int = int(facility.get("owner", -1))
+		if facility_owner == -1 and int(player.get("cash", 0)) >= _facility_land_price(facility):
+			options.push_front("buy")
+		elif facility_owner == player_id:
+			var facility_level: int = int(facility.get("building_level", 0))
+			var facility_type: int = int(facility.get("facility_type", -1))
+			if facility_level == 0 and _facility_type_valid(facility_type) and int(player.get("cash", 0)) >= _facility_land_price(facility):
+				options.push_front("build_facility")
+			elif _facility_type_valid(facility_type) and facility_type != FACILITY_LAB_TYPE and facility_level < _facility_type_cap(facility_type) and int(player.get("cash", 0)) >= _facility_upgrade_price(facility):
+				options.push_front("upgrade")
 	if tile.get("kind", "") == "bank":
 		state["bank_landing"] = bank_open
 		if bank_open:
@@ -650,6 +704,135 @@ func _tile_at(index: int) -> Dictionary:
 	if index < 0 or index >= board.size():
 		return {}
 	return board[index]
+
+
+func _facility_indices(source_object_id: int) -> Array:
+	var indices: Array = []
+	if source_object_id <= 0:
+		return indices
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY:
+		return indices
+	for index in range(board.size()):
+		if typeof(board[index]) != TYPE_DICTIONARY:
+			continue
+		var tile: Dictionary = board[index]
+		if tile.get("kind", "") == "facility" and int(tile.get("source_object_id", -1)) == source_object_id:
+			indices.append(index)
+	return indices
+
+
+func _facility_canonical_index(tile_index: int) -> int:
+	var tile: Dictionary = _tile_at(tile_index)
+	if tile.get("kind", "") != "facility":
+		return tile_index
+	var source_object_id: int = int(tile.get("source_object_id", -1))
+	var indices: Array = _facility_indices(source_object_id)
+	if indices.is_empty():
+		return tile_index
+	indices.sort()
+	var declared: Variant = tile.get("facility_node_index", null)
+	if _valid_int(declared, 0, state.get("board", []).size() - 1) and indices.has(int(declared)):
+		return int(declared)
+	return int(indices[0])
+
+
+func _facility_record(tile_index: int) -> Dictionary:
+	var canonical_index: int = _facility_canonical_index(tile_index)
+	return _tile_at(canonical_index)
+
+
+func _update_facility_records(source_object_id: int, updates: Dictionary) -> void:
+	if source_object_id <= 0:
+		return
+	var board: Array = state.get("board", [])
+	for index in _facility_indices(source_object_id):
+		if index < 0 or index >= board.size() or typeof(board[index]) != TYPE_DICTIONARY:
+			continue
+		var tile: Dictionary = board[index]
+		for key in updates.keys():
+			tile[key] = updates[key]
+
+
+func _facility_price_index() -> int:
+	if not _is_facilities():
+		return 1
+	var value: Variant = state.get("price_index", 1)
+	return int(value) if _valid_int(value, 1, 1000000) else 1
+
+
+func _facility_land_price(tile: Dictionary) -> int:
+	return int(tile.get("land_price", tile.get("cost", 0))) * _facility_price_index()
+
+
+func _facility_upgrade_price(tile: Dictionary) -> int:
+	return int(tile.get("upgrade_cost", 0)) * _facility_price_index()
+
+
+static func _facility_type_valid(facility_type: Variant) -> bool:
+	return _valid_int(facility_type, 0, FACILITY_TYPE_COUNT - 1)
+
+
+static func _facility_type_cap(facility_type: int) -> int:
+	if facility_type < 0 or facility_type >= FACILITY_MAX_LEVELS.size():
+		return 0
+	return int(FACILITY_MAX_LEVELS[facility_type])
+
+
+static func _facility_state_valid(facility_state: Variant) -> bool:
+	if not _valid_int(facility_state, 0, 0xff):
+		return false
+	var packed: int = int(facility_state)
+	var high: int = packed & FACILITY_STATE_HIGH_MASK
+	var low: int = packed & FACILITY_STATE_LOW_MASK
+	if high > FACILITY_RAISED_BASE_STATE or low > 1:
+		return false
+	return high == 0 and low == 0 or high != 0
+
+
+func _facility_is_sealed(tile: Dictionary) -> bool:
+	var packed: int = int(tile.get("facility_state", 0))
+	return (packed & FACILITY_STATE_HIGH_MASK) != 0 and (packed & FACILITY_STATE_LOW_MASK) != 0
+
+
+func _facility_is_raised(tile: Dictionary) -> bool:
+	var packed: int = int(tile.get("facility_state", 0))
+	return (packed & FACILITY_STATE_HIGH_MASK) != 0 and (packed & FACILITY_STATE_LOW_MASK) == 0
+
+
+func _facility_service_admitted(tile: Dictionary) -> bool:
+	if tile.get("kind", "") != "facility":
+		return false
+	var facility_type: int = int(tile.get("facility_type", -1))
+	return facility_type >= 0 and facility_type < FACILITY_LAB_TYPE and int(tile.get("building_level", 0)) > 0 and not _facility_is_sealed(tile)
+
+
+func _expire_facility_state(packed_state: int) -> int:
+	if not _facility_state_valid(packed_state) or packed_state == 0:
+		return 0 if packed_state != 0 and not _facility_state_valid(packed_state) else packed_state
+	var high: int = packed_state & FACILITY_STATE_HIGH_MASK
+	var low: int = packed_state & FACILITY_STATE_LOW_MASK
+	if high <= FACILITY_STATE_STEP:
+		return 0
+	return (high - FACILITY_STATE_STEP) | low
+
+
+func _tick_facility_states() -> void:
+	if not _is_facilities() or not _is_graph():
+		return
+	var seen: Dictionary = {}
+	for tile_value in state.get("board", []):
+		if typeof(tile_value) != TYPE_DICTIONARY or tile_value.get("kind", "") != "facility":
+			continue
+		var source_object_id: int = int(tile_value.get("source_object_id", -1))
+		if source_object_id <= 0 or seen.has(source_object_id):
+			continue
+		seen[source_object_id] = true
+		var old_state: int = int(tile_value.get("facility_state", 0))
+		var next_state: int = _expire_facility_state(old_state)
+		if next_state != old_state:
+			_update_facility_records(source_object_id, {"facility_state": next_state})
+			_record_event("facility_state_expired", {"source_object_id": source_object_id, "from_state": old_state, "to_state": next_state})
 
 
 static func _is_graph_road_tile(tile: Dictionary) -> bool:
@@ -700,9 +883,9 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 		return "目前玩家無法行動"
 	if item_id in ["路障", "機器工人"] and state.get("phase", "") != "await_roll":
 		return "道具只能在擲骰前使用"
-	if item_id == "拆除" and not state.get("phase", "") in ["await_roll", "await_action"]:
+	if item_id in ["拆除", "漲價", "查封"] and not state.get("phase", "") in ["await_roll", "await_action"]:
 		return "卡片只能在行動前使用"
-	if item_id in ["路障", "機器工人", "拆除"]:
+	if item_id in ["路障", "機器工人", "拆除", "漲價", "查封"]:
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
 			return "遙控骰子已經排程"
@@ -740,20 +923,46 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 	if item_id == "機器工人":
 		if int(tools.get(item_id, 0)) <= 0:
 			return "玩家沒有這項道具"
+		if tile.get("kind", "") == "facility":
+			var worker_facility: Dictionary = _facility_record(target_id)
+			if int(worker_facility.get("owner", -1)) < 0 or int(worker_facility.get("building_level", 0)) <= 0:
+				return "機器工人只能作用於已建成的設施"
+			var worker_facility_type: int = int(worker_facility.get("facility_type", -1))
+			if not _facility_type_valid(worker_facility_type) or worker_facility_type == FACILITY_LAB_TYPE:
+				return "研究所尚未開放升級"
+			if int(worker_facility.get("building_level", 0)) >= _facility_type_cap(worker_facility_type):
+				return "設施已達最高等級"
+			return ""
 		if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) < 0:
-			return "機器工人只能作用於已持有的住宅"
+			return "機器工人只能作用於已持有的住宅或設施"
 		if int(tile.get("building_level", 0)) >= MAX_PROPERTY_LEVEL:
 			return "住宅已達最高五級"
 		return ""
 	if item_id == "拆除":
 		if cards.find(item_id) < 0:
 			return "沒有這張卡片"
-		if tile.get("kind", "") == "property" and int(tile.get("building_level", 0)) > 0:
+		if tile.get("kind", "") in ["property", "facility"] and int(tile.get("building_level", 0)) > 0:
 			return ""
 		var demolition_roadblocks: Variant = state.get("roadblocks", {})
 		if typeof(demolition_roadblocks) == TYPE_DICTIONARY and demolition_roadblocks.has(str(target_id)):
 			return ""
 		return "目標沒有可拆除物"
+	if item_id == "漲價" or item_id == "查封":
+		if cards.find(item_id) < 0:
+			return "沒有這張卡片"
+		if tile.get("kind", "") != "facility" or not _is_facilities():
+			return "此卡片只能作用於已建成的設施"
+		var status_facility: Dictionary = _facility_record(target_id)
+		var status_owner: int = int(status_facility.get("owner", -1))
+		var status_level: int = int(status_facility.get("building_level", 0))
+		var status_type: int = int(status_facility.get("facility_type", -1))
+		if status_owner < 0 or status_level <= 0 or not _facility_type_valid(status_type) or status_type == FACILITY_LAB_TYPE:
+			return "目標設施尚未提供服務"
+		if item_id == "漲價" and status_owner != player_id:
+			return "漲價卡只能指定自己的設施"
+		if item_id == "查封" and status_owner == player_id:
+			return "查封卡只能指定其他玩家的設施"
+		return ""
 	return "未知的目標效果"
 
 
@@ -777,6 +986,8 @@ func _is_graph() -> bool:
 func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
+		if item_id in ["漲價", "查封"] and not _is_facilities():
+			return false
 		return IMPLEMENTED_CARD_IDS.has(item_id)
 	if normalized_kind == "tool":
 		return IMPLEMENTED_TOOL_IDS.has(item_id)
@@ -1028,6 +1239,11 @@ func roll(dice_count: int = -1) -> Dictionary:
 			total += face
 	state["last_roll"] = dice
 	state["last_total"] = total
+	if _is_facilities():
+		# Keep the complete roll separate from the remaining graph distance. A
+		# roadblock may stop movement early, while a gas station still uses the
+		# total that was rolled at movement start.
+		state["last_roll_total"] = total
 	state["property_action_used"] = false
 	var graph_should_move: bool = false
 	if int(player.get("stay_next", 0)) > 0:
@@ -1219,6 +1435,9 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) ->
 				var owner: int = int(tile.get("owner", -1))
 				if owner >= 0 and owner != player_id:
 					_charge_rent(player_id, owner, _calculate_rent(tile, owner))
+		"facility":
+			if final_landing:
+				_resolve_facility_visit(player_id, tile)
 		"tax":
 			if final_landing:
 				_charge_amount(player_id, int(tile.get("tax_amount", 0)), -1, "tax")
@@ -1250,6 +1469,119 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) ->
 					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
 		"unsupported":
 			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
+
+
+func _facility_roulette(facility_type: int) -> int:
+	if facility_type == 1:
+		var weighted_slot: int = _rng.randi_range(1, 12)
+		if weighted_slot <= 4:
+			return 1
+		if weighted_slot <= 7:
+			return 2
+		if weighted_slot <= 9:
+			return 3
+		return 4
+	if facility_type == 2:
+		return _rng.randi_range(1, 6)
+	return 1
+
+
+func _facility_fee(tile: Dictionary) -> Dictionary:
+	var facility_type: int = int(tile.get("facility_type", -1))
+	var level: int = int(tile.get("building_level", 0))
+	var fees: Variant = tile.get("fee_by_level", [])
+	if not _facility_type_valid(facility_type) or facility_type == FACILITY_LAB_TYPE:
+		return {"ok": false, "reason": "facility_type_unavailable", "fee": 0, "base_fee": 0, "resolved_roll": 0}
+	if level <= 0 or level > _facility_type_cap(facility_type):
+		return {"ok": false, "reason": "facility_level_unavailable", "fee": 0, "base_fee": 0, "resolved_roll": 0}
+	if typeof(fees) != TYPE_ARRAY or fees.size() != 6 or not _valid_int(fees[level], 0, 1000000000):
+		return {"ok": false, "reason": "facility_fee_table_invalid", "fee": 0, "base_fee": 0, "resolved_roll": 0}
+	var base_fee: int = int(fees[level]) * _facility_price_index()
+	var resolved_roll: int = _facility_roulette(facility_type) if facility_type in [1, 2] else 0
+	var fee: int = base_fee
+	if facility_type in [1, 2]:
+		fee *= resolved_roll
+	if _facility_is_raised(tile):
+		fee *= 2
+	return {"ok": true, "reason": "", "fee": fee, "base_fee": base_fee, "resolved_roll": resolved_roll}
+
+
+func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_object_id: int) -> void:
+	if amount <= 0:
+		return
+	var debtor: Dictionary = _player(debtor_id)
+	if int(debtor.get("rent_shield", 0)) > 0:
+		debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
+		_record_event("facility_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "source_object_id": source_object_id, "amount": amount})
+		return
+	_charge_amount(debtor_id, amount, creditor_id, "facility")
+
+
+func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
+	if not _is_facilities() or not _is_graph() or visited_tile.get("kind", "") != "facility":
+		return
+	var tile_id: int = int(visited_tile.get("index", -1))
+	var tile: Dictionary = _facility_record(tile_id)
+	if tile.is_empty():
+		return
+	var source_object_id: int = int(tile.get("source_object_id", -1))
+	var facility_type: int = int(tile.get("facility_type", -1))
+	var owner_id: int = int(tile.get("owner", -1))
+	var level: int = int(tile.get("building_level", 0))
+	var payload: Dictionary = {
+		"player_id": player_id,
+		"tile_id": tile_id,
+		"facility_node_index": _facility_canonical_index(tile_id),
+		"source_object_id": source_object_id,
+		"facility_type": facility_type,
+		"facility_name": FACILITY_NAMES[facility_type] if _facility_type_valid(facility_type) else "未知設施",
+		"owner_id": owner_id,
+		"building_level": level,
+		"facility_state": int(tile.get("facility_state", 0)),
+		"price_index": _facility_price_index(),
+		"resolved_roll": 0,
+		"base_fee": 0,
+		"fee": 0,
+		"admitted": false,
+	}
+	if owner_id < 0 or owner_id == player_id:
+		payload["reason"] = "unowned_or_self"
+		_record_event("facility_service", payload)
+		return
+	if facility_type == 0:
+		payload["admitted"] = true
+		payload["reason"] = "park_no_effect"
+		_record_event("facility_service", payload)
+		return
+	if not _facility_service_admitted(tile):
+		payload["reason"] = "sealed" if _facility_is_sealed(tile) else "facility_unavailable"
+		_record_event("facility_service", payload)
+		return
+	var fee_result: Dictionary = _facility_fee(tile)
+	if not bool(fee_result.get("ok", false)):
+		payload["reason"] = str(fee_result.get("reason", "facility_unavailable"))
+		_record_event("facility_service", payload)
+		return
+	payload["admitted"] = true
+	payload["reason"] = "service"
+	payload["resolved_roll"] = int(fee_result.get("resolved_roll", 0))
+	payload["base_fee"] = int(fee_result.get("base_fee", 0))
+	payload["fee"] = int(fee_result.get("fee", 0))
+	if facility_type == 3:
+		var vehicle: String = str(_player(player_id).get("vehicle", "walking"))
+		var roll_total: int = int(state.get("last_roll_total", state.get("last_total", 0)))
+		var vehicle_multiplier: int = 1 if vehicle == "motorcycle" else 2 if vehicle == "car" else 0
+		payload["vehicle"] = vehicle
+		payload["last_roll_total"] = roll_total
+		payload["resolved_roll"] = roll_total
+		payload["base_fee"] = 500 * roll_total * vehicle_multiplier * _facility_price_index()
+		payload["fee"] = int(payload["base_fee"])
+		payload["reason"] = "walking_free" if vehicle_multiplier == 0 else "gas_service"
+	if int(payload["fee"]) <= 0:
+		_record_event("facility_service", payload)
+		return
+	_record_event("facility_service", payload)
+	_charge_facility(player_id, owner_id, int(payload["fee"]), source_object_id)
 
 
 func _move_player(player_id: int, steps: int) -> void:
@@ -1406,22 +1738,47 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 	var stock_holdings: Dictionary = debtor.get("stocks", {}).duplicate(true)
 	var auction_id: int = state.get("bankruptcy_auctions", []).size() + 1
 	var transfer_to: int = creditor_id if _valid_player(creditor_id, true) else -1
+	var seen_assets: Dictionary = {}
+	var auction_property_ids: Array = []
 	for property_id in property_ids:
 		var tile: Dictionary = _tile_at(int(property_id))
 		if tile.is_empty():
 			continue
-		if transfer_to >= 0:
-			tile["owner"] = transfer_to
-			var receiver: Dictionary = _player(transfer_to)
-			var receiver_properties: Array = receiver.get("properties", [])
-			if not receiver_properties.has(int(property_id)):
-				receiver_properties.append(int(property_id))
-			receiver["properties"] = receiver_properties
+		var asset_id: String = "tile:%d" % int(property_id)
+		var canonical_property_id: int = int(property_id)
+		if tile.get("kind", "") == "facility":
+			var source_object_id: int = int(tile.get("source_object_id", -1))
+			asset_id = "facility:%d" % source_object_id
+			canonical_property_id = _facility_canonical_index(int(property_id))
+		if seen_assets.has(asset_id):
+			continue
+		seen_assets[asset_id] = true
+		auction_property_ids.append(canonical_property_id)
+		if tile.get("kind", "") == "facility":
+			var facility_updates: Dictionary = {"owner": transfer_to}
+			if transfer_to < 0:
+				facility_updates["building_level"] = 0
+				facility_updates["facility_state"] = 0
+			_update_facility_records(int(tile.get("source_object_id", -1)), facility_updates)
 		else:
-			tile["owner"] = -1
-			tile["building_level"] = 0
-			_update_tile_rent(tile)
-		_record_event("auction_property", {"auction_id": auction_id, "property_id": int(property_id), "winner": transfer_to})
+			if transfer_to >= 0:
+				tile["owner"] = transfer_to
+				var receiver: Dictionary = _player(transfer_to)
+				var receiver_properties: Array = receiver.get("properties", [])
+				if not receiver_properties.has(canonical_property_id):
+					receiver_properties.append(canonical_property_id)
+				receiver["properties"] = receiver_properties
+			else:
+				tile["owner"] = -1
+				tile["building_level"] = 0
+				_update_tile_rent(tile)
+		if transfer_to >= 0:
+			var transferred_receiver: Dictionary = _player(transfer_to)
+			var transferred_properties: Array = transferred_receiver.get("properties", [])
+			if not transferred_properties.has(canonical_property_id):
+				transferred_properties.append(canonical_property_id)
+			transferred_receiver["properties"] = transferred_properties
+		_record_event("auction_property", {"auction_id": auction_id, "property_id": canonical_property_id, "winner": transfer_to})
 	debtor["properties"] = []
 	debtor["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
 	if transfer_to >= 0:
@@ -1436,7 +1793,7 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 		"auction_id": auction_id,
 		"debtor": debtor_id,
 		"creditor": creditor_id,
-		"property_ids": property_ids,
+		"property_ids": auction_property_ids,
 		"stocks": stock_holdings,
 		"provisional_resolution": "transfer_to_creditor_or_release_to_bank",
 	}
@@ -1471,6 +1828,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	match normalized:
 		"buy":
 			return _buy_property(player_id)
+		"build_facility":
+			return _build_facility(player_id, params)
 		"upgrade":
 			return _upgrade_property(player_id)
 		"deposit":
@@ -1586,11 +1945,20 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 			_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": target_id, "effect": "roadblock"})
 		else:
 			var worker_tile: Dictionary = _tile_at(target_id)
-			worker_tile["building_level"] = int(worker_tile.get("building_level", 0)) + 1
-			_update_tile_rent(worker_tile)
-			state["property_action_used"] = true
-			_recalculate_property_values()
-			_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": target_id, "level": int(worker_tile["building_level"]), "effect": "build"})
+			if _is_facilities() and _is_graph() and worker_tile.get("kind", "") == "facility":
+				var worker_facility: Dictionary = _facility_record(target_id)
+				var worker_source_id: int = int(worker_facility.get("source_object_id", -1))
+				var worker_level: int = int(worker_facility.get("building_level", 0)) + 1
+				_update_facility_records(worker_source_id, {"building_level": worker_level})
+				state["property_action_used"] = true
+				_recalculate_property_values()
+				_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": _facility_canonical_index(target_id), "source_object_id": worker_source_id, "level": worker_level, "effect": "build_facility"})
+			else:
+				worker_tile["building_level"] = int(worker_tile.get("building_level", 0)) + 1
+				_update_tile_rent(worker_tile)
+				state["property_action_used"] = true
+				_recalculate_property_values()
+				_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": target_id, "level": int(worker_tile["building_level"]), "effect": "build"})
 		_set_action_options(player_id)
 		return _result(true, "已使用道具", {"tool_id": tool_id, "tile_id": target_id})
 	if tool_id == "機車":
@@ -1623,6 +1991,27 @@ func _buy_property(player_id: int) -> Dictionary:
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
+		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+		if facility.is_empty() or int(facility.get("owner", -1)) != -1:
+			return _error("目前位置沒有可購買的設施用地")
+		var facility_price: int = _facility_land_price(facility)
+		if int(player.get("cash", 0)) < facility_price:
+			return _error("現金不足")
+		player["cash"] = int(player.get("cash", 0)) - facility_price
+		_bank_add_cash(facility_price)
+		var source_object_id: int = int(facility.get("source_object_id", -1))
+		_update_facility_records(source_object_id, {"owner": player_id, "building_level": 0, "facility_state": 0})
+		var properties: Array = player.get("properties", []).duplicate(true)
+		var canonical_id: int = _facility_canonical_index(int(player.get("position", -1)))
+		if not properties.has(canonical_id):
+			properties.append(canonical_id)
+		player["properties"] = properties
+		state["property_action_used"] = true
+		_recalculate_property_values()
+		_record_event("facility_bought", {"player_id": player_id, "facility_id": canonical_id, "source_object_id": source_object_id, "price": facility_price})
+		_set_action_options(player_id)
+		return _result(true, "已購買設施用地", {"tile_id": canonical_id, "source_object_id": source_object_id, "price": facility_price})
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != -1:
 		return _error("目前位置沒有可購買的土地")
 	var price: int = int(tile.get("cost", 0))
@@ -1641,11 +2030,68 @@ func _buy_property(player_id: int) -> Dictionary:
 	return _result(true, "已購買土地")
 
 
+func _build_facility(player_id: int, params: Dictionary = {}) -> Dictionary:
+	if not _is_facilities() or not _is_graph():
+		return _error("設施建造只適用於原版設施地圖")
+	var player: Dictionary = _player(player_id)
+	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
+	if bool(state.get("property_action_used", false)):
+		return _error("本次造訪已完成土地行動")
+	if tile.get("kind", "") != "facility":
+		return _error("目前位置不是設施用地")
+	var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+	if int(facility.get("owner", -1)) != player_id:
+		return _error("目前設施用地不是自己的")
+	if int(facility.get("building_level", 0)) != 0:
+		return _error("設施已經建成")
+	var type_value: Variant = params.get("facility_type", null)
+	if not _valid_int(type_value, 0, FACILITY_LAB_TYPE - 1):
+		return _error("研究所尚未開放建造") if _valid_int(type_value, FACILITY_LAB_TYPE, FACILITY_LAB_TYPE) else _error("設施類型無效")
+	var facility_type: int = int(type_value)
+	var price: int = _facility_land_price(facility)
+	if int(player.get("cash", 0)) < price:
+		return _error("現金不足")
+	player["cash"] = int(player.get("cash", 0)) - price
+	_bank_add_cash(price)
+	var source_object_id: int = int(facility.get("source_object_id", -1))
+	_update_facility_records(source_object_id, {"facility_type": facility_type, "building_level": 1, "facility_state": 0})
+	state["property_action_used"] = true
+	_recalculate_property_values()
+	_record_event("facility_built", {"player_id": player_id, "facility_id": _facility_canonical_index(int(player.get("position", -1))), "source_object_id": source_object_id, "facility_type": facility_type, "building_level": 1, "price": price})
+	_set_action_options(player_id)
+	return _result(true, "已建造%s" % FACILITY_NAMES[facility_type], {"facility_type": facility_type, "level": 1, "price": price})
+
+
 func _upgrade_property(player_id: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
+		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+		if int(facility.get("owner", -1)) != player_id:
+			return _error("目前設施不是自己的")
+		var facility_type: int = int(facility.get("facility_type", -1))
+		var facility_level: int = int(facility.get("building_level", 0))
+		if facility_level <= 0:
+			return _error("請先選擇設施類型建造")
+		if facility_type == FACILITY_LAB_TYPE:
+			return _error("研究所尚未開放升級")
+		if not _facility_type_valid(facility_type) or facility_level >= _facility_type_cap(facility_type):
+			return _error("設施已達最高等級")
+		var facility_price: int = _facility_upgrade_price(facility)
+		if int(player.get("cash", 0)) < facility_price:
+			return _error("現金不足")
+		player["cash"] = int(player.get("cash", 0)) - facility_price
+		_bank_add_cash(facility_price)
+		var source_object_id: int = int(facility.get("source_object_id", -1))
+		var next_level: int = facility_level + 1
+		_update_facility_records(source_object_id, {"building_level": next_level})
+		state["property_action_used"] = true
+		_recalculate_property_values()
+		_record_event("facility_upgraded", {"player_id": player_id, "facility_id": _facility_canonical_index(int(player.get("position", -1))), "source_object_id": source_object_id, "facility_type": facility_type, "level": next_level, "price": facility_price})
+		_set_action_options(player_id)
+		return _result(true, "已升級設施", {"facility_type": facility_type, "level": next_level, "price": facility_price})
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != player_id:
 		return _error("目前位置不是自己的土地")
 	var level: int = int(tile.get("building_level", 0))
@@ -1797,6 +2243,52 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
 	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
+		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+		var facility_owner: int = int(facility.get("owner", -1))
+		if facility_owner == player_id:
+			return _error("目前設施已經是自己的")
+		if facility_owner >= 0 and not _valid_player(facility_owner):
+			return _error("目前設施所有權無效")
+		var facility_price: int = _facility_land_price(facility)
+		if facility_price < 0 or int(player.get("cash", 0)) < facility_price:
+			return _error("現金不足")
+		var facility_bank: Dictionary = state.get("bank", {})
+		if int(facility_bank.get("cash", 0)) > 1000000000000 - facility_price:
+			return _error("銀行資產上限不足")
+		if facility_owner >= 0:
+			var facility_previous_owner: Dictionary = _player(facility_owner)
+			if int(facility_previous_owner.get("deposit", 0)) > 1000000000000 - facility_price or int(facility_bank.get("deposits", 0)) > 1000000000000 - facility_price:
+				return _error("交易後存款超出上限")
+		var facility_consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], "購地")
+		if not bool(facility_consume_result.get("ok", false)):
+			return _error(str(facility_consume_result.get("error", "卡片無法使用")))
+		player["cash"] = int(player.get("cash", 0)) - facility_price
+		if facility_owner >= 0:
+			var old_facility_owner: Dictionary = _player(facility_owner)
+			var old_facility_properties: Array = old_facility_owner.get("properties", []).duplicate(true)
+			var facility_id: int = _facility_canonical_index(int(player.get("position", -1)))
+			while old_facility_properties.has(facility_id):
+				old_facility_properties.erase(facility_id)
+			old_facility_owner["properties"] = old_facility_properties
+			old_facility_owner["deposit"] = int(old_facility_owner.get("deposit", 0)) + facility_price
+			facility_bank["cash"] = int(facility_bank.get("cash", 0)) + facility_price
+			facility_bank["deposits"] = int(facility_bank.get("deposits", 0)) + facility_price
+		else:
+			facility_bank["cash"] = int(facility_bank.get("cash", 0)) + facility_price
+		state["bank"] = facility_bank
+		var source_object_id: int = int(facility.get("source_object_id", -1))
+		_update_facility_records(source_object_id, {"owner": player_id})
+		var buyer_facility_properties: Array = player.get("properties", []).duplicate(true)
+		var buyer_facility_id: int = _facility_canonical_index(int(player.get("position", -1)))
+		if not buyer_facility_properties.has(buyer_facility_id):
+			buyer_facility_properties.append(buyer_facility_id)
+		player["properties"] = buyer_facility_properties
+		state["property_action_used"] = true
+		_recalculate_property_values()
+		_record_event("card_used", {"player_id": player_id, "card_id": "購地", "facility_id": buyer_facility_id, "source_object_id": source_object_id, "previous_owner": facility_owner, "price": facility_price, "effect": "purchase_facility"})
+		_set_action_options(player_id)
+		return _result(true, "已使用購地卡", {"card_id": "購地", "tile_id": buyer_facility_id, "source_object_id": source_object_id, "price": facility_price})
 	if not _is_graph() or tile.get("kind", "") != "property":
 		return _error("目前位置沒有可購買的普通住宅")
 	var owner_id: int = int(tile.get("owner", -1))
@@ -1853,18 +2345,31 @@ func _inventory_demolition_card(player_id: int, tile_id: Variant) -> Dictionary:
 		return _error(str(consume_result.get("error", "卡片無法使用")))
 	var tile: Dictionary = _tile_at(target_id)
 	var effect: String = ""
-	if tile.get("kind", "") == "property" and int(tile.get("building_level", 0)) > 0:
-		tile["building_level"] = int(tile.get("building_level", 0)) - 1
-		_update_tile_rent(tile)
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and int(tile.get("building_level", 0)) > 0:
+		var facility: Dictionary = _facility_record(target_id)
+		var source_object_id: int = int(facility.get("source_object_id", -1))
+		var next_level: int = max(0, int(facility.get("building_level", 0)) - 1)
+		var facility_updates: Dictionary = {"building_level": next_level}
+		if next_level == 0:
+			facility_updates["facility_state"] = 0
+		_update_facility_records(source_object_id, facility_updates)
 		state["property_action_used"] = true
 		_recalculate_property_values()
-		effect = "demolish_building"
+		effect = "demolish_facility"
+		_record_event("card_used", {"player_id": player_id, "card_id": "拆除", "tile_id": _facility_canonical_index(target_id), "source_object_id": source_object_id, "level": next_level, "effect": effect})
 	else:
-		var roadblocks: Dictionary = state.get("roadblocks", {}).duplicate(true)
-		roadblocks.erase(str(target_id))
-		state["roadblocks"] = roadblocks
-		effect = "remove_roadblock"
-	_record_event("card_used", {"player_id": player_id, "card_id": "拆除", "tile_id": target_id, "effect": effect})
+		if tile.get("kind", "") == "property" and int(tile.get("building_level", 0)) > 0:
+			tile["building_level"] = int(tile.get("building_level", 0)) - 1
+			_update_tile_rent(tile)
+			state["property_action_used"] = true
+			_recalculate_property_values()
+			effect = "demolish_building"
+		else:
+			var roadblocks: Dictionary = state.get("roadblocks", {}).duplicate(true)
+			roadblocks.erase(str(target_id))
+			state["roadblocks"] = roadblocks
+			effect = "remove_roadblock"
+		_record_event("card_used", {"player_id": player_id, "card_id": "拆除", "tile_id": target_id, "effect": effect})
 	_set_action_options(player_id)
 	return _result(true, "已使用拆除卡", {"card_id": "拆除", "tile_id": target_id, "effect": effect})
 
@@ -1880,6 +2385,24 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		if card_id == "購地":
 			return _inventory_purchase_card(player_id)
 		return _inventory_demolition_card(player_id, tile_id)
+	if card_id == "漲價" or card_id == "查封":
+		if not _is_inventory() or not _is_facilities():
+			return _error("設施卡片只適用於原版設施地圖")
+		var status_target_error: String = _inventory_target_error(player_id, card_id, tile_id)
+		if not status_target_error.is_empty():
+			return _error(status_target_error)
+		var status_player: Dictionary = _player(player_id)
+		var status_consume: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], status_player["cards"], card_id)
+		if not bool(status_consume.get("ok", false)):
+			return _error(str(status_consume.get("error", "卡片無法使用")))
+		var status_tile: Dictionary = _tile_at(int(tile_id))
+		var status_facility: Dictionary = _facility_record(int(tile_id))
+		var status_source_id: int = int(status_facility.get("source_object_id", -1))
+		var next_status: int = FACILITY_RAISED_BASE_STATE if card_id == "漲價" else FACILITY_SEALED_BASE_STATE
+		_update_facility_records(status_source_id, {"facility_state": next_status})
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "tile_id": int(tile_id), "facility_id": _facility_canonical_index(int(tile_id)), "source_object_id": status_source_id, "facility_state": next_status, "effect": "facility_raised" if card_id == "漲價" else "facility_sealed"})
+		_set_action_options(player_id)
+		return _result(true, "已使用%s卡" % card_id, {"card_id": card_id, "tile_id": int(tile_id), "facility_state": next_status})
 	var player: Dictionary = _player(player_id)
 	var cards: Array = player.get("cards", [])
 	if card_id.is_empty():
@@ -2081,6 +2604,10 @@ func _advance_to_next_alive(previous_id: int) -> void:
 				return
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
+		# Facility temporary states decay once per complete player cycle. This is
+		# deliberately outside the setup/non-setup branches so a wrapped round
+		# cannot decrement the same source record twice.
+		_tick_facility_states()
 		if _is_setup():
 			# The original flow advances the calendar first, settles a deadline or
 			# wealth target, then updates the market and pays month-end interest.
@@ -2110,6 +2637,8 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	state["phase"] = "await_roll"
 	state["last_roll"] = []
 	state["last_total"] = 0
+	if _is_facilities():
+		state["last_roll_total"] = 0
 	_set_action_options(next_id)
 	_record_event("turn_started", {"player_id": next_id, "day": int(state["day"])})
 
@@ -2237,9 +2766,24 @@ func _recalculate_property_values() -> void:
 	var board: Array = state.get("board", [])
 	for player in _players():
 		var total: int = 0
+		var seen_assets: Dictionary = {}
 		for property_id in player.get("properties", []):
+			if not _valid_int(property_id, 0, board.size() - 1):
+				continue
 			var tile: Dictionary = board[int(property_id)]
-			total += int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
+			if tile.get("kind", "") == "facility":
+				var source_object_id: int = int(tile.get("source_object_id", -1))
+				var facility_key: String = "facility:%d" % source_object_id
+				if seen_assets.has(facility_key):
+					continue
+				seen_assets[facility_key] = true
+				total += _facility_land_price(tile) + _facility_upgrade_price(tile) * int(tile.get("building_level", 0))
+			else:
+				var property_key: String = "tile:%d" % int(property_id)
+				if seen_assets.has(property_key):
+					continue
+				seen_assets[property_key] = true
+				total += int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
 		player["property_values"] = total
 
 
@@ -2270,11 +2814,23 @@ func _player_wealth(player_id: int) -> int:
 		# The original routine truncates the per-share market value to an
 		# integer, which is already represented by integer prices in this state.
 		wealth += int(stocks.get(symbol, 0)) * int(prices.get(symbol, STOCK_BASE_PRICES[symbol]))
+	var seen_assets: Dictionary = {}
 	for property_id in player.get("properties", []):
 		var tile: Dictionary = _tile_at(int(property_id))
 		if tile.is_empty():
 			continue
-		wealth += int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
+		if tile.get("kind", "") == "facility":
+			var facility_key: String = "facility:%d" % int(tile.get("source_object_id", -1))
+			if seen_assets.has(facility_key):
+				continue
+			seen_assets[facility_key] = true
+			wealth += _facility_land_price(tile) + _facility_upgrade_price(tile) * int(tile.get("building_level", 0))
+		else:
+			var property_key: String = "tile:%d" % int(property_id)
+			if seen_assets.has(property_key):
+				continue
+			seen_assets[property_key] = true
+			wealth += int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
 	return wealth
 
 
@@ -2420,6 +2976,32 @@ func _ai_action(player_id: int) -> void:
 		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
 			choose_action("upgrade")
 			return
+	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
+		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
+		var facility_owner: int = int(facility.get("owner", -1))
+		var facility_price: int = _facility_land_price(facility)
+		if facility_owner == -1 and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= facility_price:
+			var facility_buy_result: Dictionary = choose_action("buy")
+			if bool(facility_buy_result.get("ok", false)):
+				return
+		elif facility_owner == player_id and not bool(state.get("property_action_used", false)):
+			var facility_level: int = int(facility.get("building_level", 0))
+			var facility_type: int = int(facility.get("facility_type", -1))
+			if facility_level == 0 and int(player.get("cash", 0)) >= facility_price:
+				# Source records use type zero for an unbuilt site. Pick the first
+				# operational upgradeable type so the next visit has a legal upgrade.
+				var build_type: int = facility_type
+				if build_type <= 0 or build_type >= FACILITY_LAB_TYPE:
+					build_type = 1
+				var facility_build_result: Dictionary = choose_action("build_facility", {"facility_type": build_type})
+				if bool(facility_build_result.get("ok", false)):
+					return
+			elif _facility_type_valid(facility_type) and facility_type != FACILITY_LAB_TYPE and facility_level < _facility_type_cap(facility_type):
+				var facility_upgrade_price: int = _facility_upgrade_price(facility)
+				if int(player.get("cash", 0)) >= facility_upgrade_price:
+					var facility_upgrade_result: Dictionary = choose_action("upgrade")
+					if bool(facility_upgrade_result.get("ok", false)):
+						return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
 		choose_action("deposit", {"amount": int(player.get("cash", 0)) / 4})
 		return
@@ -2681,10 +3263,65 @@ static func _validate_graph_source(source: Variant, expected_id: String = "") ->
 	return errors
 
 
-static func validate_board_definition(definition: Dictionary) -> Dictionary:
+static func _validate_facility_price_sources(source: Variant, board: Variant) -> Array:
+	var errors: Array = []
+	if typeof(board) != TYPE_ARRAY:
+		return errors
+	var facility_tiles: Array = []
+	for tile in board:
+		if typeof(tile) == TYPE_DICTIONARY and tile.get("kind", "") == "facility":
+			facility_tiles.append(tile)
+	if typeof(source) != TYPE_DICTIONARY:
+		return errors
+	if not source.has("facilities") and facility_tiles.is_empty():
+		return errors
+	var records: Variant = source.get("facilities", null)
+	if typeof(records) != TYPE_ARRAY or records.size() > 1999:
+		return ["invalid retained facility source table"]
+	var prices_by_id: Dictionary = {}
+	for record in records:
+		if typeof(record) != TYPE_DICTIONARY or not _valid_int(record.get("id", null), 1, 1999):
+			errors.append("invalid retained facility source identity")
+			continue
+		var source_id: int = int(record.id)
+		if prices_by_id.has(source_id):
+			errors.append("duplicate retained facility source identity")
+			continue
+		var prices: Dictionary = OriginalMaps.facility_price_table(record)
+		if not bool(prices.get("ok", false)) or not _valid_int(record.get("land_price", null), 0, 1000000):
+			errors.append("invalid retained facility source prices")
+			continue
+		prices_by_id[source_id] = {"land_price": int(record.land_price), "upgrade_cost": prices.upgrade_cost, "fee_by_level": prices.fee_by_level}
+	for tile in facility_tiles:
+		var source_id: Variant = tile.get("source_object_id", null)
+		if not _valid_int(source_id, 1, 1999) or not prices_by_id.has(int(source_id)):
+			errors.append("facility has no retained source prices")
+			continue
+		var expected: Dictionary = prices_by_id[int(source_id)]
+		for field in ["land_price", "upgrade_cost"]:
+			if not _valid_int(tile.get(field, null), int(expected[field]), int(expected[field])):
+				errors.append("facility source price mismatch: " + field)
+		var actual_fees: Variant = tile.get("fee_by_level", null)
+		if typeof(actual_fees) != TYPE_ARRAY or actual_fees.size() != 6:
+			errors.append("facility source fee table mismatch")
+		else:
+			for index in range(6):
+				if not _valid_int(actual_fees[index], int(expected.fee_by_level[index]), int(expected.fee_by_level[index])):
+					errors.append("facility source fee mismatch")
+	return errors
+
+
+static func validate_board_definition(definition: Dictionary, original_facilities: bool = false) -> Dictionary:
 	var errors: Array = []
 	if typeof(definition) != TYPE_DICTIONARY:
 		return {"ok": false, "errors": ["map definition must be a dictionary"]}
+	var definition_facilities: bool = false
+	if definition.has("original_facilities"):
+		if typeof(definition.get("original_facilities")) != TYPE_BOOL:
+			errors.append("invalid original facilities marker")
+		else:
+			definition_facilities = bool(definition.get("original_facilities"))
+	var facility_mode: bool = original_facilities or definition_facilities
 	if definition.get("schema", "") != RUNTIME_MAP_SCHEMA:
 		errors.append("unsupported map schema")
 	if not _valid_int(definition.get("version", null), 1, 1):
@@ -2704,7 +3341,9 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		errors.append("invalid graph board")
 	var board_array: Array = board if typeof(board) == TYPE_ARRAY else []
 	var property_count := 0
+	var facility_count := 0
 	var source_properties: Dictionary = {}
+	var source_facilities: Dictionary = {}
 	for index in range(board_array.size()):
 		var tile_value: Variant = board_array[index]
 		if typeof(tile_value) != TYPE_DICTIONARY:
@@ -2722,6 +3361,8 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
 		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event"]
+		if facility_mode:
+			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
 			errors.append("invalid graph tile kind %d" % index)
 		if not tile.get("adjacent") is Array or tile.adjacent.size() > 4:
@@ -2789,17 +3430,56 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 					errors.append("graph base rent mismatch %d" % index)
 				if _valid_int(rent, 0, 1000000000) and _valid_int(rents[0], 0, 1000000) and int(rent) != int(rents[0]):
 					errors.append("graph rent mismatch %d" % index)
-		else:
-			var owner: Variant = tile.get("owner", null)
-			var building_level: Variant = tile.get("building_level", null)
-			if _valid_int(owner, -1, -1) and _valid_int(building_level, 0, MAX_PROPERTY_LEVEL) and (int(owner) != -1 or int(building_level) != 0):
-				errors.append("non-property graph tile state %d" % index)
+		elif typeof(kind) == TYPE_STRING and kind == "facility":
+			facility_count += 1
+			var facility_source_object_id: Variant = tile.get("source_object_id", null)
+			if not _valid_int(facility_source_object_id, 1, 1999):
+				errors.append("invalid graph facility identity %d" % index)
+			var facility_type_value: Variant = tile.get("facility_type", null)
+			if not _valid_int(facility_type_value, 0, FACILITY_TYPE_COUNT - 1):
+				errors.append("invalid graph facility type %d" % index)
+			var facility_state_value: Variant = tile.get("facility_state", null)
+			if not _facility_state_valid(facility_state_value) or int(facility_state_value) != 0:
+				errors.append("graph definition must start with clear facility state %d" % index)
+			var facility_node_index: Variant = tile.get("facility_node_index", null)
+			if not _valid_int(facility_node_index, 0, max(0, board_array.size() - 1)):
+				errors.append("invalid graph facility canonical node %d" % index)
+			var facility_land_price: Variant = tile.get("land_price", null)
+			var facility_upgrade_cost: Variant = tile.get("upgrade_cost", null)
+			if not _valid_int(facility_land_price, 0, 1000000) or not _valid_int(facility_upgrade_cost, 0, 1000000):
+				errors.append("invalid graph facility prices %d" % index)
+			if _valid_int(facility_land_price, 0, 1000000) and _valid_int(tile.get("cost", null), 0, 1000000000) and int(tile.get("cost")) != int(facility_land_price):
+				errors.append("graph facility cost mismatch %d" % index)
+			var facility_fees: Variant = tile.get("fee_by_level", null)
+			if typeof(facility_fees) != TYPE_ARRAY or facility_fees.size() != 6:
+				errors.append("invalid graph facility fee table %d" % index)
+			else:
+				for fee in facility_fees:
+					if not _valid_int(fee, 0, 1000000):
+						errors.append("invalid graph facility fee value %d" % index)
+			if _valid_int(facility_source_object_id, 1, 1999):
+				if source_facilities.has(int(facility_source_object_id)):
+					var first_facility: Dictionary = source_facilities[int(facility_source_object_id)]
+					if _valid_int(facility_node_index, 0, max(0, board_array.size() - 1)) and int(facility_node_index) != int(first_facility.get("facility_node_index", -1)):
+						errors.append("graph facility canonical node mismatch %d" % index)
+					for immutable_key in ["facility_type", "cost", "land_price", "upgrade_cost", "fee_by_level"]:
+						if tile.get(immutable_key, null) != first_facility.get(immutable_key, null):
+							errors.append("graph facility duplicate metadata mismatch %d" % index)
+				else:
+					source_facilities[int(facility_source_object_id)] = tile.duplicate(true)
+				if _valid_int(tile.get("type_and_idx", null), FACILITY_SOURCE_TYPE_MIN + 1, FACILITY_SOURCE_TYPE_MAX) and int(tile.get("type_and_idx")) - FACILITY_SOURCE_TYPE_MIN != int(facility_source_object_id):
+					errors.append("graph facility source mismatch %d" % index)
+			else:
+				var owner: Variant = tile.get("owner", null)
+				var building_level: Variant = tile.get("building_level", null)
+				if _valid_int(owner, -1, -1) and _valid_int(building_level, 0, MAX_PROPERTY_LEVEL) and (int(owner) != -1 or int(building_level) != 0):
+					errors.append("non-property graph tile state %d" % index)
 		var type_value: Variant = tile.get("type_and_idx", null)
 		var event_value: Variant = tile.get("event_code", null)
 		if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 			errors.append("invalid graph source tile status %d" % index)
 		else:
-			_validate_graph_source_classification(tile, index, errors)
+			_validate_graph_source_classification(tile, index, errors, facility_mode)
 	var start_position: Variant = definition.get("start_position", null)
 	if not _valid_int(start_position, 0, max(0, board_array.size() - 1)):
 		errors.append("invalid graph start position")
@@ -2807,8 +3487,8 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		var start_tile: Dictionary = board_array[int(start_position)] if int(start_position) < board_array.size() and typeof(board_array[int(start_position)]) == TYPE_DICTIONARY else {}
 		if start_tile.is_empty() or not start_tile.get("adjacent", []) is Array or start_tile.adjacent.is_empty():
 			errors.append("graph start is not movable")
-	if property_count <= 0:
-		errors.append("graph map has no playable housing")
+	if property_count <= 0 and (not facility_mode or facility_count <= 0):
+		errors.append("graph map has no playable housing or facilities")
 	if errors.is_empty():
 		var visited: Dictionary = {int(start_position): true}
 		var queue: Array = [int(start_position)]
@@ -2820,8 +3500,10 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 					visited[next] = true
 					queue.append(next)
 		for index in range(board_array.size()):
-			if board_array[index].get("kind", "") == "property" and not visited.has(index):
-				errors.append("housing is unreachable from graph start")
+			if board_array[index].get("kind", "") in ["property", "facility"] and not visited.has(index):
+				errors.append("housing or facility is unreachable from graph start")
+	if facility_mode:
+		errors.append_array(_validate_facility_price_sources(definition.get("source", null), board_array))
 	return {"ok": errors.is_empty(), "errors": errors, "definition": definition.duplicate(true)}
 
 
@@ -2901,7 +3583,7 @@ static func _expected_last_settled_month(
 	return {"year": marker_year, "month": marker_month}
 
 
-static func _validate_graph_source_classification(tile: Dictionary, index: int, errors: Array) -> void:
+static func _validate_graph_source_classification(tile: Dictionary, index: int, errors: Array, facility_mode: bool = false) -> void:
 	var type_value: Variant = tile.get("type_and_idx", null)
 	var event_value: Variant = tile.get("event_code", null)
 	if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
@@ -2911,6 +3593,8 @@ static func _validate_graph_source_classification(tile: Dictionary, index: int, 
 		return
 	var kind: Variant = tile.get("kind", null)
 	var canonical_kind: String = str(classification.get("kind", ""))
+	if facility_mode and _valid_int(type_value, FACILITY_SOURCE_TYPE_MIN + 1, FACILITY_SOURCE_TYPE_MAX):
+		canonical_kind = "facility"
 	if typeof(kind) != TYPE_STRING or str(kind) != canonical_kind:
 		errors.append("graph tile kind does not match source %d" % index)
 	if canonical_kind == "points":
@@ -2925,9 +3609,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var inventory_save: bool = _valid_int(version_marker, INVENTORY_SAVE_VERSION, INVENTORY_SAVE_VERSION)
+	var facility_save: bool = _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
+	var inventory_save: bool = _valid_int(version_marker, INVENTORY_SAVE_VERSION, INVENTORY_SAVE_VERSION) or facility_save
 	var setup_save: bool = _valid_int(version_marker, SETUP_SAVE_VERSION, SETUP_SAVE_VERSION) or inventory_save
-	var graph_save: bool = (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
+	var graph_save: bool = facility_save or (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
 	var required_top: Array = [
 		"version", "ruleset", "seed", "seed_text", "rng_state", "rng_state_text",
 		"phase", "turn", "round", "day", "month", "day_of_month", "weekday",
@@ -2944,13 +3629,24 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid setup board mode")
 	if inventory_save:
 		required_top.append_array(["inventory_supply", "pending_remote_dice", "roadblocks"])
+	if facility_save:
+		required_top.append_array(["original_facilities", "price_index", "last_roll_total"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
+	if facility_save:
+		if typeof(data.get("original_facilities", null)) != TYPE_BOOL or not bool(data.get("original_facilities", false)):
+			errors.append("invalid original facilities marker")
+		if not _valid_int(data.get("price_index", null), 1, 1000000):
+			errors.append("invalid facility price index")
+		if not _valid_int(data.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
+			errors.append("invalid facility last roll total")
+	elif data.has("original_facilities") and typeof(data.get("original_facilities")) == TYPE_BOOL and bool(data.get("original_facilities")):
+		errors.append("facility marker requires v5 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)
@@ -3110,6 +3806,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var last_total_valid: bool = _valid_int(last_total_value, 0, MAX_GRAPH_STEPS)
 	if not last_total_valid:
 		errors.append("invalid last_total")
+	if facility_save and last_total_valid and _valid_int(data.get("last_roll_total", null), 0, MAX_GRAPH_STEPS) and int(data["last_roll_total"]) != int(last_total_value):
+		errors.append("facility preserved roll total mismatch")
 	if graph_save and last_roll_valid and last_total_valid:
 		if last_roll.is_empty() and int(last_total_value) != 0:
 			errors.append("graph last roll is missing for total")
@@ -3148,6 +3846,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("pending remote dice conflicts with movement modifier")
 	var action_options: Variant = data.get("action_options", null)
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
+	if facility_save:
+		known_actions.append("build_facility")
 	if inventory_save:
 		known_actions.append_array(["buy_item", "sell_item", "use_tool"])
 	if typeof(action_options) != TYPE_ARRAY:
@@ -3222,7 +3922,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 
 	var graph_reachable: Dictionary = {}
 	var source_properties: Dictionary = {}
+	var source_facilities: Dictionary = {}
 	var property_owners: Dictionary = {}
+	var facility_owners: Dictionary = {}
 	var inventory_card_supply: Dictionary = {}
 	var inventory_tool_supply: Dictionary = {}
 	if inventory_save:
@@ -3271,6 +3973,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
 				allowed_board_kinds.append_array(["points", "card", "unsupported"])
+			if facility_save:
+				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
 				errors.append("invalid board kind %d" % index)
 			if not _valid_string(tile.get("name", null)) or not _valid_string(tile.get("group", null)):
@@ -3286,10 +3990,59 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("invalid board %s %d" % [money_key, index])
 			if graph_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
 				errors.append("unowned graph property has improvements %d" % index)
-			if owner_valid and tile.get("kind", "") != "property" and int(owner_value) != -1:
+			if owner_valid and tile.get("kind", "") not in ["property", "facility"] and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
 			if owner_valid and tile.get("kind", "") == "property" and int(owner_value) >= 0:
 				property_owners[index] = int(owner_value)
+			if facility_save and tile.get("kind", "") == "facility":
+				var facility_source_id: Variant = tile.get("source_object_id", null)
+				var facility_source_valid: bool = _valid_int(facility_source_id, 1, 1999)
+				if not facility_source_valid:
+					errors.append("invalid board facility identity %d" % index)
+				else:
+					var facility_state_value: Variant = tile.get("facility_state", null)
+					if not _facility_state_valid(facility_state_value):
+						errors.append("invalid board facility state %d" % index)
+					var facility_type_value: Variant = tile.get("facility_type", null)
+					if not _facility_type_valid(facility_type_value):
+						errors.append("invalid board facility type %d" % index)
+					var facility_level_value: Variant = tile.get("building_level", null)
+					var facility_level_valid: bool = _valid_int(facility_level_value, 0, MAX_PROPERTY_LEVEL)
+					if facility_level_valid and _valid_int(facility_type_value, 0, FACILITY_TYPE_COUNT - 1) and int(facility_level_value) > _facility_type_cap(int(facility_type_value)):
+						errors.append("board facility level exceeds type cap %d" % index)
+					if facility_level_valid and _valid_int(facility_type_value, FACILITY_LAB_TYPE, FACILITY_LAB_TYPE) and int(facility_level_value) > 0:
+						errors.append("research facility runtime is unavailable %d" % index)
+					var facility_node_value: Variant = tile.get("facility_node_index", null)
+					if not _valid_int(facility_node_value, 0, max(0, board.size() - 1)):
+						errors.append("invalid board facility canonical node %d" % index)
+					elif typeof(board[int(facility_node_value)]) != TYPE_DICTIONARY or board[int(facility_node_value)].get("kind", "") != "facility" or int(board[int(facility_node_value)].get("source_object_id", -1)) != int(facility_source_id):
+						errors.append("board facility canonical node mismatch %d" % index)
+					var facility_fees_value: Variant = tile.get("fee_by_level", null)
+					var facility_land_price_value: Variant = tile.get("land_price", null)
+					var facility_upgrade_price_value: Variant = tile.get("upgrade_cost", null)
+					var facility_land_price_valid: bool = _valid_int(facility_land_price_value, 0, 1000000)
+					var facility_upgrade_price_valid: bool = _valid_int(facility_upgrade_price_value, 0, 1000000)
+					if not facility_land_price_valid or not facility_upgrade_price_valid or typeof(facility_fees_value) != TYPE_ARRAY or facility_fees_value.size() != 6:
+						errors.append("invalid board facility pricing %d" % index)
+					else:
+						for facility_fee_value in facility_fees_value:
+							if not _valid_int(facility_fee_value, 0, 1000000):
+								errors.append("invalid board facility fee %d" % index)
+					if facility_land_price_valid and _valid_int(tile.get("cost", null), 0, 1000000000) and int(tile.get("cost")) != int(facility_land_price_value):
+						errors.append("board facility cost mismatch %d" % index)
+					var facility_source_type_value: Variant = tile.get("type_and_idx", null)
+					if not _valid_int(facility_source_type_value, FACILITY_SOURCE_TYPE_MIN + 1, FACILITY_SOURCE_TYPE_MAX) or int(facility_source_type_value) - FACILITY_SOURCE_TYPE_MIN != int(facility_source_id):
+						errors.append("board facility source mismatch %d" % index)
+					if source_facilities.has(int(facility_source_id)):
+						var first_facility: Dictionary = source_facilities[int(facility_source_id)]
+						for facility_key in ["facility_type", "facility_node_index", "owner", "building_level", "facility_state", "cost", "land_price", "upgrade_cost", "fee_by_level"]:
+							if tile.get(facility_key, null) != first_facility.get(facility_key, null):
+								errors.append("board facility duplicate mismatch %d" % index)
+								break
+					else:
+						source_facilities[int(facility_source_id)] = tile.duplicate(true)
+					if owner_valid and int(owner_value) >= 0:
+						facility_owners[int(facility_source_id)] = int(owner_value)
 
 	if graph_save:
 		var board_mode_value: Variant = data.get("board_mode", null)
@@ -3306,6 +4059,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if typeof(map_schema_value) != TYPE_STRING or map_schema_value != RUNTIME_MAP_SCHEMA or not _valid_int(data.get("map_version", null), 1, 1):
 			errors.append("invalid graph map schema")
 		errors.append_array(_validate_graph_source(data.get("map_source", null), graph_map_id))
+		if facility_save:
+			errors.append_array(_validate_facility_price_sources(data.get("map_source", null), board))
 		var graph_start: Variant = data.get("start_position", null)
 		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
 		if not _valid_int(graph_start, 0, graph_board_size - 1):
@@ -3326,7 +4081,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
 				else:
-					_validate_graph_source_classification(tile, index, errors)
+					_validate_graph_source_classification(tile, index, errors, facility_save)
 				var tile_kind: Variant = tile.get("kind", null)
 				if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(tile_kind) != TYPE_STRING or tile_kind != "property"):
 					errors.append("housing source must remain a property %d" % index)
@@ -3411,8 +4166,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if not graph_reachable.has(next_node):
 							graph_reachable[next_node] = true
 							queue.append(next_node)
+				var graph_playable_kinds: Array = ["property"]
+				if facility_save:
+					graph_playable_kinds.append("facility")
 				for index in range(board.size()):
-					if typeof(board[index]) == TYPE_DICTIONARY and board[index].get("kind", "") == "property" and not graph_reachable.has(index):
+					if typeof(board[index]) == TYPE_DICTIONARY and graph_playable_kinds.has(board[index].get("kind", "")) and not graph_reachable.has(index):
 						errors.append("graph property is unreachable %d" % index)
 		else:
 			for _unused in range(0):
@@ -3518,6 +4276,20 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				for property_id in properties:
 					if not _valid_int(property_id, 0, position_limit):
 						errors.append("player %d property invalid" % index)
+					elif facility_save and typeof(board) == TYPE_ARRAY and int(property_id) < board.size() and typeof(board[int(property_id)]) == TYPE_DICTIONARY and board[int(property_id)].get("kind", "") == "facility":
+						var owned_facility_tile: Dictionary = board[int(property_id)]
+						var owned_facility_source: Variant = owned_facility_tile.get("source_object_id", null)
+						var owned_facility_canonical: Variant = owned_facility_tile.get("facility_node_index", null)
+						if not _valid_int(owned_facility_source, 1, 1999) or not _valid_int(owned_facility_canonical, 0, position_limit):
+							errors.append("player %d facility property invalid" % index)
+						elif int(property_id) != int(owned_facility_canonical):
+							errors.append("player %d facility property is not canonical" % index)
+						elif facility_owners.has(int(owned_facility_source)):
+							if int(facility_owners[int(owned_facility_source)]) != index:
+								errors.append("player %d facility owner mismatch" % index)
+							facility_owners.erase(int(owned_facility_source))
+						else:
+							errors.append("player %d references unowned facility" % index)
 					elif property_owners.has(int(property_id)):
 						if int(property_owners[int(property_id)]) != index:
 							errors.append("player %d property owner mismatch" % index)
@@ -3716,6 +4488,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 
 	if not property_owners.is_empty():
 		errors.append("board property missing player ownership")
+	if not facility_owners.is_empty():
+		errors.append("board facility missing player ownership")
 	if phase_name != "game_over" and current_player >= 0 and current_player < player_count and typeof(players[current_player]) == TYPE_DICTIONARY:
 		var current_actor: Dictionary = players[current_player]
 		if not _valid_bool(current_actor.get("alive", null)) or not bool(current_actor.get("alive", false)) or not _valid_bool(current_actor.get("bankrupt", null)) or bool(current_actor.get("bankrupt", false)):

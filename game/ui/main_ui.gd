@@ -95,6 +95,8 @@ var map_preview_view: Control
 var map_catalog_file_dialog: FileDialog
 var new_game_confirm_button: Button
 var cards_popup: PopupPanel
+var facility_popup: PopupPanel
+var facility_popup_list: VBoxContainer
 var inventory_balance_label: Label
 var shop_button: Button
 var shop_popup: PopupPanel
@@ -319,10 +321,15 @@ func _build_playfield() -> Control:
 
 	var players_heading := _make_label("玩家狀態", 11, TEXT_MUTED)
 	side_column.add_child(players_heading)
+	var players_scroll := ScrollContainer.new()
+	players_scroll.custom_minimum_size = Vector2(0.0, 100.0)
+	players_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	players_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	side_column.add_child(players_scroll)
 	players_list = VBoxContainer.new()
 	players_list.add_theme_constant_override("separation", 5)
-	players_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	side_column.add_child(players_list)
+	players_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	players_scroll.add_child(players_list)
 
 	var property_panel := PanelContainer.new()
 	_apply_panel_style(property_panel, PANEL_RAISED, Color("#47705f"), 12, 1)
@@ -607,6 +614,16 @@ func _build_popups() -> void:
 	inventory_scroll.add_child(cards_popup_list)
 	cards_box.add_child(_make_button("關閉", cards_popup.hide))
 
+	facility_popup = _make_popup(Vector2i(590, 390))
+	var facility_box := _popup_box(facility_popup)
+	facility_box.add_child(_make_label("選擇商業設施", 19, TEXT_MAIN))
+	facility_popup_list = VBoxContainer.new()
+	facility_popup_list.add_theme_constant_override("separation", 8)
+	facility_box.add_child(facility_popup_list)
+	var cancel_facility := _make_button("取消", facility_popup.hide)
+	cancel_facility.name = "CancelFacility"
+	facility_box.add_child(cancel_facility)
+
 	shop_popup = _make_popup(Vector2i(700, 530))
 	shop_popup.min_size = Vector2i(700, 530)
 	var shop_box := _popup_box(shop_popup)
@@ -711,6 +728,7 @@ func _default_setup_options(player_count: int) -> Dictionary:
 		character_ids.append(player_id)
 	return {
 		"original_inventory": true,
+		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -785,7 +803,8 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) == 4,
+		"original_inventory": int(state.get("version", 0)) >= 4,
+		"original_facilities": int(state.get("version", 0)) >= 5,
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -856,6 +875,7 @@ func _collect_setup_options() -> Dictionary:
 		seen[character_id] = true
 	return {"ok": true, "options": {
 		"original_inventory": true,
+		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -928,7 +948,7 @@ func _popup_box(popup: PopupPanel) -> VBoxContainer:
 	return box
 
 func _load_map_catalog(path: String = "") -> void:
-	var result: Dictionary = OriginalMaps.load_catalog(path)
+	var result: Dictionary = OriginalMaps.load_catalog(path, true)
 	_map_catalog_path = path if not path.is_empty() else OriginalMaps.default_catalog_path()
 	_map_catalog_ok = bool(result.get("ok", false)) and _as_array(result.get("maps", [])).size() > 0
 	_map_catalog_error = str(result.get("error", ""))
@@ -1201,11 +1221,14 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
 		_refresh_log_only()
 		return false
+	var effective_setup := setup_options.duplicate(true)
+	if effective_setup.is_empty() and bool(selected_definition.get("original_facilities", false)):
+		effective_setup = _default_setup_options(resolved_players)
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
 		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
-			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, setup_options) if not setup_options.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
+			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, effective_setup) if not effective_setup.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
 		elif _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
 			candidate = state_script.new_game(resolved_seed, resolved_players, setup_options) if not setup_options.is_empty() else state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:
@@ -1384,9 +1407,41 @@ func _on_buy_pressed() -> void:
 func _on_upgrade_pressed() -> void:
 	if upgrade_button.disabled:
 		return
+	if _has_action_option(_as_array(state.get("action_options", [])), "build_facility"):
+		_open_facility_builder()
+		return
 	var result := _invoke_game("choose_action", ["upgrade", {}])
 	_append_local_log("升級建設：%s" % _result_text(result, "已送出升級指令。"))
 	_handle_result(result)
+
+func _facility_name(type_id: int) -> String:
+	return ["公園", "旅館", "購物中心", "加油站", "研究所"][clampi(type_id, 0, 4)]
+
+func _open_facility_builder() -> void:
+	for child in facility_popup_list.get_children():
+		child.free()
+	var tile := _current_tile()
+	var tile_index := int(tile.get("index", -1))
+	var player_id := int(state.get("current_player", -1))
+	var price := int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
+	facility_popup_list.add_child(_make_label("建造費 %s · 選擇後立即建成第 1 級" % _format_money(price), 13, TEXT_GOLD))
+	var descriptions := ["不收設施費，最高 1 級", "依輪盤收費，最高 5 級", "依輪盤收費，最高 5 級", "向搭乘載具的訪客收費，最高 1 級", "道具生產尚未開放"]
+	for type_id in range(5):
+		var choice := type_id
+		var button := _make_button("%s · %s" % [_facility_name(choice), descriptions[choice]], func() -> void:
+			if int(_current_tile().get("index", -1)) != tile_index or int(state.get("current_player", -1)) != player_id:
+				facility_popup.hide()
+				return
+			var result := _invoke_game("choose_action", ["build_facility", {"facility_type": choice}])
+			_append_local_log("建造%s：%s" % [_facility_name(choice), _result_text(result, "已送出建造指令。")])
+			_handle_result(result)
+			facility_popup.hide()
+		)
+		button.name = "BuildFacility_%d" % choice
+		button.disabled = choice == 4 or price > int(_current_player().get("cash", 0)) or not _is_human_turn() or not _has_action_option(_as_array(state.get("action_options", [])), "build_facility")
+		facility_popup_list.add_child(button)
+	facility_popup.popup_centered(Vector2i(590, 390))
+	_settle_inventory_popup(facility_popup, Vector2i(590, 390))
 
 func _on_end_turn_pressed() -> void:
 	if end_turn_button.disabled:
@@ -1621,6 +1676,20 @@ func _update_property_card(tile: Dictionary) -> void:
 		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
+	elif kind == "facility":
+		var level := int(tile.get("building_level", 0))
+		var price_index := int(state.get("price_index", 1))
+		var land_price := int(tile.get("land_price", 0)) * price_index
+		var owner := int(tile.get("owner", -1))
+		current_property_label.text += " · " + ("設施用地" if level == 0 else _facility_name(int(tile.get("facility_type", 0))))
+		details += "\n購地 %s · 建造 %s · 升級 %s" % [_format_money(land_price), _format_money(land_price), _format_money(int(tile.get("upgrade_cost", 0)) * price_index)]
+		details += "\n等級 %d · %s" % [level, "尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1)]
+		if level > 0:
+			var type_id := clampi(int(tile.get("facility_type", 0)), 0, 4)
+			details += " · 最高 %d 級" % [1, 5, 5, 1, 5][type_id]
+		var status := int(tile.get("facility_state", 0))
+		if status > 0:
+			details += "\n%s · 剩餘 %d 天" % ["查封，暫停服務" if (status & 15) != 0 else "漲價，費用加倍", status >> 4]
 	elif _has_original_inventory() and int(tile.get("event_code", 0)) == 15:
 		current_property_label.text = "點券商店"
 		details += "\n停在此格可購買或出售卡片與道具。"
@@ -1637,7 +1706,9 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var action_options: Array = _as_array(state.get("action_options", []))
 	roll_button.disabled = not (human_turn and phase == "await_roll")
 	buy_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "buy"))
-	upgrade_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "upgrade"))
+	var can_build := _has_action_option(action_options, "build_facility")
+	upgrade_button.text = "建造設施" if can_build else "升級"
+	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build))
 	end_turn_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "end_turn"))
 	bank_button.disabled = not human_turn
 	cards_button.disabled = not human_turn
@@ -1651,6 +1722,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 	shop_button.disabled = not human_turn
 	if not human_turn or not _shop_available():
 		shop_popup.hide()
+	if not human_turn or phase != "await_action" or not can_build:
+		facility_popup.hide()
 	if not human_turn:
 		bank_popup.hide()
 		cards_popup.hide()
@@ -1775,12 +1848,12 @@ func _update_cards_popup() -> void:
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
 				row.add_child(target_option)
 			var tile_option: OptionButton = null
-			if card_id == "拆除":
+			if card_id in ["拆除", "漲價", "查封"]:
 				tile_option = _make_inventory_tile_picker(card_id)
 				row.add_child(tile_option)
 			if card_id == "購地":
 				var current_tile := _current_tile()
-				row.add_child(_make_label("%s · %s" % [str(current_tile.get("name", "目前位置")), _format_money(int(current_tile.get("cost", 0)))], 11, TEXT_MUTED))
+				row.add_child(_make_label("%s · %s" % [str(current_tile.get("name", "目前位置")), _format_money(_inventory_purchase_price(current_tile))], 11, TEXT_MUTED))
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
 				if symbol_option != null:
@@ -1802,7 +1875,7 @@ func _update_cards_popup() -> void:
 				use.disabled = true
 			if card_id == "購地":
 				var current_tile := _current_tile()
-				use.disabled = use.disabled or str(current_tile.get("kind", "")) != "property" or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or int(current_tile.get("cost", 0)) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
+				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or _inventory_purchase_price(current_tile) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
 			if not implemented:
 				use.text = "尚未還原"
 			row.add_child(use)
@@ -1907,6 +1980,8 @@ func _phase_text(phase: String) -> String:
 
 func _kind_label(kind: String) -> String:
 	match kind:
+		"facility":
+			return "商業設施"
 		"start":
 			return "起點"
 		"event":
@@ -1960,6 +2035,23 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "購買地產 · %s" % _tile_name(int(event.get("property_id", -1)))
 		"property_upgraded":
 			return "升級 %s 至第 %d 級" % [_tile_name(int(event.get("property_id", -1))), int(event.get("level", 0))]
+		"facility_service":
+			var facility_name := str(event.get("facility_name", "商業設施"))
+			var reason := str(event.get("reason", ""))
+			if reason == "sealed":
+				return "%s查封中，暫停服務" % facility_name
+			if reason == "walking_free":
+				return "步行經過加油站，不收費"
+			if reason == "gas_service":
+				return "加油站 · 本次擲骰 %d 點 · 費用 %s" % [int(event.get("last_roll_total", 0)), _format_money(int(event.get("fee", 0)))]
+			if int(event.get("resolved_roll", 0)) > 0:
+				return "%s輪盤 %d 倍 · 費用 %s" % [facility_name, int(event.get("resolved_roll", 0)), _format_money(int(event.get("fee", 0)))]
+			return "抵達%s，不收設施費" % facility_name
+		"facility_blocked":
+			return "免付設施費 %s" % _format_money(int(event.get("amount", 0)))
+		"facility_state_expired":
+			var remaining := int(event.get("to_state", 0)) >> 4
+			return "設施臨時效果已到期" if remaining == 0 else "設施臨時效果剩餘 %d 天" % remaining
 		"payment":
 			return "支付 %s" % _format_money(int(event.get("amount", 0)))
 		"deposit":
@@ -2092,8 +2184,13 @@ func _style_box(background: Color, border: Color, radius: int, border_width: int
 	style.set_corner_radius_all(radius)
 	return style
 
+func _inventory_purchase_price(tile: Dictionary) -> int:
+	if tile.get("kind", "") == "facility":
+		return int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
+	return int(tile.get("cost", 0))
+
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) == 4
+	return int(state.get("version", 0)) >= 4
 
 func _item_implemented(item_kind: String, item_id: String) -> bool:
 	if not _has_original_inventory():
@@ -2280,7 +2377,7 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 		var label := "%s · 節點 %d" % [str(tile.get("name", "道路")), index + 1]
 		if barriers.has(str(index)):
 			label = "路障 · " + label
-		elif str(tile.get("kind", "")) == "property":
+		elif str(tile.get("kind", "")) in ["property", "facility"]:
 			label += " · %d 級" % int(tile.get("building_level", 0))
 		picker.add_item(label, index)
 	if picker.item_count == 0:

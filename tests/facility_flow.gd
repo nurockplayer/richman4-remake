@@ -110,7 +110,7 @@ func _definition() -> Dictionary:
 			"tax_amount": 0,
 			"facility_type": facility_types[index],
 			"facility_state": 0,
-			"fee_by_level": [0, 100, 200, 300, 400, 500],
+			"fee_by_level": [300, 100, 200, 300, 400, 500],
 			"facility_node_index": 1 if source_ids[index] == 1 else index,
 		}
 		if index == 0:
@@ -118,12 +118,16 @@ func _definition() -> Dictionary:
 			tile["land_price"] = 0
 			tile["upgrade_cost"] = 0
 		nodes.append(tile)
+	var retained_facilities: Array = []
+	for source_id in range(1, 6):
+		retained_facilities.append({"id": source_id, "land_price": 1000, "upgrade_cost": 300, "reserved_hex": "6400c8002c019001f401"})
 	return {
 		"schema": "richman4.runtime-map/v1",
 		"version": 1,
 		"id": "Game:1",
 		"name": "Synthetic facilities",
 		"source": {
+			"facilities": retained_facilities,
 			"edition": "Game",
 			"map_number": 1,
 			"archive": "Game/map.mkf",

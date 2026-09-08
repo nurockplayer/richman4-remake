@@ -3263,6 +3263,54 @@ static func _validate_graph_source(source: Variant, expected_id: String = "") ->
 	return errors
 
 
+static func _validate_facility_price_sources(source: Variant, board: Variant) -> Array:
+	var errors: Array = []
+	if typeof(board) != TYPE_ARRAY:
+		return errors
+	var facility_tiles: Array = []
+	for tile in board:
+		if typeof(tile) == TYPE_DICTIONARY and tile.get("kind", "") == "facility":
+			facility_tiles.append(tile)
+	if typeof(source) != TYPE_DICTIONARY:
+		return errors
+	if not source.has("facilities") and facility_tiles.is_empty():
+		return errors
+	var records: Variant = source.get("facilities", null)
+	if typeof(records) != TYPE_ARRAY or records.size() > 1999:
+		return ["invalid retained facility source table"]
+	var prices_by_id: Dictionary = {}
+	for record in records:
+		if typeof(record) != TYPE_DICTIONARY or not _valid_int(record.get("id", null), 1, 1999):
+			errors.append("invalid retained facility source identity")
+			continue
+		var source_id: int = int(record.id)
+		if prices_by_id.has(source_id):
+			errors.append("duplicate retained facility source identity")
+			continue
+		var prices: Dictionary = OriginalMaps.facility_price_table(record)
+		if not bool(prices.get("ok", false)) or not _valid_int(record.get("land_price", null), 0, 1000000):
+			errors.append("invalid retained facility source prices")
+			continue
+		prices_by_id[source_id] = {"land_price": int(record.land_price), "upgrade_cost": prices.upgrade_cost, "fee_by_level": prices.fee_by_level}
+	for tile in facility_tiles:
+		var source_id: Variant = tile.get("source_object_id", null)
+		if not _valid_int(source_id, 1, 1999) or not prices_by_id.has(int(source_id)):
+			errors.append("facility has no retained source prices")
+			continue
+		var expected: Dictionary = prices_by_id[int(source_id)]
+		for field in ["land_price", "upgrade_cost"]:
+			if not _valid_int(tile.get(field, null), int(expected[field]), int(expected[field])):
+				errors.append("facility source price mismatch: " + field)
+		var actual_fees: Variant = tile.get("fee_by_level", null)
+		if typeof(actual_fees) != TYPE_ARRAY or actual_fees.size() != 6:
+			errors.append("facility source fee table mismatch")
+		else:
+			for index in range(6):
+				if not _valid_int(actual_fees[index], int(expected.fee_by_level[index]), int(expected.fee_by_level[index])):
+					errors.append("facility source fee mismatch")
+	return errors
+
+
 static func validate_board_definition(definition: Dictionary, original_facilities: bool = false) -> Dictionary:
 	var errors: Array = []
 	if typeof(definition) != TYPE_DICTIONARY:
@@ -3454,6 +3502,8 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		for index in range(board_array.size()):
 			if board_array[index].get("kind", "") in ["property", "facility"] and not visited.has(index):
 				errors.append("housing or facility is unreachable from graph start")
+	if facility_mode:
+		errors.append_array(_validate_facility_price_sources(definition.get("source", null), board_array))
 	return {"ok": errors.is_empty(), "errors": errors, "definition": definition.duplicate(true)}
 
 
@@ -4009,6 +4059,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if typeof(map_schema_value) != TYPE_STRING or map_schema_value != RUNTIME_MAP_SCHEMA or not _valid_int(data.get("map_version", null), 1, 1):
 			errors.append("invalid graph map schema")
 		errors.append_array(_validate_graph_source(data.get("map_source", null), graph_map_id))
+		if facility_save:
+			errors.append_array(_validate_facility_price_sources(data.get("map_source", null), board))
 		var graph_start: Variant = data.get("start_position", null)
 		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
 		if not _valid_int(graph_start, 0, graph_board_size - 1):

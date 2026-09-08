@@ -8,11 +8,21 @@ extends Control
 
 const SAVE_PATH := "user://richman4_save.json"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
+const GameCalendar = preload("res://game/core/game_calendar.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
 const MIN_SEED := -2147483648
 const MAX_SEED := 2147483647
+const SETUP_INITIAL_FUNDS := [300000, 200000, 100000, 50000, 30000, 10000]
+const SETUP_DAY_LIMITS := [0, 730, 365, 182, 91, 30]
+const SETUP_WEALTH_MULTIPLIERS := [0, 100, 50, 10, 5, 3]
+const CHARACTER_NAMES := [
+	"約翰喬", "沙隆巴斯", "忍太郎", "錢夫人", "阿土伯", "莎拉公主",
+	"宮本寶藏", "糖糖", "烏咪", "孫小美", "小丹尼", "金貝貝",
+]
+const MIN_START_YEAR := 1998
+const MAX_START_YEAR := 9999
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -36,6 +46,7 @@ var seed_label: Label
 var map_identity_label: Label
 var phase_label: Label
 var turn_label: Label
+var setup_summary_label: Label
 var current_player_label: Label
 var current_property_label: Label
 var current_property_detail: Label
@@ -65,6 +76,16 @@ var bank_withdraw_button: Button
 var new_game_popup: PopupPanel
 var seed_input: LineEdit
 var player_count_option: OptionButton
+var initial_fund_option: OptionButton
+var day_limit_option: OptionButton
+var wealth_multiplier_option: OptionButton
+var start_year_input: SpinBox
+var start_month_input: SpinBox
+var start_day_input: SpinBox
+var character_options: Array[OptionButton] = []
+var character_rows: VBoxContainer
+var setup_scroll: ScrollContainer
+var setup_error_label: Label
 var map_selector: OptionButton
 var map_catalog_status_label: Label
 var map_preview_status_label: Label
@@ -100,7 +121,7 @@ func _ready() -> void:
 	_build_interface()
 	_setup_audio()
 	_load_map_catalog()
-	_new_game(DEFAULT_SEED)
+	_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
 
 func _process(_delta: float) -> void:
 	_maybe_schedule_ai_turn()
@@ -112,7 +133,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_on_roll_pressed()
 				get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_N:
-			_new_game()
+			_restart_game()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_S and event.ctrl_pressed:
 			_save_game()
@@ -160,7 +181,7 @@ func _build_interface() -> void:
 
 func _build_header() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(0.0, 68.0)
+	panel.custom_minimum_size = Vector2(0.0, 76.0)
 	_apply_panel_style(panel, Color("#17283a"), PANEL_BORDER, 16, 1)
 
 	var margin := MarginContainer.new()
@@ -183,7 +204,7 @@ func _build_header() -> Control:
 	title_column.add_child(subtitle)
 
 	var meta_column := VBoxContainer.new()
-	meta_column.custom_minimum_size = Vector2(236.0, 0.0)
+	meta_column.custom_minimum_size = Vector2(300.0, 0.0)
 	meta_column.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_child(meta_column)
 	phase_label = _make_label("等待擲骰", 13, TEXT_GOLD)
@@ -192,6 +213,10 @@ func _build_header() -> Control:
 	map_identity_label = _make_label("地圖 · 測試棋盤", 10, TEXT_MUTED)
 	map_identity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(map_identity_label)
+	setup_summary_label = _make_label("1998/01/01 星期四 · 期限不限 · 目標不限", 9, TEXT_MUTED)
+	setup_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	setup_summary_label.clip_text = true
+	meta_column.add_child(setup_summary_label)
 	seed_label = _make_label("SEED 136622", 10, TEXT_MUTED)
 	seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(seed_label)
@@ -423,11 +448,24 @@ func _build_popups() -> void:
 	var new_game_description := _make_label("選擇地圖、玩家數與可重現的 seed；seed 留白會自動產生。", 11, TEXT_MUTED)
 	new_game_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	new_game_box.add_child(new_game_description)
+	setup_scroll = ScrollContainer.new()
+	setup_scroll.name = "SetupScroll"
+	setup_scroll.custom_minimum_size = Vector2(0.0, 148.0)
+	setup_scroll.custom_maximum_size = Vector2(10000.0, 520.0)
+	setup_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	setup_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	setup_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	new_game_box.add_child(setup_scroll)
+	var setup_content := VBoxContainer.new()
+	setup_content.name = "SetupContent"
+	setup_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	setup_content.add_theme_constant_override("separation", 7)
+	setup_scroll.add_child(setup_content)
 	var map_caption := _make_label("地圖", 11, TEXT_MUTED)
-	new_game_box.add_child(map_caption)
+	setup_content.add_child(map_caption)
 	var map_selector_row := HBoxContainer.new()
 	map_selector_row.add_theme_constant_override("separation", 8)
-	new_game_box.add_child(map_selector_row)
+	setup_content.add_child(map_selector_row)
 	map_selector = OptionButton.new()
 	map_selector.custom_minimum_size = Vector2(0.0, 38.0)
 	map_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -439,7 +477,7 @@ func _build_popups() -> void:
 	map_selector_row.add_child(map_catalog_button)
 	map_catalog_status_label = _make_label("尚未載入地圖目錄。", 10, TEXT_MUTED)
 	map_catalog_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	new_game_box.add_child(map_catalog_status_label)
+	setup_content.add_child(map_catalog_status_label)
 	var preview_script: Variant = load("res://game/ui/board_view.gd")
 	if preview_script != null:
 		map_preview_view = preview_script.new()
@@ -448,19 +486,19 @@ func _build_popups() -> void:
 	map_preview_view.custom_minimum_size = Vector2(0.0, 248.0)
 	map_preview_view.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	map_preview_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	new_game_box.add_child(map_preview_view)
+	setup_content.add_child(map_preview_view)
 	map_preview_status_label = _make_label("", 11, TEXT_MUTED)
 	map_preview_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	new_game_box.add_child(map_preview_status_label)
+	setup_content.add_child(map_preview_status_label)
 	var seed_caption := _make_label("Seed", 11, TEXT_MUTED)
-	new_game_box.add_child(seed_caption)
+	setup_content.add_child(seed_caption)
 	seed_input = LineEdit.new()
 	seed_input.placeholder_text = "留白以使用新 seed"
 	seed_input.custom_minimum_size = Vector2(0.0, 38.0)
 	seed_input.add_theme_font_size_override("font_size", 13)
-	new_game_box.add_child(seed_input)
+	setup_content.add_child(seed_input)
 	var players_caption := _make_label("玩家人數", 11, TEXT_MUTED)
-	new_game_box.add_child(players_caption)
+	setup_content.add_child(players_caption)
 	player_count_option = OptionButton.new()
 	player_count_option.custom_minimum_size = Vector2(0.0, 38.0)
 	player_count_option.add_theme_font_size_override("font_size", 12)
@@ -468,7 +506,42 @@ func _build_popups() -> void:
 	player_count_option.add_item("3 位玩家", 3)
 	player_count_option.add_item("4 位玩家", 4)
 	player_count_option.select(2)
-	new_game_box.add_child(player_count_option)
+	player_count_option.item_selected.connect(_on_player_count_selected)
+	setup_content.add_child(player_count_option)
+	setup_content.add_child(_make_label("開局條件", 11, TEXT_MUTED))
+	initial_fund_option = _make_setup_option(SETUP_INITIAL_FUNDS, "資金", " 元", 1)
+	setup_content.add_child(initial_fund_option.get_meta("row"))
+	day_limit_option = _make_setup_option(SETUP_DAY_LIMITS, "期限", " 天", 0)
+	setup_content.add_child(day_limit_option.get_meta("row"))
+	wealth_multiplier_option = _make_setup_option(SETUP_WEALTH_MULTIPLIERS, "財富目標", " 倍", 0)
+	setup_content.add_child(wealth_multiplier_option.get_meta("row"))
+	setup_content.add_child(_make_label("起始日期（預設取系統日期）", 11, TEXT_MUTED))
+	var date_row := HBoxContainer.new()
+	date_row.add_theme_constant_override("separation", 6)
+	setup_content.add_child(date_row)
+	start_year_input = _make_date_spinbox(MIN_START_YEAR, MAX_START_YEAR, 120.0)
+	start_year_input.name = "StartYear"
+	date_row.add_child(start_year_input)
+	date_row.add_child(_make_label("年", 11, TEXT_MUTED))
+	start_month_input = _make_date_spinbox(1, 12, 74.0)
+	start_month_input.name = "StartMonth"
+	date_row.add_child(start_month_input)
+	date_row.add_child(_make_label("月", 11, TEXT_MUTED))
+	start_day_input = _make_date_spinbox(1, 31, 74.0)
+	start_day_input.name = "StartDay"
+	date_row.add_child(start_day_input)
+	date_row.add_child(_make_label("日", 11, TEXT_MUTED))
+	start_year_input.value_changed.connect(_on_setup_date_component_changed)
+	start_month_input.value_changed.connect(_on_setup_date_component_changed)
+	start_day_input.value_changed.connect(_on_setup_date_component_changed)
+	setup_content.add_child(_make_label("角色（每位玩家必須使用不同角色）", 11, TEXT_MUTED))
+	character_rows = VBoxContainer.new()
+	character_rows.name = "CharacterRows"
+	character_rows.add_theme_constant_override("separation", 5)
+	setup_content.add_child(character_rows)
+	setup_error_label = _make_label("", 10, Color("#f28d83"))
+	setup_error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	setup_content.add_child(setup_error_label)
 	var new_game_actions := HBoxContainer.new()
 	new_game_actions.add_theme_constant_override("separation", 8)
 	new_game_box.add_child(new_game_actions)
@@ -478,6 +551,7 @@ func _build_popups() -> void:
 	new_game_confirm_button = _make_button("開始新局", _on_new_game_confirm, true)
 	new_game_confirm_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	new_game_actions.add_child(new_game_confirm_button)
+	_rebuild_character_controls(4)
 
 	bank_popup = _make_popup(Vector2i(430, 276))
 	var bank_box := _popup_box(bank_popup)
@@ -540,6 +614,218 @@ func _build_popups() -> void:
 	map_catalog_file_dialog.filters = PackedStringArray(["*.json ; 地圖目錄 (catalog.json)"])
 	map_catalog_file_dialog.file_selected.connect(_on_map_catalog_file_selected)
 	add_child(map_catalog_file_dialog)
+
+func _make_setup_option(values: Array, caption: String, suffix: String, default_index: int) -> OptionButton:
+	var row := HBoxContainer.new()
+	row.name = caption
+	row.add_theme_constant_override("separation", 8)
+	var label := _make_label(caption, 11, TEXT_MAIN)
+	label.custom_minimum_size = Vector2(92.0, 0.0)
+	row.add_child(label)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(0.0, 34.0)
+	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	option.add_theme_font_size_override("font_size", 11)
+	for value in values:
+		var number := int(value)
+		var text := "不限" if number == 0 and caption != "資金" else _format_money(number) if caption == "資金" else "%d%s" % [number, suffix]
+		option.add_item(text, number)
+	option.select(clampi(default_index, 0, max(0, option.item_count - 1)))
+	row.add_child(option)
+	option.set_meta("row", row)
+	return option
+
+func _make_date_spinbox(low: int, high: int, width: float) -> SpinBox:
+	var field := SpinBox.new()
+	field.min_value = low
+	field.max_value = high
+	field.step = 1
+	field.allow_greater = false
+	field.allow_lesser = false
+	field.custom_minimum_size = Vector2(width, 34.0)
+	field.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	field.add_theme_font_size_override("font_size", 11)
+	return field
+
+func _select_option_id(option: OptionButton, value: int) -> bool:
+	if option == null:
+		return false
+	for index in range(option.item_count):
+		if option.get_item_id(index) == value:
+			option.select(index)
+			return true
+	return false
+
+func _system_start_date() -> Dictionary:
+	var system_date: Variant = Time.get_date_dict_from_system()
+	if system_date is Dictionary and GameCalendar.is_valid(system_date):
+		return {"year": int(system_date.get("year", 0)), "month": int(system_date.get("month", 0)), "day": int(system_date.get("day", 0))}
+	return {}
+
+func _default_setup_options(player_count: int) -> Dictionary:
+	var date := _system_start_date()
+	if date.is_empty():
+		date = {"year": 1998, "month": 1, "day": 1}
+	var character_ids: Array = []
+	for player_id in range(player_count):
+		character_ids.append(player_id)
+	return {
+		"initial_fund": 200000,
+		"day_limit": 0,
+		"wealth_multiplier": 0,
+		"start_date": date,
+		"character_ids": character_ids,
+	}
+
+func _character_ids_from_controls() -> Array:
+	var ids: Array = []
+	for option in character_options:
+		if option != null:
+			ids.append(option.get_selected_id())
+	return ids
+
+func _rebuild_character_controls(player_count: int, preferred_ids: Array = []) -> void:
+	if character_rows == null:
+		return
+	var previous_ids := _character_ids_from_controls()
+	for child in character_rows.get_children():
+		child.free()
+	character_options.clear()
+	for player_id in range(player_count):
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var label := _make_label("玩家 %d" % (player_id + 1), 11, TEXT_MAIN)
+		label.custom_minimum_size = Vector2(92.0, 0.0)
+		row.add_child(label)
+		var option := OptionButton.new()
+		option.name = "Character%d" % player_id
+		option.custom_minimum_size = Vector2(0.0, 34.0)
+		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		option.add_theme_font_size_override("font_size", 11)
+		for character_id in range(CHARACTER_NAMES.size()):
+			option.add_item("%02d · %s" % [character_id, CHARACTER_NAMES[character_id]], character_id)
+		var selected_id := player_id
+		if player_id < preferred_ids.size() and int(preferred_ids[player_id]) >= 0 and int(preferred_ids[player_id]) < CHARACTER_NAMES.size():
+			selected_id = int(preferred_ids[player_id])
+		elif player_id < previous_ids.size() and int(previous_ids[player_id]) >= 0 and int(previous_ids[player_id]) < CHARACTER_NAMES.size():
+			selected_id = int(previous_ids[player_id])
+		option.select(selected_id)
+		option.item_selected.connect(_on_character_selected)
+		row.add_child(option)
+		character_rows.add_child(row)
+		character_options.append(option)
+
+func _on_character_selected(_index: int) -> void:
+	_update_setup_validation(false)
+
+func _on_player_count_selected(_index: int) -> void:
+	var count := player_count_option.get_selected_id()
+	_rebuild_character_controls(count)
+	_update_setup_validation(false)
+
+func _on_setup_date_component_changed(_value: float) -> void:
+	_update_setup_validation(false)
+
+func _setup_date_from_controls() -> Dictionary:
+	if start_year_input == null or start_month_input == null or start_day_input == null:
+		return {}
+	return {"year": int(start_year_input.value), "month": int(start_month_input.value), "day": int(start_day_input.value)}
+
+func _setup_options_from_state() -> Dictionary:
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		return {}
+	var start_date: Variant = state.get("start_date", null)
+	if not start_date is Dictionary or not GameCalendar.is_valid(start_date):
+		return {}
+	var character_ids: Array = []
+	for player in state.get("players", []):
+		if not player is Dictionary or not player.has("character_id"):
+			return {}
+		character_ids.append(int(player.get("character_id", -1)))
+	return {
+		"initial_fund": int(state.get("initial_fund", 200000)),
+		"day_limit": int(state.get("day_limit", 0)),
+		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
+		"start_date": {"year": int(start_date.get("year", 0)), "month": int(start_date.get("month", 0)), "day": int(start_date.get("day", 0))},
+		"character_ids": character_ids,
+	}
+
+func _populate_setup_controls() -> void:
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		player_count = PLAYER_COUNT
+	_select_option_id(player_count_option, player_count)
+	var initial_fund := int(state.get("initial_fund", 200000))
+	if not SETUP_INITIAL_FUNDS.has(initial_fund):
+		initial_fund = 200000
+	_select_option_id(initial_fund_option, initial_fund)
+	var day_limit := int(state.get("day_limit", 0))
+	if not SETUP_DAY_LIMITS.has(day_limit):
+		day_limit = 0
+	_select_option_id(day_limit_option, day_limit)
+	var wealth_multiplier := int(state.get("wealth_multiplier", 0))
+	if not SETUP_WEALTH_MULTIPLIERS.has(wealth_multiplier):
+		wealth_multiplier = 0
+	_select_option_id(wealth_multiplier_option, wealth_multiplier)
+	var date_value: Variant = state.get("start_date", null)
+	var date: Dictionary = date_value.duplicate(true) if date_value is Dictionary and GameCalendar.is_valid(date_value) else _system_start_date()
+	if date.is_empty():
+		date = {"year": MIN_START_YEAR, "month": 1, "day": 1}
+	start_year_input.value = int(date.get("year", MIN_START_YEAR))
+	start_month_input.value = int(date.get("month", 1))
+	start_day_input.value = int(date.get("day", 1))
+	var preferred_ids: Array = []
+	for player in state.get("players", []):
+		if player is Dictionary and player.has("character_id"):
+			preferred_ids.append(int(player.get("character_id", -1)))
+	_rebuild_character_controls(player_count, preferred_ids)
+	_update_setup_validation(false)
+
+func _set_setup_error(message: String) -> void:
+	if setup_error_label != null:
+		setup_error_label.text = message
+
+func _collect_setup_options() -> Dictionary:
+	if initial_fund_option == null or day_limit_option == null or wealth_multiplier_option == null or player_count_option == null:
+		return {"ok": false, "message": "開局設定尚未載入。"}
+	var initial_fund := initial_fund_option.get_selected_id()
+	if not SETUP_INITIAL_FUNDS.has(initial_fund):
+		return {"ok": false, "message": "開局資金選項無效。"}
+	var day_limit := day_limit_option.get_selected_id()
+	if not SETUP_DAY_LIMITS.has(day_limit):
+		return {"ok": false, "message": "期限選項無效。"}
+	var wealth_multiplier := wealth_multiplier_option.get_selected_id()
+	if not SETUP_WEALTH_MULTIPLIERS.has(wealth_multiplier):
+		return {"ok": false, "message": "財富目標選項無效。"}
+	var start_date := _setup_date_from_controls()
+	if not GameCalendar.is_valid(start_date):
+		return {"ok": false, "message": "起始日期不存在，請檢查年月日。"}
+	var player_count := player_count_option.get_selected_id()
+	if player_count < 2 or player_count > 4 or character_options.size() != player_count:
+		return {"ok": false, "message": "玩家人數設定無效。"}
+	var character_ids := _character_ids_from_controls()
+	var seen: Dictionary = {}
+	for character_id in character_ids:
+		if character_id < 0 or character_id >= CHARACTER_NAMES.size():
+			return {"ok": false, "message": "角色選擇無效。"}
+		if seen.has(character_id):
+			return {"ok": false, "message": "每位玩家必須選擇不同角色。"}
+		seen[character_id] = true
+	return {"ok": true, "options": {
+		"initial_fund": initial_fund,
+		"day_limit": day_limit,
+		"wealth_multiplier": wealth_multiplier,
+		"start_date": start_date,
+		"character_ids": character_ids,
+	}}
+
+func _update_setup_validation(show_message: bool) -> void:
+	if not show_message:
+		_set_setup_error("")
+		return
+	var validation := _collect_setup_options()
+	_set_setup_error("" if bool(validation.get("ok", false)) else str(validation.get("message", "開局設定無效。")))
 
 func _build_end_overlay() -> void:
 	end_overlay = ColorRect.new()
@@ -767,6 +1053,9 @@ func _adopt_map_from_snapshot(snapshot: Dictionary) -> void:
 	if int(snapshot.get("version", -1)) == 1:
 		_active_map_definition = _make_fallback_map_definition()
 		return
+	if snapshot.get("board_mode", "") != "graph":
+		_active_map_definition = _make_fallback_map_definition()
+		return
 	var raw_identity: Variant = _extract_map_identity(snapshot)
 	if raw_identity == null:
 		return
@@ -808,11 +1097,15 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 
 func _on_new_game_pressed() -> void:
 	if new_game_popup == null:
-		_new_game()
+		_restart_game()
 		return
-	seed_input.text = ""
-	player_count_option.select(2)
+	if not _active_map_definition.is_empty():
+		_selected_map_definition = _active_map_definition.duplicate(true)
 	_update_map_selector()
+	var current_seed: Variant = state.get("seed", null)
+	seed_input.text = str(current_seed) if current_seed != null and int(current_seed) >= MIN_SEED and int(current_seed) <= MAX_SEED else ""
+	_populate_setup_controls()
+	_set_setup_error("")
 	new_game_popup.popup_centered(Vector2i(760, 680))
 	new_game_popup.set_size(Vector2i(760, 680))
 	seed_input.grab_focus()
@@ -820,6 +1113,12 @@ func _on_new_game_pressed() -> void:
 func _on_new_game_confirm() -> void:
 	if not _map_is_playable(_selected_map_definition):
 		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+		_refresh_log_only()
+		return
+	var setup_validation := _collect_setup_options()
+	if not bool(setup_validation.get("ok", false)):
+		_set_setup_error(str(setup_validation.get("message", "開局設定無效。")))
+		_append_local_log(str(setup_validation.get("message", "開局設定無效。")))
 		_refresh_log_only()
 		return
 	var requested_seed: Variant = null
@@ -834,28 +1133,38 @@ func _on_new_game_confirm() -> void:
 			_refresh_log_only()
 			return
 	var requested_players := player_count_option.get_selected_id()
-	_new_game(requested_seed, requested_players, _selected_map_definition)
-	new_game_popup.hide()
+	var before_game := game_state
+	var before_seed := int(state.get("seed", MIN_SEED - 1))
+	if _new_game(requested_seed, requested_players, _selected_map_definition, setup_validation["options"]):
+		new_game_popup.hide()
+	else:
+		_set_setup_error("新局建立失敗，目前棋局保持不變。")
+		if game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
+			_refresh_log_only()
 
-func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map_definition: Dictionary = {}) -> void:
+func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map_definition: Dictionary = {}, setup_options: Dictionary = {}) -> bool:
 	var resolved_seed: int
 	if seed_value == null:
 		resolved_seed = int(Time.get_unix_time_from_system()) % 2147483647
 	else:
 		resolved_seed = int(seed_value)
-	var resolved_players: int = clampi(player_count, 2, 4)
+	if player_count < 2 or player_count > 4:
+		_append_local_log("玩家人數必須介於 2 與 4。")
+		_refresh_log_only()
+		return false
+	var resolved_players: int = player_count
 	var selected_definition := map_definition.duplicate(true) if not map_definition.is_empty() else _selected_map_definition.duplicate(true)
 	if not _map_is_playable(selected_definition):
 		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
 		_refresh_log_only()
-		return
+		return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
 		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
-			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
-		if candidate == null and _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
-			candidate = state_script.new_game(resolved_seed, resolved_players)
+			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, setup_options) if not setup_options.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
+		elif _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
+			candidate = state_script.new_game(resolved_seed, resolved_players, setup_options) if not setup_options.is_empty() else state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:
 		if game_state == null and state.is_empty():
 			state = _unavailable_state(resolved_seed)
@@ -863,7 +1172,7 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		else:
 			_append_local_log("新局建立失敗；目前棋局保持不變。")
 		_refresh_log_only()
-		return
+		return false
 	else:
 		game_state = candidate
 		_active_map_definition = selected_definition
@@ -872,6 +1181,7 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	_refresh_from_state()
 	end_overlay.hide()
 	_ai_pending = false
+	return true
 
 func _setup_audio() -> void:
 	var audio_script: Variant = load("res://game/platform/original_audio.gd")
@@ -1102,8 +1412,16 @@ func _on_route_selected(next_index: int) -> void:
 	_append_local_log("選擇前往 %s：%s" % [_tile_name(next_index), _result_text(result, "已送出路線選擇。")])
 	_handle_result(result)
 
+func _restart_game() -> void:
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		player_count = PLAYER_COUNT
+	var seed_value: Variant = state.get("seed", null)
+	var options := _setup_options_from_state()
+	_new_game(seed_value, player_count, _active_map_definition, options)
+
 func _on_end_restart_pressed() -> void:
-	_new_game()
+	_restart_game()
 
 func _close_end_overlay() -> void:
 	end_overlay.hide()
@@ -1170,6 +1488,8 @@ func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
 	turn_label.text = "第 %d 回合 · 第 %d 輪" % [int(state.get("turn", 1)), int(state.get("round", 1))]
 	phase_label.text = _phase_text(phase)
+	if setup_summary_label != null:
+		setup_summary_label.text = _setup_summary_text()
 	var map_name := str(_active_map_definition.get("name", ""))
 	if map_name.is_empty():
 		var identity: Variant = _extract_map_identity(state)
@@ -1178,6 +1498,24 @@ func _update_header(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var is_human := bool(player.get("is_human", true))
 	current_player_label.text = "你的回合" if is_human else "%s 的回合" % str(player.get("name", "AI"))
+
+func _weekday_text(weekday: int) -> String:
+	return ["未知", "一", "二", "三", "四", "五", "六", "日"][weekday] if weekday >= 1 and weekday <= 7 else "未知"
+
+func _setup_summary_text() -> String:
+	var raw_date: Variant = state.get("date", state.get("start_date", null))
+	if raw_date is Dictionary and GameCalendar.is_valid(raw_date):
+		var date: Dictionary = raw_date
+		var date_text := "%04d/%02d/%02d 週%s" % [int(date.get("year", 0)), int(date.get("month", 0)), int(date.get("day", 0)), _weekday_text(int(state.get("weekday", GameCalendar.weekday(date))))]
+		var day_limit := int(state.get("day_limit", 0))
+		var wealth_multiplier := int(state.get("wealth_multiplier", 0))
+		var limit_text := "期限不限" if day_limit == 0 else "限%d天" % day_limit
+		var target_text := "目標不限"
+		if wealth_multiplier > 0:
+			var initial_fund := int(state.get("initial_fund", 200000))
+			target_text = "目標%s（%d倍）" % [_format_money(initial_fund * wealth_multiplier), wealth_multiplier]
+		return "%s · %s · %s" % [date_text, limit_text, target_text]
+	return "舊版日期 · 第%d天 · 期限/目標未記錄" % int(state.get("day", 1))
 
 func _update_players(players: Array, current_index: int) -> void:
 	for child in players_list.get_children():

@@ -13,8 +13,11 @@ func _initialize() -> void:
 	_test_setup_option_validation()
 	_test_calendar_and_month_boundary()
 	_test_calendar_terminal_boundary()
+	_test_calendar_last_day_is_playable()
+	_test_calendar_overflow_overrides_deadline_for_zero_wealth()
 	_test_deadline_and_wealth_settlement()
 	_test_zero_wealth_does_not_force_setup_winner()
+	_test_setup_terminal_and_month_marker_validation()
 	_test_setup_save_round_trip()
 	_test_graph_setup_constructor()
 	_test_setup_ai_completion()
@@ -162,6 +165,57 @@ func _test_calendar_terminal_boundary() -> void:
 	_expect(bool(GameState.validate_save(boundary.to_dict()).get("ok", false)), "calendar boundary save remains valid")
 
 
+func _test_calendar_last_day_is_playable() -> void:
+	var boundary: Object = _new_setup(11, 2, {"start_date": {"year": 9999, "month": 12, "day": 30}})
+	_expect(boundary != null, "day before maximum supported date starts")
+	if boundary == null:
+		return
+	_end_setup_round(boundary)
+	_expect_equal(boundary.state["phase"], "await_roll", "maximum supported date remains playable for one full day")
+	_expect_equal(boundary.state["date"], {"year": 9999, "month": 12, "day": 31}, "last supported date is reached before terminal settlement")
+	_expect_equal(boundary.state["elapsed"], 1, "last supported date advances elapsed exactly once")
+	_expect(bool(GameState.validate_save(boundary.to_dict()).get("ok", false)), "last supported date save remains valid while playable")
+	_end_setup_round(boundary)
+	_expect_equal(boundary.state["phase"], "game_over", "calendar boundary settles only when the next date cannot be represented")
+	_expect_equal(boundary.state["day"], 2, "calendar boundary keeps the last playable day")
+	_expect_equal(boundary.state["elapsed"], 1, "calendar boundary does not add an unrepresentable day")
+	_expect_equal(boundary.state["last_event"].get("reason", ""), "calendar_limit", "calendar boundary records implementation limit")
+
+
+func _test_calendar_overflow_overrides_deadline_for_zero_wealth() -> void:
+	var game: Object = _new_setup(19, 2, {"start_date": {"year": 9999, "month": 12, "day": 1}, "day_limit": 30})
+	_expect(game != null, "calendar overflow deadline fixture starts")
+	if game == null:
+		return
+	for player in game.state["players"]:
+		player["cash"] = 0
+		player["deposit"] = 0
+		player["loan"] = 0
+		player["properties"] = []
+		player["property_values"] = 0
+		player["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
+	game.state["bank"]["deposits"] = 0
+	game.state["day"] = 31
+	game._sync_state()
+	game.state["current_player"] = game.state["players"].size() - 1
+	game.state["phase"] = "await_action"
+	game._set_action_options(int(game.state["current_player"]))
+	var pre_terminal: Dictionary = game.to_dict()
+	_expect(bool(GameState.validate_save(pre_terminal).get("ok", false)), "max-date deadline state with zero wealth is valid before overflow")
+	var result: Dictionary = game.end_turn()
+	_expect(bool(result.get("ok", false)), "calendar overflow end_turn succeeds")
+	_expect_equal(game.state["phase"], "game_over", "calendar overflow terminates despite elapsed deadline")
+	_expect_equal(game.state["winner"], -1, "calendar overflow keeps winnerless zero-wealth result")
+	_expect_equal(game.state["last_event"].get("reason", ""), "calendar_limit", "calendar overflow records calendar reason over deadline")
+	_expect_equal(game.state["last_event"].get("calendar_boundary", false), true, "calendar overflow records boundary marker")
+	var saved: Dictionary = game.to_dict()
+	_expect(bool(GameState.validate_save(saved).get("ok", false)), "winnerless calendar terminal save validates")
+	var restored: Object = GameState.from_dict(saved)
+	_expect(restored != null, "winnerless calendar terminal save reloads")
+	if restored != null:
+		_expect_equal(restored.to_json(), game.to_json(), "winnerless calendar terminal save round trips exactly")
+
+
 func _test_deadline_and_wealth_settlement() -> void:
 	var deadline_options: Dictionary = {"start_date": {"year": 1998, "month": 1, "day": 1}, "day_limit": 30}
 	var deadline: Object = _new_setup(7, 2, deadline_options)
@@ -210,6 +264,108 @@ func _test_zero_wealth_does_not_force_setup_winner() -> void:
 	_expect_equal(game.state["phase"], "await_roll", "zero wealth deadline does not enter game over")
 	_expect_equal(game.state["winner"], -1, "zero wealth setup settlement has no winner")
 	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "zero wealth setup state remains saveable")
+
+
+func _test_setup_terminal_and_month_marker_validation() -> void:
+	var ordinary: Object = _new_setup(12, 2, {"start_date": {"year": 1998, "month": 1, "day": 1}})
+	_expect(ordinary != null, "ordinary v3 validation fixture starts")
+	if ordinary == null:
+		return
+	var ordinary_game_over: Dictionary = ordinary.to_dict()
+	ordinary_game_over["phase"] = "game_over"
+	ordinary_game_over["winner"] = -1
+	ordinary_game_over["action_options"] = []
+	ordinary_game_over["last_event"] = {"type": "game_over", "day": 1, "turn": 1, "winner": -1,
+		"reason": "calendar_limit", "elapsed": 0, "wealth_target": 0, "winner_wealth": 0, "calendar_boundary": true}
+	_expect(not bool(GameState.validate_save(ordinary_game_over).get("ok", false)), "v3 no-winner game over requires the actual calendar boundary")
+
+	var calendar_terminal: Object = _new_setup(13, 2, {"start_date": {"year": 9999, "month": 12, "day": 31}})
+	_expect(calendar_terminal != null, "calendar terminal validation fixture starts")
+	if calendar_terminal != null:
+		_end_setup_round(calendar_terminal)
+		var valid_terminal: Dictionary = calendar_terminal.to_dict()
+		_expect(bool(GameState.validate_save(valid_terminal).get("ok", false)), "actual calendar terminal save validates")
+		var missing_marker: Dictionary = valid_terminal.duplicate(true)
+		missing_marker["winner"] = -1
+		missing_marker["last_event"].erase("calendar_boundary")
+		_expect(not bool(GameState.validate_save(missing_marker).get("ok", false)), "calendar terminal save requires its boundary event marker")
+		var ordinary_date: Dictionary = valid_terminal.duplicate(true)
+		ordinary_date["winner"] = -1
+		ordinary_date["date"] = {"year": 9999, "month": 12, "day": 30}
+		_expect(not bool(GameState.validate_save(ordinary_date).get("ok", false)), "calendar marker on a non-final date is rejected")
+
+	var deadline_boundary: Object = _new_setup(14, 2, {"start_date": {"year": 9999, "month": 12, "day": 1}, "day_limit": 30})
+	_expect(deadline_boundary != null, "deadline boundary validation fixture starts")
+	if deadline_boundary != null:
+		deadline_boundary.state["day"] = 31
+		deadline_boundary.state["phase"] = "game_over"
+		deadline_boundary.state["winner"] = -1
+		deadline_boundary.state["action_options"] = []
+		deadline_boundary._sync_state()
+		deadline_boundary.state["last_event"] = {"type": "game_over", "day": 31, "turn": 31, "winner": -1,
+			"reason": "calendar_limit", "elapsed": 30, "wealth_target": 0, "winner_wealth": 0, "calendar_boundary": true}
+		_expect(bool(GameState.validate_save(deadline_boundary.to_dict()).get("ok", false)), "calendar marker remains valid when deadline has also elapsed")
+
+	var future_marker: Object = _new_setup(15, 2, {"start_date": {"year": 1998, "month": 1, "day": 31}})
+	_expect(future_marker != null, "month marker validation fixture starts")
+	if future_marker != null:
+		_end_setup_round(future_marker)
+		var crossed: Dictionary = future_marker.to_dict()
+		_expect_equal(crossed["date"], {"year": 1998, "month": 2, "day": 1}, "month marker fixture crosses into a new month")
+		_expect_equal(crossed["last_settled_month"], {"year": 1998, "month": 1}, "ordinary month crossing records the previous month")
+		var current_marker: Dictionary = crossed.duplicate(true)
+		current_marker["last_settled_month"] = {"year": 1998, "month": 2}
+		_expect(not bool(GameState.validate_save(current_marker).get("ok", false)), "current-month settlement marker is rejected")
+		var future_marker_save: Dictionary = crossed.duplicate(true)
+		future_marker_save["last_settled_month"] = {"year": 1999, "month": 1}
+		_expect(not bool(GameState.validate_save(future_marker_save).get("ok", false)), "future settlement marker is rejected")
+
+	var deadline_day_one: Object = _new_setup(16, 2, {"start_date": {"year": 1998, "month": 12, "day": 2}, "day_limit": 30})
+	_expect(deadline_day_one != null, "day-one deadline fixture starts")
+	if deadline_day_one != null:
+		var deadline_deposits: Array = [deadline_day_one.state["players"][0]["deposit"], deadline_day_one.state["players"][1]["deposit"]]
+		deadline_day_one.state["day"] = 30
+		deadline_day_one._sync_state()
+		_end_setup_round(deadline_day_one)
+		_expect_equal(deadline_day_one.state["phase"], "game_over", "deadline settles before month interest on day one")
+		_expect_equal(deadline_day_one.state["date"], {"year": 1999, "month": 1, "day": 1}, "deadline fixture reaches the first day of the next month")
+		_expect_equal(deadline_day_one.state["last_settled_month"], {}, "deadline ending on day one does not settle the previous month")
+		_expect_equal([deadline_day_one.state["players"][0]["deposit"], deadline_day_one.state["players"][1]["deposit"]], deadline_deposits, "deadline ending on day one does not pay month interest")
+		_expect(bool(GameState.validate_save(deadline_day_one.to_dict()).get("ok", false)), "day-one deadline save validates with unsettled marker")
+
+	var target_day_one: Object = _new_setup(17, 2, {"start_date": {"year": 1998, "month": 12, "day": 2}, "wealth_multiplier": 3})
+	_expect(target_day_one != null, "day-one wealth target fixture starts")
+	if target_day_one != null:
+		var target_deposit_before: int = int(target_day_one.state["players"][0]["deposit"])
+		target_day_one.state["players"][0]["cash"] = 600000
+		target_day_one.state["players"][0]["deposit"] = 0
+		target_day_one.state["bank"]["deposits"] -= target_deposit_before
+		target_day_one.state["day"] = 30
+		target_day_one._sync_state()
+		_end_setup_round(target_day_one)
+		_expect_equal(target_day_one.state["phase"], "game_over", "wealth target settles before month interest on day one")
+		_expect_equal(target_day_one.state["date"], {"year": 1999, "month": 1, "day": 1}, "wealth target fixture reaches the first day of the next month")
+		_expect_equal(target_day_one.state["last_settled_month"], {}, "wealth target ending on day one does not settle the previous month")
+		_expect_equal(target_day_one.state["players"][1]["deposit"], 120000, "wealth target ending on day one leaves the other deposit unsettled")
+		_expect(bool(GameState.validate_save(target_day_one.to_dict()).get("ok", false)), "day-one wealth target save validates with unsettled marker")
+
+	var bankruptcy_day_one: Object = _new_setup(18, 3, {"start_date": {"year": 1998, "month": 12, "day": 2}})
+	_expect(bankruptcy_day_one != null, "ordinary bankruptcy day-one fixture starts")
+	if bankruptcy_day_one != null:
+		var bankruptcy_deposit_before: int = int(bankruptcy_day_one.state["players"][0]["deposit"])
+		var bankrupt_player_deposit: int = int(bankruptcy_day_one.state["players"][1]["deposit"])
+		bankruptcy_day_one.state["players"][1]["cash"] = 0
+		bankruptcy_day_one.state["players"][1]["deposit"] = 0
+		bankruptcy_day_one.state["bank"]["deposits"] -= bankrupt_player_deposit
+		bankruptcy_day_one._declare_bankruptcy(1, 0, 1, "test")
+		bankruptcy_day_one.state["day"] = 30
+		bankruptcy_day_one._sync_state()
+		_end_setup_round(bankruptcy_day_one)
+		_expect_equal(bankruptcy_day_one.state["date"], {"year": 1999, "month": 1, "day": 1}, "ordinary bankruptcy fixture reaches the first day of the next month")
+		_expect_equal(bankruptcy_day_one.state["last_settled_month"], {"year": 1998, "month": 12}, "ordinary bankruptcy day one settles the previous month")
+		_expect_equal(bankruptcy_day_one.state["players"][0]["deposit"], int(float(bankruptcy_deposit_before) * 1.1), "ordinary bankruptcy day one pays the previous month interest")
+		var bankruptcy_validation: Dictionary = GameState.validate_save(bankruptcy_day_one.to_dict())
+		_expect(bool(bankruptcy_validation.get("ok", false)), "ordinary bankruptcy day-one save validates: %s" % str(bankruptcy_validation.get("errors", [])))
 
 
 func _test_setup_save_round_trip() -> void:

@@ -3,6 +3,10 @@ extends SceneTree
 const GameState = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 
+class ClocklessUI extends "res://game/ui/main_ui.gd":
+	func _system_start_date() -> Dictionary:
+		return {}
+
 var checks := 0
 var failures := 0
 
@@ -21,6 +25,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	ui.set_process(false)
+	_test_missing_system_date()
 	_test_default_setup_and_four_players(ui)
 	await _test_actual_setup(ui)
 	_test_duplicate_character_rejection(ui)
@@ -120,3 +125,11 @@ func _test_legacy_save_display(ui: Control) -> void:
 	_expect(int(ui.state.get("version", -1)) == 1, "legacy fixture remains version one")
 	_expect(str(ui.setup_summary_label.text).contains("舊版日期"), "legacy save has an explicit legacy date label")
 	_expect(not str(ui.setup_summary_label.text).contains("期限不限"), "legacy save does not invent setup constraints")
+
+func _test_missing_system_date() -> void:
+	var ui := ClocklessUI.new()
+	var options: Dictionary = ui._default_setup_options(4)
+	_expect(options.get("start_date", {}) == {"year": 1998, "month": 1, "day": 1}, "missing system date uses supported fallback")
+	var game: Object = GameState.new_game(42, 4, options)
+	_expect(game != null and int(game.state.get("version", 0)) == 3, "missing clock retains setup mode")
+	ui.free()

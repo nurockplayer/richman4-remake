@@ -80,6 +80,23 @@ def export_sprite(archive, index: int, stage: Path, relative: Path) -> dict | No
             "frames": frames}
 
 
+def scene_objects(graph: bytes, parsed: dict) -> list[dict]:
+    objects = []
+    for category, sprite_offset, direction_offset in [
+        ("landscapes", 26, 24), ("companies", 32, 27)
+    ]:
+        section = parsed["sections"][category]
+        for record in parsed[category]:
+            start = section["offset"] + record["id"] * section["record_size"]
+            sprite_id = struct.unpack_from("<H", graph, start + sprite_offset)[0]
+            if sprite_id:
+                objects.append({"category": category, "id": record["id"],
+                                "x": record["x"], "y": record["y"],
+                                "sprite_id": sprite_id,
+                                "direction": (8 - graph[start + direction_offset]) & 7})
+    return objects
+
+
 def decode_source(source: Path, output: Path) -> dict:
     source, output = source.resolve(), output.resolve()
     assert_disjoint_paths(source, output)
@@ -142,6 +159,15 @@ def decode_source(source: Path, output: Path) -> dict:
                     if sprite is not None:
                         sprite["level"] = level
                         house_sprites.append(sprite)
+                objects = scene_objects(graph, graph_data)
+                scenery_sprites = []
+                for sprite_id in sorted({item["sprite_id"] for item in objects}):
+                    index = sprite_id + (26 if edition == "Game" else 38)
+                    sprite = export_sprite(archive, index, stage,
+                                           Path("images") / edition / "scenery" / str(index))
+                    if sprite is not None:
+                        sprite["sprite_id"] = sprite_id
+                        scenery_sprites.append(sprite)
                 manifest["maps"].append({
                     "id": f"{edition}:{map_number}",
                     "archive": f"{edition}/map.mkf",
@@ -155,6 +181,7 @@ def decode_source(source: Path, output: Path) -> dict:
                                "direction": (8 - land["field_0x1b"]) & 7}
                               for land in graph_data["lands"]],
                     "house_sprites": house_sprites,
+                    "scenery": objects, "scenery_sprites": scenery_sprites,
                     "image": {"path": relative.as_posix(),
                               "sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
                 })

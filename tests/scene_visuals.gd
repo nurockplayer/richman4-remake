@@ -12,7 +12,7 @@ func _initialize() -> void:
 func run() -> void:
 	var folder := "user://scene-fixture"
 	DirAccess.make_dir_recursive_absolute(folder.path_join("images"))
-	var picture := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	var picture := Image.create(2304, 2304, false, Image.FORMAT_RGBA8)
 	picture.fill(Color.GREEN)
 	picture.save_png(folder.path_join("images/test.png"))
 	var record := {"path": "images/test.png", "sha256": FileAccess.get_sha256(folder.path_join("images/test.png"))}
@@ -38,11 +38,16 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	expect(board._background != null, "original background used by drawing")
+	expect(board.get_screen_position_for_index(0).distance_to(board.size * 0.5) < 1, "camera centers the active player")
 	var point: Vector2 = board.get_screen_position_for_index(1)
 	expect(board.select_at_position(point) == 1, "route remains clickable over background")
 	board.zoom_by(1.8)
 	board.pan_by(Vector2(30, -15))
 	expect(board.select_at_position(board.get_screen_position_for_index(1)) == 1, "route remains clickable after zoom and pan")
+	board.set_game_data(definition.board, [{"position": 1}], 0, definition)
+	await process_frame
+	await process_frame
+	expect(board.get_screen_position_for_index(1).distance_to(board.size * 0.5) < 1, "camera follows movement")
 	board.set_game_data(definition.board, [], 0, wrong)
 	await process_frame
 	await process_frame

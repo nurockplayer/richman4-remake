@@ -29,13 +29,13 @@ func scene_for(definition: Dictionary) -> Dictionary:
 	var identity := "%s:%d" % [source.get("edition", ""), int(source.get("map_number", 0))]
 	for entry in manifest.get("maps", []):
 		if entry is Dictionary and entry.get("id") == identity and entry.get("source_file_sha256") == source.get("source_file_sha256") and entry.get("graph_payload_sha256") == source.get("payload_sha256"):
-			if entry.get("width") == 2304 and entry.get("height") == 2304 and entry.get("lands") is Array and entry.get("house_sprites") is Array:
+			if entry.get("width") == 2304 and entry.get("height") == 2304 and entry.get("lands") is Array and entry.get("house_sprites") is Array and entry.get("scenery", []) is Array and entry.get("scenery_sprites", []) is Array:
 				var valid := true
-				for land in entry.lands:
+				for land in entry.lands + entry.get("scenery", []):
 					if not land is Dictionary:
 						valid = false
 						break
-					for field in ["id", "x", "y", "direction"]:
+					for field in ["id", "x", "y", "direction"] + (["sprite_id"] if land.has("sprite_id") else []):
 						if not _number(land.get(field), 0, 65535):
 							valid = false
 				if valid:
@@ -69,6 +69,9 @@ func character(edition: String, character_id: int, direction := 0) -> Dictionary
 
 func house(scene: Dictionary, level: int, direction: int) -> Dictionary:
 	return _frame(scene.get("house_sprites", []), "level", level, direction)
+
+func scenery(scene: Dictionary, sprite_id: int, direction: int) -> Dictionary:
+	return _frame(scene.get("scenery_sprites", []), "sprite_id", sprite_id, direction)
 
 func _frame(sprites: Array, field: String, value: int, direction: int) -> Dictionary:
 	for sprite in sprites:

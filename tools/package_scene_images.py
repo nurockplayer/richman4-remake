@@ -18,6 +18,7 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
         raise ValueError("invalid scene characters")
     base = path.resolve().parent
     paths = set()
+    dimensions = {}
 
     def visit(value):
         if isinstance(value, dict):
@@ -38,6 +39,7 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
                 if not (0 < width <= 4096 and 0 < height <= 4096):
                     raise ValueError("scene PNG dimensions out of range")
                 paths.add(Path(relative))
+                dimensions[relative] = (width, height)
             for child in value.values():
                 visit(child)
         elif isinstance(value, list):
@@ -48,6 +50,8 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
     for scene in manifest["maps"]:
         if scene.get("width") != 2304 or scene.get("height") != 2304:
             raise ValueError("unsupported scene dimensions")
+        if dimensions.get(scene["image"]["path"]) != (2304, 2304):
+            raise ValueError("background PNG dimensions mismatch")
         if Path(scene["image"]["path"]) not in paths:
             raise ValueError("missing scene background")
     return manifest, sorted(paths)

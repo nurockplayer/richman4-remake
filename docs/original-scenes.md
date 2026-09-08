@@ -1,7 +1,7 @@
 # 本機原版場景
 
 `python3 tools/decode_original_ground.py --source /本機/原作 --output .local/original-scenes`
-會匯入兩版本的 12 張底圖、12 位角色各 8 個靜態方向，以及各地圖 5 級住宅。
+會匯入兩版本的 12 張底圖、12 位角色各 8 個靜態方向，各地圖 5 級住宅，以及來源明示的地景與企業圖像。
 原作、PNG、manifest、私人套件皆不得提交或上傳。
 
 Godot 依 `RICHMAN4_SCENE_MANIFEST`、私人套件 Resources/Original/scenes/manifest.json、
@@ -32,6 +32,11 @@ SPR 的 x/y 為 anchor，繪製左上角從世界位置減去 anchor。
 另以本機 Godot 渲染測試局，配置不同等級住宅及角色，確認房屋落在土地框、角色位於道路。
 合成 UI 測試驗證載入、hash mismatch fallback、路線點擊及縮放平移後的命中位置。
 
-目前只有底圖、靜態住宅與角色站姿。地景、特殊建物、行走／交通工具動畫、角色隨移動轉向、
+目前包含底圖、靜態住宅／地景／企業與角色站姿。設施升級圖像、行走／交通工具動畫、角色隨移動轉向、
 屋主 palette 換色尚未還原；屋主用道路色點表示，住宅可見原始 cyan 色邊。
 同格角色略微錯開以便辨識。開局道路仍沿用既有路網 heuristic，尚未查證原作初始位置。
+
+地景紀錄大小 28 bytes，+0x18 為方向、+0x1a 為 sprite ID；企業紀錄大小52，
++0x1b 為方向、+0x20 為 sprite ID。Game資源為 ID+26，資料片為 ID+38。
+已直接檢查兩個原作執行檔的 0x407b39／0x407b8b 與 0x407f01／0x407f52 加法，
+並實看 Game ID61→resource87 的醫院圖。圖層依螢幕 y 排序，讓前方建物遮住後方角色。

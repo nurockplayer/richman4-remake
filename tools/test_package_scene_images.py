@@ -14,7 +14,7 @@ class PackageSceneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             image = root / "images" / "test.png"
-            chunk = VisualChunk(0, 1, 1, 0, 0, b"\0")
+            chunk = VisualChunk(0, 2304, 2304, 0, 0, bytes(2304 * 2304))
             visual = VisualResource("SPR", 1, 0, bytes(512), (chunk,))
             write_png(image, chunk, visual, pixel_format="rgb555")
             record = {"path": "images/test.png", "sha256": hashlib.sha256(image.read_bytes()).hexdigest()}

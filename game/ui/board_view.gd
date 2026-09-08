@@ -22,6 +22,9 @@ const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 var visuals = OriginalVisuals.new()
 var _scene: Dictionary = {}
 var _background: Texture2D
+var _scene_draws: Array = []
+var _focused_player_position := Vector2i(-1, -1)
+var _focused_map_identity := ""
 
 var board_data: Array = []
 var players_data: Array = []
@@ -64,6 +67,27 @@ func set_game_data(next_board: Array, next_players: Array, current_index: int, d
 	_layout_size = Vector2.ZERO
 	queue_redraw()
 
+func _focus_moving_player() -> void:
+	if size.x < 40 or size.y < 40:
+		return
+	var map_identity := str(map_definition.get("id", ""))
+	var position := _current_position()
+	var identity := Vector2i(current_player_index, position)
+	if (identity == _focused_player_position and map_identity == _focused_map_identity) or position < 0 or position >= _geometry_board().size():
+		return
+	_focused_player_position = identity
+	_focused_map_identity = map_identity
+	var scene: Dictionary = visuals.scene_for(map_definition)
+	if scene.is_empty() or visuals.texture(scene.get("image")) == null:
+		return
+	map_zoom = maxf(map_zoom, 1.8)
+	var tile: Dictionary = _geometry_board()[position]
+	var bounds := _map_bounds(_geometry_board())
+	var point := Vector2(float(tile.get("x", 0)), float(tile.get("y", 0)))
+	map_pan = -(point - bounds.get_center()) * _map_scale() * map_zoom
+	_layout_size = Vector2.ZERO
+
+
 func set_map_definition(definition: Dictionary, is_preview := true) -> void:
 	map_definition = definition.duplicate(true)
 	preview_mode = is_preview
@@ -83,6 +107,7 @@ func set_preview_definition(definition: Dictionary) -> void:
 
 func clear_map_definition() -> void:
 	map_definition = {}
+	_focused_player_position = Vector2i(-1, -1)
 	preview_mode = false
 	_layout_size = Vector2.ZERO
 	queue_redraw()
@@ -209,12 +234,15 @@ func _draw_legacy_board() -> void:
 	_draw_players()
 
 func _draw_original_board() -> void:
+	_focus_moving_player()
 	_layout_map()
 	var geometry := _geometry_board()
 	var frame := Rect2(Vector2(8.0, 8.0), size - Vector2(16.0, 16.0))
 	_draw_style_box(frame, Color("#11283a"), Color("#36546b"), 14.0, 1.0)
 	_scene = visuals.scene_for(map_definition)
 	_background = visuals.texture(_scene.get("image"))
+	if _background != null and _background.get_size() != Vector2(2304, 2304):
+		_background = null
 	if _background != null:
 		draw_texture_rect(_background, Rect2(_map_to_screen(Vector2.ZERO), Vector2(2304, 2304) * _map_scale() * map_zoom), false)
 	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
@@ -236,8 +264,14 @@ func _draw_original_board() -> void:
 				draw_line(_node_positions[current_position], _node_positions[next_index], Color("#e0a958"), 4.0, true)
 	for index in range(geometry.size()):
 		_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
+	_scene_draws.clear()
 	_draw_original_houses()
 	_draw_original_players()
+	_scene_draws.sort_custom(func(a, b): return a.center.y < b.center.y)
+	for job in _scene_draws:
+		_draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
+		if job.has("color"):
+			draw_arc(job.center, 8.0, 0.0, TAU, 24, job.color, 2.0)
 
 func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
 	if _background != null:
@@ -285,8 +319,8 @@ func _draw_original_players() -> void:
 			var radius: float = _node_radii[int(tile_index)]
 			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
 			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index))) if _background != null else {}
-			if _draw_sprite(frame, center, _map_scale() * map_zoom):
-				draw_arc(center, 8.0, 0.0, TAU, 24, PLAYER_COLORS[player_index % PLAYER_COLORS.size()], 2.0)
+			if visuals.texture(frame) != null:
+				_scene_draws.append({"frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
 				continue
 			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
 			var active := player_index == current_player_index
@@ -591,4 +625,6 @@ func _draw_original_houses() -> void:
 		var tile: Dictionary = properties[int(land.id)]
 		var level := int(tile.get("building_level", 0))
 		if level > 0:
-			_draw_sprite(visuals.house(_scene, level, int(land.get("direction", 0))), _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0)))), _map_scale() * map_zoom)
+			_scene_draws.append({"frame": visuals.house(_scene, level, int(land.get("direction", 0))), "center": _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0))))})
+	for item in _scene.get("scenery", []):
+		_scene_draws.append({"frame": visuals.scenery(_scene, int(item.get("sprite_id", 0)), int(item.direction)), "center": _map_to_screen(Vector2(float(item.x), float(item.y)))})

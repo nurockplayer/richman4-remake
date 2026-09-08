@@ -9,7 +9,7 @@ import zlib
 
 from decode_original_ground import (
     PAYLOAD_SIZE, PIXEL_OFFSET, PLACEMENT_OFFSET, SIDE, TILE_COUNT,
-    FormatError, InputError, decode_ground, decode_source,
+    FormatError, InputError, decode_ground, decode_source, scene_objects,
 )
 from test_decode_original_images import make_mkf
 from test_import_original import make_map_payload
@@ -31,6 +31,20 @@ class GroundTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.payload = fixture()
+
+    def test_scenery_uses_source_resource_and_orientation_fields(self):
+        graph = bytearray(160)
+        struct.pack_into("<H", graph, 28 + 26, 61)
+        graph[28 + 24] = 7
+        struct.pack_into("<H", graph, 56 + 52 + 32, 50)
+        graph[56 + 52 + 27] = 2
+        parsed = {"sections": {"landscapes": {"offset": 0, "record_size": 28},
+                               "companies": {"offset": 56, "record_size": 52}},
+                  "landscapes": [{"id": 1, "x": 319, "y": 990}],
+                  "companies": [{"id": 1, "x": 400, "y": 500}]}
+        objects = scene_objects(bytes(graph), parsed)
+        self.assertEqual([(o["sprite_id"], o["direction"]) for o in objects], [(61, 1), (50, 6)])
+        self.assertEqual((objects[0]["x"], objects[0]["y"]), (319, 990))
 
     def test_non_identity_tiles_and_pixel_orientation(self):
         ground = decode_ground(self.payload)

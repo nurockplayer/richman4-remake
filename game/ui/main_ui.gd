@@ -665,7 +665,7 @@ func _system_start_date() -> Dictionary:
 func _default_setup_options(player_count: int) -> Dictionary:
 	var date := _system_start_date()
 	if date.is_empty():
-		return {}
+		date = {"year": 1998, "month": 1, "day": 1}
 	var character_ids: Array = []
 	for player_id in range(player_count):
 		character_ids.append(player_id)

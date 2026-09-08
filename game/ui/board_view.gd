@@ -280,8 +280,9 @@ func _draw_original_board() -> void:
 			var next_index := int(option)
 			if next_index >= 0 and next_index < _node_positions.size():
 				draw_line(_node_positions[current_position], _node_positions[next_index], Color("#e0a958"), 4.0, true)
-	for index in range(geometry.size()):
-		_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
+	if _background == null:
+		for index in range(geometry.size()):
+			_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
 	_scene_draws.clear()
 	_draw_original_node_icons(geometry)
 	_draw_original_houses()
@@ -301,6 +302,9 @@ func _draw_original_board() -> void:
 		_draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
 		if job.has("color"):
 			draw_arc(job.center, 8.0, 0.0, TAU, 24, job.color, 2.0)
+	if _background != null:
+		for index in range(geometry.size()):
+			_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
 
 func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
 	if _background != null:

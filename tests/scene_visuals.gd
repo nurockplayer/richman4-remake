@@ -1,6 +1,18 @@
 extends SceneTree
 const Visuals = preload("res://game/platform/original_visuals.gd")
 const Board = preload("res://game/ui/board_view.gd")
+class TracedBoard extends "res://game/ui/board_view.gd":
+	var paint_order: Array = []
+	func _draw() -> void:
+		paint_order.clear()
+		super._draw()
+	func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
+		paint_order.append("overlay")
+		super._draw_original_node(index, tile, center, radius)
+	func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bool:
+		paint_order.append("sprite")
+		return super._draw_sprite(frame, center, scale_factor)
+
 var checks := 0
 func expect(condition: bool, message: String) -> void:
 	checks += 1
@@ -41,7 +53,7 @@ func run() -> void:
 	expect(visuals.texture({"path": "images/test.png", "sha256": "wrong"}) == null, "wrong digest cannot load")
 	for path in ["../test.png", "/tmp/test.png", "images/../test.png", "images/..\\test.png"]:
 		expect(visuals.texture({"path": path, "sha256": record.sha256}) == null, "path escape rejected")
-	var board = Board.new()
+	var board = TracedBoard.new()
 	board.visuals = visuals
 	board.size = Vector2(700, 600)
 	root.add_child(board)
@@ -49,6 +61,7 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	expect(board._background != null, "original background used by drawing")
+	expect(board.paint_order.find("overlay") > board.paint_order.rfind("sprite"), "ownership and route overlays paint after opaque sprites")
 	var road_job_index := -1
 	var house_job_index := -1
 	var player_job_index := -1

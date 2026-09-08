@@ -1,5 +1,6 @@
 extends SceneTree
 const Maps = preload("res://game/content/original_maps.gd")
+const GameState = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 var checks := 0
 var failures := 0
@@ -33,6 +34,16 @@ func _initialize() -> void:
 	no_lands.nodes[3].type_and_idx = 4001
 	var browse_only := Maps.normalize_map(no_lands)
 	expect(browse_only.ok and not browse_only.definition.supports_new_game, "Commercial-only map remains browseable without claiming playable economy")
+	for edition in ["Game", "MultiverseJourney"]:
+		var direct := Fixture.make()
+		direct.edition = edition
+		direct.archive = "map.mkf"
+		var direct_result := Maps.normalize_map(direct)
+		expect(direct_result.ok, "Direct edition catalog normalizes: " + edition)
+		if direct_result.ok:
+			expect(direct_result.definition.source.archive == edition + "/map.mkf", "Direct edition archive has canonical runtime identity")
+			var direct_game = GameState.new_game_on_board(42, 2, direct_result.definition)
+			expect(direct_game != null and GameState.from_dict(direct_game.to_dict()) != null, "Direct edition map can start and reload")
 	var bads: Array = []
 	var bad := Fixture.make()
 	bad.nodes[1].adjacent = [99]

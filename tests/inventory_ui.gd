@@ -18,7 +18,7 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	ui.set_process(false)
-	expect(int(ui.state.get("version", 0)) == 4, "UI new game opts into original inventory")
+	expect(int(ui.state.get("version", 0)) == 5, "UI new game opts into facilities with original inventory")
 	ui._on_cards_pressed()
 	expect(ui.cards_popup.visible, "backpack opens before rolling")
 	await process_frame

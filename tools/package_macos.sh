@@ -9,7 +9,7 @@ fi
 bash tools/check.sh
 catalog_path="${RICHMAN4_MAP_CATALOG:-}"
 if [[ -n "$catalog_path" ]]; then
-  "$GODOT_BIN" --headless --path . --script tools/validate_catalog.gd -- "$catalog_path"
+  "$GODOT_BIN" --headless --path . --script tools/validate_catalog.gd -- "$catalog_path" --original-facilities
 fi
 scene_path="${RICHMAN4_SCENE_MANIFEST:-}"
 if [[ -n "$scene_path" ]]; then

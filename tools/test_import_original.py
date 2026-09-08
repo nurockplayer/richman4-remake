@@ -92,7 +92,10 @@ def make_map_payload() -> bytes:
     payload[facility + 4 : facility + 8] = b"BANK"
     payload[facility + 24] = 4
     payload[facility + 25] = 1
-    struct.pack_into("<HH", payload, facility + 34, 800, 100)
+    payload[facility + 26] = 2
+    payload[facility + 28] = 0x51
+    struct.pack_into("<H", payload, facility + 34, 800)
+    struct.pack_into("<6H", payload, facility + 36, 100, 200, 300, 400, 500, 600)
     company = offsets["companies"] + 52
     payload[company : company + 4] = struct.pack("<HH", 500, 600)
     payload[company + 24] = 2
@@ -143,9 +146,19 @@ class ImportOriginalTests(unittest.TestCase):
             parsed["lands"][0]["rent_by_level"], [500, 1200, 3000, 7500, 16000, 30000]
         )
         self.assertEqual(parsed["facilities"][0]["facility_type"], 4)
+        self.assertEqual(parsed["facilities"][0]["owner"], 1)
+        self.assertEqual(parsed["facilities"][0]["level"], 2)
+        self.assertEqual(parsed["facilities"][0]["tmp_state"], 0x51)
         self.assertEqual(parsed["facilities"][0]["land_price"], 800)
         self.assertEqual(parsed["facilities"][0]["house_price"], 100)
         self.assertEqual(parsed["facilities"][0]["price_per_level"], 100)
+        self.assertEqual(parsed["facilities"][0]["upgrade_cost"], 100)
+        self.assertEqual(
+            parsed["facilities"][0]["fee_by_level"], [100, 200, 300, 400, 500, 600]
+        )
+        self.assertEqual(
+            parsed["facilities"][0]["reserved_hex"], "c8002c019001f4015802"
+        )
         self.assertEqual(parsed["companies"][0]["commerce_type"], 11)
         self.assertEqual(parsed["landscapes"][0]["display_name"], "CITY")
         self.assertEqual(parsed["trailing_bytes"], 0)

@@ -56,4 +56,4 @@ Godot 桌面版本已具備 2–4 人新局、固定 seed、擲骰／買地／�
 
 本機驗證以 seed 42、四位 AI 跑完 11 張有住宅地圖，每局在 95–947 個後續回合內結束；JSON 存讀檔後續玩一致。第 8 張超時空地圖拒絕開局。這是目前重製規則的完整對局與重播證據，並非原版執行軌跡對照。
 
-新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色站姿可由本機素材呈現，詳見 [original-scenes.md](original-scenes.md)。v4 已接完整 30 張卡片與 13 種工具目錄、有限供給、背包與點券商店，詳見 [original-inventory.md](original-inventory.md)；目錄完整不代表效果完整。部分經濟參數與破產資產分配仍屬暫定，多數卡片／工具效果、神明、特殊人物、企業、商業設施、拍賣互動、小遊戲、原作鏡頭與動畫仍有缺口。#1 保持未完成並持續推進。
+新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色站姿可由本機素材呈現，詳見 [original-scenes.md](original-scenes.md)。v4 已接完整 30 張卡片與 13 種工具目錄、有限供給、背包與點券商店，詳見 [original-inventory.md](original-inventory.md)；目錄完整不代表效果完整。v5 已接公園、旅館、購物中心與加油站，詳見 [original-facilities.md](original-facilities.md)。部分經濟參數與破產資產分配仍屬暫定，多數卡片／工具效果、神明、特殊人物、企業、研究所生產、拍賣互動、小遊戲、原作鏡頭與動畫仍有缺口。#1 保持未完成並持續推進。

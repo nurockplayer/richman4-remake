@@ -9,6 +9,19 @@ func expect(condition: bool, message: String) -> void:
 	if not condition:
 		failures += 1
 		push_error(message)
+
+func make_facility_map() -> Dictionary:
+	var raw := Fixture.make()
+	raw.nodes[4].type_and_idx = 4001
+	raw.nodes[4].event_code = 0
+	raw.nodes[5].type_and_idx = 4001
+	raw.nodes[5].event_code = 0
+	raw.facilities = [{"id": 1, "x": 300, "y": 400, "display_name": "測試設施",
+		"name_bytes_hex": "666163696c6974790000000000000000", "facility_type": 4,
+		"owner": 1, "level": 2, "tmp_state": 0x51, "land_price": 800,
+		"price_per_level": 100, "reserved_hex": "c8002c019001f4015802"}]
+	return raw
+
 func _initialize() -> void:
 	var raw := Fixture.make()
 	var normalized := Maps.normalize_map(raw)
@@ -23,6 +36,48 @@ func _initialize() -> void:
 	expect(definition.board[0].kind == "unsupported", "Unimplemented prison behavior stays explicit")
 	expect(definition.board[2].group == definition.board[3].group, "Same source street name keeps group identity")
 	expect(definition.source.payload_sha256 == raw.payload_sha256, "Map provenance is retained")
+	var legacy_classification := Maps.classify_source_node(4001, 0)
+	var facility_classification := Maps.classify_source_node(4001, 0, true)
+	expect(legacy_classification.kind == "unsupported", "Facility source stays legacy-unsupported by default")
+	expect(facility_classification.kind == "facility" and facility_classification.source_object_id == 1, "Facility source classification is opt-in")
+	var facility_raw := make_facility_map()
+	var facility_result := Maps.normalize_map(facility_raw, true)
+	expect(facility_result.ok, "Facility source map normalizes in opt-in mode")
+	if facility_result.ok:
+		var facility_definition: Dictionary = facility_result.definition
+		var first_facility: Dictionary = facility_definition.board[4]
+		var second_facility: Dictionary = facility_definition.board[5]
+		expect(facility_definition.original_facilities, "Facility capability is retained on definition")
+		expect(facility_definition.supports_new_game, "Facility-only source additions support new games")
+		expect(first_facility.kind == "facility" and second_facility.kind == "facility", "Both source nodes classify as facilities")
+		expect(first_facility.source_object_id == 1 and second_facility.source_object_id == 1, "Facility nodes share source identity")
+		expect(first_facility.facility_node_index == 4 and second_facility.facility_node_index == 4, "Facility nodes share canonical node index")
+		expect(first_facility.cost == 800 and first_facility.land_price == 800 and first_facility.upgrade_cost == 100, "Facility land and upgrade costs are distinct")
+		expect(first_facility.fee_by_level == [100, 200, 300, 400, 500, 600], "Facility fee table retains all six source prices")
+		expect(first_facility.facility_type == 4 and first_facility.owner == -1 and first_facility.building_level == 0 and first_facility.facility_state == 0, "New facility runtime state resets source ownership and effects")
+		expect(facility_definition.source.facilities[0].level == 2 and facility_definition.source.facilities[0].tmp_state == 0x51, "Facility source metadata retains original state")
+	var malformed_facility := make_facility_map()
+	malformed_facility.facilities[0].reserved_hex = "bad"
+	expect(not Maps.normalize_map(malformed_facility, true).ok, "Malformed facility price bytes are rejected")
+	malformed_facility = make_facility_map()
+	malformed_facility.facilities.append(malformed_facility.facilities[0].duplicate(true))
+	expect(not Maps.normalize_map(malformed_facility, true).ok, "Duplicate facility source records are rejected")
+	var missing_facility := make_facility_map()
+	missing_facility.facilities = []
+	expect(not Maps.normalize_map(missing_facility, true).ok, "Missing facility source reference is rejected")
+	var bad_explicit_prices := make_facility_map()
+	bad_explicit_prices.facilities[0].fee_by_level = [100]
+	expect(not Maps.normalize_map(bad_explicit_prices, true).ok, "Facility fee table must have six entries")
+	var catalog_facility := {"schema": "richman4.map-catalog/v1", "version": 1, "count": 1, "maps": [facility_raw]}
+	var facility_path := "user://facility-loader-test.json"
+	var facility_file := FileAccess.open(facility_path, FileAccess.WRITE)
+	facility_file.store_string(JSON.stringify(catalog_facility))
+	facility_file.close()
+	var facility_catalog_result := Maps.load_catalog(facility_path, true)
+	expect(facility_catalog_result.ok and facility_catalog_result.original_facilities, "Catalog loader propagates facility mode")
+	if facility_catalog_result.ok:
+		expect(facility_catalog_result.maps[0].board[4].fee_by_level == [100, 200, 300, 400, 500, 600], "Legacy facility cache reconstructs six prices")
+	DirAccess.remove_absolute(facility_path)
 	var unnamed := Fixture.make()
 	unnamed.lands[0].erase("display_name")
 	unnamed.lands[0].name_bytes_hex = "0".repeat(32)

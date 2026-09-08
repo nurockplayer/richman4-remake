@@ -350,6 +350,13 @@ func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: 
 		var owner := int(tile.get("owner", -1))
 		if owner >= 0:
 			draw_circle(center, 4.0, PLAYER_COLORS[owner % PLAYER_COLORS.size()])
+		if tile.get("kind", "") == "facility":
+			var level := int(tile.get("building_level", 0))
+			var facility_names := ["公園", "旅館", "商城", "加油", "研究"]
+			var caption: String = "設施地" if level == 0 else "%s%d" % [facility_names[clampi(int(tile.get("facility_type", 0)), 0, 4)], level]
+			var label_color := Color("#ffc981") if int(tile.get("facility_state", 0)) == 0 else Color("#ff998c")
+			draw_rect(Rect2(center + Vector2(-23, -27), Vector2(46, 16)), Color("#21354a"))
+			_draw_text(caption, center + Vector2(-22, -15), 44, 10, label_color, HORIZONTAL_ALIGNMENT_CENTER)
 		if selected_index == index or _route_options_has(index):
 			draw_arc(center, radius, 0.0, TAU, 32, Color("#ffe098"), 3.0)
 			if _route_options_has(index):
@@ -503,7 +510,7 @@ func _merged_tile(index: int) -> Dictionary:
 	var tile: Dictionary = geometry[index].duplicate(true) if index >= 0 and index < geometry.size() and geometry[index] is Dictionary else {}
 	if index >= 0 and index < board_data.size() and board_data[index] is Dictionary:
 		var runtime: Dictionary = board_data[index]
-		for key in ["owner", "building_level", "cost", "upgrade_cost", "base_rent", "rent", "group", "tax_amount"]:
+		for key in ["kind", "owner", "building_level", "cost", "upgrade_cost", "base_rent", "rent", "group", "tax_amount", "facility_type", "facility_state"]:
 			if runtime.has(key):
 				tile[key] = runtime[key]
 		if tile.is_empty():
@@ -629,11 +636,15 @@ func _tile_color(kind: String) -> Color:
 			return Color("#8b78d0")
 		"property":
 			return Color("#4d83a5")
+		"facility":
+			return Color("#ad7954")
 		_:
 			return Color("#728c9c")
 
 func _kind_label(kind: String) -> String:
 	match kind:
+		"facility":
+			return "商業設施"
 		"start":
 			return "起點"
 		"event":

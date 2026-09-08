@@ -3,6 +3,10 @@ extends RefCounted
 
 const SCHEMA := "richman4.runtime-map/v1"
 const MAX_CATALOG_BYTES := 32 * 1024 * 1024
+const FACILITY_MIN_SOURCE_TYPE := 4001
+const FACILITY_MAX_SOURCE_TYPE := 5999
+const FACILITY_MAX_SOURCE_ID := 1999
+const FACILITY_PRICE_COUNT := 6
 const EVENT_NAMES := {
 	0: "道路", 1: "道路", 2: "新聞", 3: "命運", 4: "監獄入口", 5: "醫院入口",
 	6: "企鵝小遊戲", 7: "氣球小遊戲", 8: "接物小遊戲", 9: "彩券",
@@ -19,7 +23,7 @@ static func default_catalog_path() -> String:
 			return candidate
 	return ""
 
-static func load_catalog(path: String = "") -> Dictionary:
+static func load_catalog(path: String = "", original_facilities: bool = false) -> Dictionary:
 	var resolved := default_catalog_path() if path.is_empty() else path
 	if resolved.is_empty():
 		return {"ok": false, "error": "尚未匯入本機原版地圖。", "maps": []}
@@ -36,7 +40,7 @@ static func load_catalog(path: String = "") -> Dictionary:
 	var maps: Array = []
 	var identities: Dictionary = {}
 	for entry in raw.maps:
-		var result := normalize_map(entry)
+		var result := normalize_map(entry, original_facilities)
 		if not result.ok:
 			return {"ok": false, "error": result.error, "maps": []}
 		var definition: Dictionary = result.definition
@@ -44,7 +48,7 @@ static func load_catalog(path: String = "") -> Dictionary:
 			return {"ok": false, "error": "地圖身分重複。", "maps": []}
 		identities[definition.id] = true
 		maps.append(definition)
-	return {"ok": true, "error": "", "maps": maps}
+	return {"ok": true, "error": "", "maps": maps, "original_facilities": original_facilities}
 
 static func _integer(value: Variant, low: int, high: int) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and floor(float(value)) == float(value) and value >= low and value <= high
@@ -60,17 +64,107 @@ static func _hash(value: Variant) -> bool:
 			return false
 	return true
 
+static func _hex(value: Variant, byte_count: int) -> bool:
+	if not value is String or value.length() != byte_count * 2:
+		return false
+	for character in value:
+		if not character in "0123456789abcdef":
+			return false
+	return true
+
+## Decode the facility price span at source +0x24.
+##
+## Schema-v1 importer output and older local caches expose the first u16 as
+## price_per_level. The following five u16 values remain in reserved_hex;
+## together they form the six-entry fee_by_level table. Entry zero is also the
+## level-zero upgrade cost in the original source layout.
+static func facility_price_table(record: Variant) -> Dictionary:
+	if not record is Dictionary:
+		return _failure("設施價目資料無效。")
+	var has_upgrade_cost: bool = record.has("upgrade_cost")
+	var has_legacy_price: bool = record.has("price_per_level")
+	if not has_upgrade_cost and not has_legacy_price:
+		return _failure("設施缺少升級價格。")
+	var upgrade_cost: Variant = record.get("upgrade_cost", record.get("price_per_level", null))
+	if not _integer(upgrade_cost, 0, 1000000):
+		return _failure("設施升級價格無效。")
+	if has_legacy_price:
+		var legacy_price: Variant = record.get("price_per_level", null)
+		if not _integer(legacy_price, 0, 1000000) or int(legacy_price) != int(upgrade_cost):
+			return _failure("設施升級價格別名不一致。")
+	var reserved: Variant = record.get("reserved_hex", null)
+	if not _hex(reserved, (FACILITY_PRICE_COUNT - 1) * 2):
+		return _failure("設施價目保留欄位無效。")
+	var reserved_text := str(reserved)
+	var digits := "0123456789abcdef"
+	var prices: Array = [int(upgrade_cost)]
+	for index in range(0, reserved_text.length(), 4):
+		var low := digits.find(reserved_text.substr(index, 1))
+		var high := digits.find(reserved_text.substr(index + 1, 1))
+		var next_low := digits.find(reserved_text.substr(index + 2, 1)) if index + 2 < reserved_text.length() else -1
+		var next_high := digits.find(reserved_text.substr(index + 3, 1)) if index + 3 < reserved_text.length() else -1
+		if low < 0 or high < 0:
+			return _failure("設施價目保留欄位無效。")
+		# The retained bytes are five little-endian u16 values. Decode one
+		# byte pair at a time; the first pair is the low/high nibble pair of
+		# each byte, then combine the two bytes into the source price.
+		var byte_low := low * 16 + high
+		if next_low < 0 or next_high < 0:
+			return _failure("設施價目保留欄位無效。")
+		var byte_high := next_low * 16 + next_high
+		prices.append(byte_low + byte_high * 256)
+	if prices.size() != FACILITY_PRICE_COUNT:
+		return _failure("設施價目數量無效。")
+	if record.has("fee_by_level"):
+		var explicit_fees: Variant = record.get("fee_by_level", null)
+		if not explicit_fees is Array or explicit_fees.size() != FACILITY_PRICE_COUNT:
+			return _failure("設施費用表必須有六級。")
+		for index in range(FACILITY_PRICE_COUNT):
+			if not _integer(explicit_fees[index], 0, 1000000) or int(explicit_fees[index]) != int(prices[index]):
+				return _failure("設施費用表與來源價格不一致。")
+	return {"ok": true, "error": "", "upgrade_cost": int(prices[0]), "fee_by_level": prices}
+
+static func _normalize_facility_record(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return _failure("設施資料無效。")
+	var facility: Dictionary = value
+	if not _integer(facility.get("id", null), 1, FACILITY_MAX_SOURCE_ID):
+		return _failure("設施身分無效。")
+	if not _hex(facility.get("name_bytes_hex", null), 16):
+		return _failure("設施名稱來源無效。")
+	if facility.has("display_name") and (not facility.display_name is String or facility.display_name.length() > 128):
+		return _failure("設施名稱無效。")
+	if not _integer(facility.get("facility_type", null), 0, 4):
+		return _failure("設施類型無效。")
+	if not _integer(facility.get("owner", null), 0, 255) or not _integer(facility.get("level", null), 0, 5):
+		return _failure("設施原始狀態無效。")
+	if not _integer(facility.get("tmp_state", null), 0, 255):
+		return _failure("設施臨時狀態無效。")
+	if not _integer(facility.get("land_price", null), 0, 1000000):
+		return _failure("設施地價無效。")
+	if facility.has("field_0x1b") and not _integer(facility.get("field_0x1b", null), 0, 255):
+		return _failure("設施欄位無效。")
+	var prices := facility_price_table(facility)
+	if not prices.ok:
+		return prices
+	var normalized := facility.duplicate(true)
+	normalized["upgrade_cost"] = prices.upgrade_cost
+	normalized["fee_by_level"] = prices.fee_by_level.duplicate()
+	return {"ok": true, "error": "", "record": normalized}
+
 ## Return the one canonical runtime classification for a source node.
 ##
 ## Keeping this mapping next to normalize_map means a graph save cannot change
 ## the observed event into a different runtime action by editing only `kind`.
-static func classify_source_node(type_and_idx: Variant, event_code: Variant) -> Dictionary:
+static func classify_source_node(type_and_idx: Variant, event_code: Variant, original_facilities: bool = false) -> Dictionary:
 	if not _integer(type_and_idx, 0, 65535) or not _integer(event_code, 0, 255):
 		return {"ok": false, "kind": ""}
 	var object_type := int(type_and_idx)
 	var event := int(event_code)
 	if object_type > 2000 and object_type < 4000:
 		return {"ok": true, "kind": "property"}
+	if original_facilities and object_type >= FACILITY_MIN_SOURCE_TYPE and object_type <= FACILITY_MAX_SOURCE_TYPE:
+		return {"ok": true, "kind": "facility", "source_object_id": object_type - 4000}
 	if event == 14:
 		return {"ok": true, "kind": "bank"}
 	if object_type >= 4000:
@@ -83,7 +177,7 @@ static func classify_source_node(type_and_idx: Variant, event_code: Variant) -> 
 		return {"ok": true, "kind": "unsupported"}
 	return {"ok": true, "kind": "rest"}
 
-static func normalize_map(raw: Variant) -> Dictionary:
+static func normalize_map(raw: Variant, original_facilities: bool = false) -> Dictionary:
 	if not raw is Dictionary or raw.get("schema", "") != "richman4.map/v1":
 		return _failure("原版地圖格式無效。")
 	if raw.get("edition") not in ["Game", "MultiverseJourney"] or not _integer(raw.get("map_number"), 1, 99):
@@ -113,8 +207,22 @@ static func normalize_map(raw: Variant) -> Dictionary:
 			if not _integer(rent, 0, 1000000):
 				return _failure("住宅租金數值無效。")
 		lands[int(land.id)] = land
+	var facilities: Dictionary = {}
+	var facility_sources: Array = []
+	if original_facilities:
+		for facility_value in raw.facilities:
+			var facility_result := _normalize_facility_record(facility_value)
+			if not facility_result.ok:
+				return _failure(facility_result.error)
+			var facility: Dictionary = facility_result.record
+			var facility_id := int(facility.id)
+			if facilities.has(facility_id):
+				return _failure("設施身分無效或重複。")
+			facilities[facility_id] = facility
+			facility_sources.append(facility)
 	var board: Array = []
 	var referenced_lands: Dictionary = {}
+	var referenced_facilities: Dictionary = {}
 	var start_position := -1
 	for index in range(nodes.size()):
 		var node: Variant = nodes[index]
@@ -134,7 +242,9 @@ static func normalize_map(raw: Variant) -> Dictionary:
 			return _failure("原版地圖格位類別無效。")
 		var object_type := int(node.type_and_idx)
 		var event_code := int(node.event_code)
-		var classification: Dictionary = classify_source_node(object_type, event_code)
+		var classification: Dictionary = classify_source_node(object_type, event_code, original_facilities)
+		if original_facilities and object_type >= 4000 and object_type < 6000 and classification.kind != "facility":
+			return _failure("設施來源參照無效。")
 		var tile := {"index": index, "source_node_id": index + 1, "x": int(node.x), "y": int(node.y), "adjacent": adjacent,
 			"type_and_idx": object_type, "visual_index": node.get("visual_index", 0), "event_code": event_code, "source_object_id": 0,
 			"kind": "rest", "name": EVENT_NAMES.get(event_code, "未知事件 %d" % event_code), "owner": -1, "building_level": 0,
@@ -149,6 +259,25 @@ static func normalize_map(raw: Variant) -> Dictionary:
 				"cost": int(land.land_price), "land_price": int(land.land_price), "house_price": int(land.house_price),
 				"upgrade_cost": int(land.house_price), "base_rent": int(land.rent_by_level[0]), "rent": int(land.rent_by_level[0]),
 				"rent_by_level": land.rent_by_level.duplicate(), "group": str(land.get("name_bytes_hex", "land:%d" % land_id))}, true)
+		elif classification.kind == "facility":
+			var facility_id := int(classification.source_object_id)
+			if not facilities.has(facility_id):
+				return _failure("設施參照缺失。")
+			var facility: Dictionary = facilities[facility_id]
+			if not referenced_facilities.has(facility_id):
+				referenced_facilities[facility_id] = index
+			var facility_prices: Dictionary = facility_price_table(facility)
+			if not facility_prices.ok:
+				return _failure(facility_prices.error)
+			var facility_name := str(facility.get("display_name", "未命名設施 %d" % facility_id))
+			if facility_name.is_empty():
+				facility_name = "未命名設施 %d" % facility_id
+			tile.merge({"kind": "facility", "source_object_id": facility_id,
+				"facility_node_index": int(referenced_facilities[facility_id]), "name": facility_name,
+				"facility_type": int(facility.facility_type), "facility_state": 0,
+				"cost": int(facility.land_price), "land_price": int(facility.land_price),
+				"upgrade_cost": int(facility_prices.upgrade_cost), "fee_by_level": facility_prices.fee_by_level.duplicate(),
+				"group": str(facility.get("name_bytes_hex", "facility:%d" % facility_id))}, true)
 		elif classification.kind == "bank":
 			# Bank service is an event on company nodes in the original maps.
 			# Company ownership remains separate from passing/landing service.
@@ -168,6 +297,10 @@ static func normalize_map(raw: Variant) -> Dictionary:
 		if start_position < 0 and adjacent.size() >= 2 and object_type < 4000:
 			start_position = index
 		board.append(tile)
+	if original_facilities:
+		for facility_id in facilities.keys():
+			if not referenced_facilities.has(facility_id):
+				return _failure("設施資料未被地圖參照。")
 	for tile in board:
 		for neighbor in tile.adjacent:
 			if not board[neighbor].adjacent.has(tile.index):
@@ -185,11 +318,14 @@ static func normalize_map(raw: Variant) -> Dictionary:
 	for tile in board:
 		if tile.kind == "property" and not reachable.has(tile.index):
 			return _failure("原版地圖包含無法從起點到達的住宅。")
-	var supported := not referenced_lands.is_empty()
+	var supported := not referenced_lands.is_empty() or (original_facilities and not referenced_facilities.is_empty())
+	var source := {"edition": raw.edition, "map_number": int(raw.map_number), "archive": "%s/map.mkf" % raw.edition,
+		"entry_index": raw.get("entry_index", 0), "payload_sha256": raw.get("payload_sha256", ""), "source_file_sha256": raw.get("source_file_sha256", "")}
+	if original_facilities:
+		source["facilities"] = facility_sources.duplicate(true)
 	var definition := {"schema": SCHEMA, "version": 1, "id": "%s:%d" % [raw.edition, raw.map_number],
 		"name": "%s · 地圖 %d" % ["原版" if raw.edition == "Game" else "超時空之旅", raw.map_number],
-		"source": {"edition": raw.edition, "map_number": int(raw.map_number), "archive": "%s/map.mkf" % raw.edition,
-			"entry_index": raw.get("entry_index", 0), "payload_sha256": raw.get("payload_sha256", ""), "source_file_sha256": raw.get("source_file_sha256", "")},
+		"source": source, "original_facilities": original_facilities,
 		"board": board, "start_position": start_position, "supports_new_game": supported,
 		"unsupported_reason": "" if supported else "此地圖需要商業設施系統，尚未開放對局。"}
 	return {"ok": true, "error": "", "definition": definition}

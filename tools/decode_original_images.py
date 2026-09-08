@@ -770,10 +770,11 @@ def _archive_files(edition_path: Path) -> list[Path]:
 
 def _preflight_output_keys(
     discovered: Sequence[tuple[str, Path]], source: Path
-) -> None:
-    """Reject archive names that would share a sanitized image directory."""
+) -> list[tuple[str, Path]]:
+    """Return the archive snapshot whose sanitized destinations were checked."""
 
     seen: dict[tuple[str, str], str] = {}
+    snapshot: list[tuple[str, Path]] = []
     for edition_name, edition_path in discovered:
         edition_component = _safe_component(edition_name)
         for archive_path in _archive_files(edition_path):
@@ -790,6 +791,8 @@ def _preflight_output_keys(
                     f"{previous} and {display_path}"
                 )
             seen[key] = display_path
+            snapshot.append((edition_name, archive_path))
+    return snapshot
 
 
 def _path_present(path: Path) -> bool:
@@ -944,7 +947,7 @@ def decode_source(
             (name, path) for name, path in discovered if name.casefold() in wanted
         ]
 
-    _preflight_output_keys(discovered, source)
+    archive_snapshot = _preflight_output_keys(discovered, source)
     try:
         output.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -959,74 +962,72 @@ def decode_source(
     try:
         archive_records: list[dict[str, Any]] = []
         visual_records: list[dict[str, Any]] = []
-        for edition_name, edition_path in discovered:
-            mkf_files = _archive_files(edition_path)
+        for edition_name, archive_path in archive_snapshot:
             edition_dir = _safe_component(edition_name)
-            for archive_path in mkf_files:
-                archive = parse_mkf(archive_path, max_resource_bytes=max_resource_bytes)
-                archive_records.append(archive.as_dict(source))
-                archive_name = _safe_component(archive_path.stem)
-                for entry in archive.entries:
-                    decoded = decode_entry(archive, entry)
-                    visual = parse_visual_resource(
-                        decoded,
-                        entry,
-                        max_dimension=max_dimension,
-                        max_chunks=max_chunks,
+            archive = parse_mkf(archive_path, max_resource_bytes=max_resource_bytes)
+            archive_records.append(archive.as_dict(source))
+            archive_name = _safe_component(archive_path.stem)
+            for entry in archive.entries:
+                decoded = decode_entry(archive, entry)
+                visual = parse_visual_resource(
+                    decoded,
+                    entry,
+                    max_dimension=max_dimension,
+                    max_chunks=max_chunks,
+                )
+                if visual is None:
+                    continue
+                resource_dir = (
+                    staging_images
+                    / edition_dir
+                    / archive_name
+                    / f"resource-{entry.index:04d}"
+                )
+                image_records: list[dict[str, Any]] = []
+                for chunk in visual.chunks:
+                    png_path = resource_dir / f"chunk-{chunk.index:04d}.png"
+                    write_png(
+                        png_path,
+                        chunk,
+                        visual,
+                        pixel_format=pixel_format,
+                        transparent_index_zero=transparent_index_zero,
                     )
-                    if visual is None:
-                        continue
-                    resource_dir = (
-                        staging_images
-                        / edition_dir
-                        / archive_name
-                        / f"resource-{entry.index:04d}"
-                    )
-                    image_records: list[dict[str, Any]] = []
-                    for chunk in visual.chunks:
-                        png_path = resource_dir / f"chunk-{chunk.index:04d}.png"
-                        write_png(
-                            png_path,
-                            chunk,
-                            visual,
-                            pixel_format=pixel_format,
-                            transparent_index_zero=transparent_index_zero,
-                        )
-                        image_records.append(
-                            {
-                                "chunk_index": chunk.index,
-                                "path": (
-                                    Path("images")
-                                    / png_path.relative_to(staging_images)
-                                ).as_posix(),
-                                "width": chunk.width,
-                                "height": chunk.height,
-                                "x": chunk.x,
-                                "y": chunk.y,
-                                "sha256": hashlib.sha256(png_path.read_bytes()).hexdigest(),
-                            }
-                        )
-                    visual_records.append(
+                    image_records.append(
                         {
-                            "edition": edition_name,
-                            "archive": archive_path.relative_to(source).as_posix(),
-                            "archive_sha256": hashlib.sha256(archive.data).hexdigest(),
-                            "resource_index": entry.index,
-                            "signature": visual.signature,
-                            "uncompressed_size": entry.uncompressed_size,
-                            "stored_size": entry.stored_size,
-                            "compression": entry.compression,
-                            "image_data_offset": entry.image_data_offset,
-                            "image_data_size": entry.image_data_size,
-                            "chunk_count": visual.chunk_count,
-                            "start_offset": visual.start_offset,
-                            "pixel_format": pixel_format,
-                            "transparent_index_zero": transparent_index_zero
-                            if visual.signature == "SPR"
-                            else None,
-                            "images": image_records,
+                            "chunk_index": chunk.index,
+                            "path": (
+                                Path("images")
+                                / png_path.relative_to(staging_images)
+                            ).as_posix(),
+                            "width": chunk.width,
+                            "height": chunk.height,
+                            "x": chunk.x,
+                            "y": chunk.y,
+                            "sha256": hashlib.sha256(png_path.read_bytes()).hexdigest(),
                         }
                     )
+                visual_records.append(
+                    {
+                        "edition": edition_name,
+                        "archive": archive_path.relative_to(source).as_posix(),
+                        "archive_sha256": hashlib.sha256(archive.data).hexdigest(),
+                        "resource_index": entry.index,
+                        "signature": visual.signature,
+                        "uncompressed_size": entry.uncompressed_size,
+                        "stored_size": entry.stored_size,
+                        "compression": entry.compression,
+                        "image_data_offset": entry.image_data_offset,
+                        "image_data_size": entry.image_data_size,
+                        "chunk_count": visual.chunk_count,
+                        "start_offset": visual.start_offset,
+                        "pixel_format": pixel_format,
+                        "transparent_index_zero": transparent_index_zero
+                        if visual.signature == "SPR"
+                        else None,
+                        "images": image_records,
+                    }
+                )
 
         manifest = {
             "schema": "richman4.original-images/v1",

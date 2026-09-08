@@ -141,6 +141,32 @@ def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
 
 
 class DecodeOriginalImagesTests(unittest.TestCase):
+    def test_publish_uses_preflight_archive_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            game = source / "Game"
+            game.mkdir(parents=True)
+            spr = make_spr()
+            (game / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            original = game / "a b.mkf"
+            original.write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = Path(temporary) / "output"
+            enumerate_original = decoder._archive_files
+
+            def changing_directory(directory):
+                snapshot = enumerate_original(directory)
+                (game / "a_b.mkf").write_bytes(original.read_bytes())
+                return snapshot
+
+            with patch.object(decoder, "_archive_files", side_effect=changing_directory):
+                manifest = decode_source(source, output)
+            self.assertEqual(len(manifest["archives"]), 2)
+            for resource in manifest["visual_resources"]:
+                for chunk in resource["images"]:
+                    image = output / chunk["path"]
+                    self.assertEqual(hashlib.sha256(image.read_bytes()).hexdigest(),
+                                     chunk["sha256"])
+
     def test_each_requested_edition_must_exist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "source"

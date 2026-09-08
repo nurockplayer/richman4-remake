@@ -1216,11 +1216,14 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
 		_refresh_log_only()
 		return false
+	var effective_setup := setup_options.duplicate(true)
+	if effective_setup.is_empty() and bool(selected_definition.get("original_facilities", false)):
+		effective_setup = _default_setup_options(resolved_players)
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
 		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
-			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, setup_options) if not setup_options.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
+			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, effective_setup) if not effective_setup.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
 		elif _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
 			candidate = state_script.new_game(resolved_seed, resolved_players, setup_options) if not setup_options.is_empty() else state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:

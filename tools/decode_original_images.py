@@ -898,6 +898,26 @@ def _publish_staged_images(
             ) from active_error
 
 
+def assert_disjoint_paths(source: Path, output: Path) -> None:
+    """Reject lexical and filesystem-identity ancestry before creating output."""
+    if source == output or source in output.parents or output in source.parents:
+        raise InputError("image output and original source must not overlap")
+    # resolve() retains case aliases on default macOS APFS. Compare the actual
+    # directory identities, including existing ancestors of a new output path.
+    for anchor, descendant in [(source, output), (output, source)]:
+        try:
+            identity = anchor.stat()
+        except FileNotFoundError:
+            continue
+        for candidate in [descendant, *descendant.parents]:
+            try:
+                other = candidate.stat()
+            except FileNotFoundError:
+                continue
+            if (identity.st_dev, identity.st_ino) == (other.st_dev, other.st_ino):
+                raise InputError("image output and original source must not overlap")
+
+
 def decode_source(
     source: Path,
     output: Path,
@@ -913,6 +933,7 @@ def decode_source(
 
     source = source.expanduser().resolve()
     output = output.expanduser().resolve()
+    assert_disjoint_paths(source, output)
     discovered = discover_editions(source)
     if editions:
         wanted = {value.casefold() for value in editions}

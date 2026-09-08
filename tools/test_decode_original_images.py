@@ -141,6 +141,39 @@ def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
 
 
 class DecodeOriginalImagesTests(unittest.TestCase):
+    def test_case_alias_output_cannot_replace_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            actual_output = Path(temporary) / "Output"
+            source = actual_output / "images" / "Game"
+            source.mkdir(parents=True)
+            alias_output = Path(temporary) / "output"
+            if not alias_output.exists() or not alias_output.samefile(actual_output):
+                self.skipTest("requires a case-insensitive filesystem")
+            original = make_mkf([(make_spr(), len(make_spr()), 24, 512)])
+            archive = source / "map.mkf"
+            archive.write_bytes(original)
+            with self.assertRaises(InputError):
+                decode_source(source, alias_output)
+            self.assertEqual(archive.read_bytes(), original)
+            self.assertFalse((actual_output / "manifest.json").exists())
+
+    def test_output_cannot_replace_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            source = output / "images" / "Game"
+            source.mkdir(parents=True)
+            original = make_mkf([(make_spr(), len(make_spr()), 24, 512)])
+            archive = source / "map.mkf"
+            archive.write_bytes(original)
+            with self.assertRaises(InputError):
+                decode_source(source, output)
+            self.assertEqual(archive.read_bytes(), original)
+            self.assertFalse((output / "manifest.json").exists())
+            for overlapping in [source, source / "derived", source.parent]:
+                with self.assertRaises(InputError):
+                    decode_source(source, overlapping)
+                self.assertEqual(archive.read_bytes(), original)
+
     def test_concurrent_publish_does_not_mix_manifest_and_images(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)

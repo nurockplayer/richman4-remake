@@ -18,6 +18,7 @@ const PLAYER_COLORS := [
 	Color("#73c989"),
 ]
 
+const OriginalGods = preload("res://game/content/original_gods.gd")
 const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 var visuals = OriginalVisuals.new()
 var _scene: Dictionary = {}
@@ -34,6 +35,7 @@ var current_player_index := 0
 var selected_index := -1
 var route_options: Array = []
 var roadblocks_data: Dictionary = {}
+var god_objects_data: Array = []
 var map_definition: Dictionary = {}
 var preview_mode := false
 var map_zoom := 1.0
@@ -55,12 +57,13 @@ func _ready() -> void:
 	set_process_input(true)
 	queue_redraw()
 
-func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = [], next_roadblocks: Dictionary = {}) -> void:
+func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = [], next_roadblocks: Dictionary = {}, next_gods: Array = []) -> void:
 	board_data = next_board.duplicate(true)
 	players_data = next_players.duplicate(true)
 	current_player_index = current_index
 	route_options = next_route_options.duplicate(true)
 	roadblocks_data = next_roadblocks.duplicate(true)
+	god_objects_data = next_gods.duplicate(true)
 	if not definition.is_empty():
 		_reset_for_geometry_change(definition)
 		map_definition = definition.duplicate(true)
@@ -119,6 +122,7 @@ func set_map_definition(definition: Dictionary, is_preview := true) -> void:
 		players_data = []
 		route_options = []
 		roadblocks_data = {}
+		god_objects_data = []
 	if selected_index >= _geometry_board().size():
 		selected_index = -1
 	_layout_size = Vector2.ZERO
@@ -131,6 +135,7 @@ func clear_map_definition() -> void:
 	reset_view()
 	map_definition = {}
 	roadblocks_data = {}
+	god_objects_data = []
 	_focused_player_position = Vector2i(-1, -1)
 	preview_mode = false
 	_layout_size = Vector2.ZERO
@@ -325,6 +330,32 @@ func _draw_original_board() -> void:
 		for index in range(geometry.size()):
 			_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
 	_draw_roadblocks()
+	_draw_gods()
+
+## Actor markers use graph coordinates transformed by the same camera as roads.
+## Their named presentation can be replaced when original actor art is identified.
+func _draw_gods() -> void:
+	if preview_mode:
+		return
+	for actor in god_objects_data:
+		if not actor is Dictionary:
+			continue
+		var node_index := int(actor.get("node", -1))
+		var owner := int(actor.get("owner", -1))
+		if owner >= 0 and owner < players_data.size():
+			node_index = int(players_data[owner].get("position", node_index))
+		if node_index < 0 or node_index >= _node_positions.size():
+			continue
+		var center: Vector2 = _node_positions[node_index]
+		var attached := owner >= 0
+		var label_position := center + Vector2(-33, -48 if attached else -25)
+		var color := Color("#f0ce7c") if attached else Color("#b9e8e6")
+		var caption: String = OriginalGods.name_for(int(actor.get("id", 0)))
+		if attached:
+			caption += " %d天" % int(actor.get("days", 0))
+		draw_line(center + Vector2(0, -7), label_position + Vector2(33, 8), color, 1.0)
+		_draw_style_box(Rect2(label_position + Vector2(-4, -12), Vector2(74, 20)), Color("#173047"), color, 5.0, 1.0)
+		_draw_text(caption, label_position + Vector2(0, 2), 66, 10, color, HORIZONTAL_ALIGNMENT_CENTER)
 
 func _draw_roadblocks() -> void:
 	for key in roadblocks_data:

@@ -48,7 +48,7 @@ func _set_date(ui: Control, year: int, month: int, day: int) -> void:
 	ui.start_day_input.value = day
 
 func _test_default_setup_and_four_players(ui: Control) -> void:
-	_expect(int(ui.state.get("version", 0)) == (5 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "startup save version matches selected map capability")
+	_expect(int(ui.state.get("version", 0)) == (6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "startup save version matches selected map capability")
 	_expect(int(ui.state.get("initial_fund", 0)) == 200000, "startup uses the default initial fund")
 	_expect(int(ui.state.get("day_limit", -1)) == 0, "startup has no day limit")
 	_expect(int(ui.state.get("wealth_multiplier", -1)) == 0, "startup has no wealth target")
@@ -81,7 +81,7 @@ func _test_actual_setup(ui: Control) -> void:
 	await process_frame
 	var snapshot: Dictionary = ui.state
 	_expect(int(snapshot.get("seed", 0)) == 101, "setup keeps the requested seed")
-	_expect(int(snapshot.get("version", 0)) == (5 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "confirmed setup preserves selected map capability")
+	_expect(int(snapshot.get("version", 0)) == (6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "confirmed setup preserves selected map capability")
 	_expect(int(snapshot.get("initial_fund", 0)) == 100000, "confirmed setup stores initial fund")
 	_expect(int(snapshot.get("day_limit", 0)) == 365, "confirmed setup stores day limit")
 	_expect(int(snapshot.get("wealth_multiplier", 0)) == 3, "confirmed setup stores wealth multiplier")

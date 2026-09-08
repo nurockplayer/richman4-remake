@@ -9,6 +9,8 @@ extends Control
 const SAVE_PATH := "user://richman4_save.json"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
+const InventoryCatalogue = preload("res://game/content/original_inventory.gd")
+const InventoryRules = preload("res://game/core/inventory_rules.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -93,6 +95,12 @@ var map_preview_view: Control
 var map_catalog_file_dialog: FileDialog
 var new_game_confirm_button: Button
 var cards_popup: PopupPanel
+var inventory_balance_label: Label
+var shop_button: Button
+var shop_popup: PopupPanel
+var shop_balance_label: Label
+var shop_popup_list: VBoxContainer
+var shop_scroll: ScrollContainer
 var stocks_popup: PopupPanel
 var audio_controller: Object
 var audio_button: Button
@@ -356,6 +364,9 @@ func _build_playfield() -> Control:
 	stocks_shortcut = _make_button("股市", _on_stocks_pressed)
 	stocks_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	utility_row.add_child(stocks_shortcut)
+	shop_button = _make_button("點券商店", _on_shop_pressed, true)
+	shop_button.visible = false
+	side_column.add_child(shop_button)
 	return row
 
 func _build_action_bar() -> Control:
@@ -576,16 +587,43 @@ func _build_popups() -> void:
 	var bank_close := _make_button("關閉", bank_popup.hide)
 	bank_box.add_child(bank_close)
 
-	cards_popup = _make_popup(Vector2i(560, 380))
+	cards_popup = _make_popup(Vector2i(640, 500))
 	var cards_box := _popup_box(cards_popup)
-	cards_box.add_child(_make_label("持有卡片", 19, TEXT_MAIN))
-	var cards_description := _make_label("選擇一張卡片使用；效果由模擬層判定。", 11, TEXT_MUTED)
+	cards_box.add_child(_make_label("背包", 19, TEXT_MAIN))
+	inventory_balance_label = _make_label("", 13, TEXT_GOLD)
+	cards_box.add_child(inventory_balance_label)
+	var cards_description := _make_label("選擇物品與目標後使用；尚未還原的物品會保留在背包。", 11, TEXT_MUTED)
+	cards_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cards_box.add_child(cards_description)
+	var inventory_scroll := ScrollContainer.new()
+	inventory_scroll.custom_minimum_size = Vector2(0, 330)
+	inventory_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inventory_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	cards_box.add_child(inventory_scroll)
 	cards_popup_list = VBoxContainer.new()
+	cards_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cards_popup_list.add_theme_constant_override("separation", 7)
-	cards_box.add_child(cards_popup_list)
-	var cards_close := _make_button("關閉", cards_popup.hide)
-	cards_box.add_child(cards_close)
+	inventory_scroll.add_child(cards_popup_list)
+	cards_box.add_child(_make_button("關閉", cards_popup.hide))
+
+	shop_popup = _make_popup(Vector2i(700, 530))
+	var shop_box := _popup_box(shop_popup)
+	shop_box.add_child(_make_label("點券商店", 19, TEXT_MAIN))
+	shop_balance_label = _make_label("", 13, TEXT_GOLD)
+	shop_box.add_child(shop_balance_label)
+	var shop_help := _make_label("購買使用點券；出售按總標價九折取整。選好數量再交易。", 11, TEXT_MUTED)
+	shop_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	shop_box.add_child(shop_help)
+	shop_scroll = ScrollContainer.new()
+	shop_scroll.custom_minimum_size = Vector2(0, 350)
+	shop_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	shop_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	shop_box.add_child(shop_scroll)
+	shop_popup_list = VBoxContainer.new()
+	shop_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shop_popup_list.add_theme_constant_override("separation", 7)
+	shop_scroll.add_child(shop_popup_list)
+	shop_box.add_child(_make_button("關閉", shop_popup.hide))
 
 	stocks_popup = _make_popup(Vector2i(500, 360))
 	var stocks_box := _popup_box(stocks_popup)
@@ -670,6 +708,7 @@ func _default_setup_options(player_count: int) -> Dictionary:
 	for player_id in range(player_count):
 		character_ids.append(player_id)
 	return {
+		"original_inventory": true,
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -744,6 +783,7 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
+		"original_inventory": int(state.get("version", 0)) == 4,
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -813,6 +853,7 @@ func _collect_setup_options() -> Dictionary:
 			return {"ok": false, "message": "每位玩家必須選擇不同角色。"}
 		seen[character_id] = true
 	return {"ok": true, "options": {
+		"original_inventory": true,
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1546,6 +1587,8 @@ func _update_players(players: Array, current_index: int) -> void:
 		name_column.add_child(player_name)
 		var property_count := _make_label("%d 筆地產 · 位於 %02d" % [(_as_array(player.get("properties", []))).size(), int(player.get("position", 0)) + 1], 10, TEXT_MUTED)
 		name_column.add_child(property_count)
+		if _has_original_inventory():
+			name_column.add_child(_make_label("點券 %d · 卡片 %d/15" % [int(player.get("points", 0)), _as_array(player.get("cards", [])).size()], 10, TEXT_MUTED))
 		var money := _make_label(_format_money(int(player.get("cash", 0))), 12, TEXT_GOLD)
 		money.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		money.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1564,6 +1607,9 @@ func _update_property_card(tile: Dictionary) -> void:
 		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
+	elif _has_original_inventory() and int(tile.get("event_code", 0)) == 15:
+		current_property_label.text = "點券商店"
+		details += "\n停在此格可購買或出售卡片與道具。"
 	elif kind == "unsupported":
 		details += "\n此格尚未還原，暫不執行其效果。"
 	else:
@@ -1585,6 +1631,12 @@ func _update_actions(phase: String, current_index: int) -> void:
 	bank_shortcut.disabled = bank_button.disabled
 	cards_shortcut.disabled = cards_button.disabled
 	stocks_shortcut.disabled = stocks_button.disabled
+	cards_button.text = "背包" if _has_original_inventory() else "卡片"
+	cards_shortcut.text = cards_button.text
+	shop_button.visible = _shop_available()
+	shop_button.disabled = not human_turn
+	if not human_turn or not _shop_available():
+		shop_popup.hide()
 	if not human_turn:
 		bank_popup.hide()
 		cards_popup.hide()
@@ -1674,6 +1726,7 @@ func _update_cards_popup() -> void:
 	for child in cards_popup_list.get_children():
 		child.free()
 	var cards := _as_array(_current_player().get("cards", []))
+	inventory_balance_label.text = "點券 %d · 卡片 %d/15" % [int(_current_player().get("points", 0)), cards.size()] if _has_original_inventory() else "卡片 %d/15" % cards.size()
 	var options: Array = _as_array(state.get("action_options", []))
 	if cards.is_empty():
 		var empty := _make_label("目前沒有可用卡片。", 12, TEXT_MUTED)
@@ -1683,7 +1736,8 @@ func _update_cards_popup() -> void:
 			var card_id := str(cards[card_index])
 			var row := HBoxContainer.new()
 			row.add_theme_constant_override("separation", 8)
-			var label := _make_label("卡片 %s" % card_id, 12, TEXT_MAIN)
+			var record: Dictionary = InventoryCatalogue.card(card_id)
+			var label := _make_label(str(record.get("name", "卡片 " + card_id)), 12, TEXT_MAIN)
 			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(label)
 			var symbol_option: OptionButton = null
@@ -1718,9 +1772,15 @@ func _update_cards_popup() -> void:
 				_handle_result(result)
 				cards_popup.hide()
 			)
-			use.disabled = not _has_action_option(options, "use_card")
+			var implemented := _item_implemented("card", card_id)
+			use.disabled = not implemented or not _has_action_option(options, "use_card")
+			if not implemented:
+				use.text = "尚未還原"
 			row.add_child(use)
 			cards_popup_list.add_child(row)
+
+	if _has_original_inventory():
+		_append_tool_inventory()
 
 func _update_stocks_popup() -> void:
 	for child in stocks_popup_list.get_children():
@@ -1965,3 +2025,108 @@ func _style_box(background: Color, border: Color, radius: int, border_width: int
 	style.set_border_width_all(border_width)
 	style.set_corner_radius_all(radius)
 	return style
+
+func _has_original_inventory() -> bool:
+	return int(state.get("version", 0)) == 4
+
+func _item_implemented(item_kind: String, item_id: String) -> bool:
+	if not _has_original_inventory():
+		return item_kind == "card"
+	return game_state != null and game_state.has_method("item_is_implemented") and bool(game_state.call("item_is_implemented", item_kind, item_id))
+
+func _shop_available() -> bool:
+	return game_state != null and game_state.has_method("is_shop_available") and bool(game_state.call("is_shop_available"))
+
+func _on_shop_pressed() -> void:
+	if not _is_human_turn() or not _shop_available():
+		return
+	_update_shop_popup()
+	shop_popup.popup_centered()
+
+func _update_shop_popup() -> void:
+	for child in shop_popup_list.get_children():
+		child.free()
+	shop_balance_label.text = "持有點券：%d" % int(_current_player().get("points", 0))
+	if not _shop_available():
+		shop_popup.hide()
+		return
+	var items: Array = game_state.call("shop_items")
+	var previous_kind := ""
+	for value in items:
+		if not value is Dictionary:
+			continue
+		var item: Dictionary = value
+		var kind := str(item.get("item_kind", ""))
+		var item_id := str(item.get("item_id", ""))
+		if kind != previous_kind:
+			shop_popup_list.add_child(_make_label("卡片" if kind == "card" else "道具", 15, TEXT_GOLD))
+			previous_kind = kind
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 7)
+		var description := str(item.get("name", item_id))
+		if not bool(item.get("implemented", false)):
+			description += " · 效果尚未還原"
+		var label := _make_label(description + "\n持有 %d · 庫存 %d" % [int(item.get("owned", 0)), int(item.get("stock", 0))], 11, TEXT_MAIN)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = 210
+		row.add_child(label)
+		var quantity := SpinBox.new()
+		quantity.min_value = 1
+		quantity.max_value = 9 if kind == "tool" else 1
+		quantity.step = 1
+		quantity.value = 1
+		quantity.custom_minimum_size.x = 62
+		quantity.add_theme_font_size_override("font_size", 11)
+		row.add_child(quantity)
+		var buy := _make_button("", func() -> void:
+			_shop_transaction("buy_item", kind, item_id, int(quantity.value))
+		)
+		buy.name = "Buy_" + item_id
+		buy.custom_minimum_size.x = 116
+		row.add_child(buy)
+		var sell := _make_button("", func() -> void:
+			_shop_transaction("sell_item", kind, item_id, int(quantity.value))
+		)
+		sell.name = "Sell_" + item_id
+		sell.custom_minimum_size.x = 116
+		row.add_child(sell)
+		var update_quote := func(_value: float = 1.0) -> void:
+			var count := int(quantity.value)
+			var price: int = InventoryRules.quote_buy(kind, item_id, count)
+			buy.text = "買入 %d 點" % price
+			sell.text = "出售 %d 點" % InventoryRules.quote_sale(kind, item_id, count)
+			buy.disabled = not _is_human_turn() or int(_current_player().get("points", 0)) < price or int(item.get("stock", 0)) < count or (kind == "tool" and int(item.get("owned", 0)) + count > 9) or (kind == "card" and _as_array(_current_player().get("cards", [])).size() >= 15)
+			sell.disabled = not _is_human_turn() or int(item.get("owned", 0)) < count
+		quantity.value_changed.connect(update_quote)
+		update_quote.call()
+		shop_popup_list.add_child(row)
+
+func _shop_transaction(action: String, item_kind: String, item_id: String, quantity: int) -> void:
+	if not _is_human_turn() or not _shop_available():
+		return
+	var result := _invoke_game("choose_action", [action, {"item_kind": item_kind, "item_id": item_id, "quantity": quantity}])
+	_append_local_log(_result_text(result, "已完成點券交易。"))
+	_handle_result(result)
+	call_deferred("_update_shop_popup")
+
+func _append_tool_inventory() -> void:
+	cards_popup_list.add_child(_make_label("道具（每種最多 9 個）", 15, TEXT_GOLD))
+	var tools: Dictionary = _current_player().get("tools", {})
+	var has_tools := false
+	for record in InventoryCatalogue.tools():
+		var item_id := str(record.id)
+		var count := int(tools.get(item_id, 0))
+		if count <= 0:
+			continue
+		has_tools = true
+		var row := HBoxContainer.new()
+		var label := _make_label("%s × %d" % [record.name, count], 12, TEXT_MAIN)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(label)
+		var use := _make_button("尚未還原", func() -> void: pass)
+		use.disabled = true
+		row.add_child(use)
+		cards_popup_list.add_child(row)
+	if not has_tools:
+		cards_popup_list.add_child(_make_label("目前沒有道具。", 12, TEXT_MUTED))

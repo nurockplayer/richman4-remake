@@ -18,6 +18,11 @@ const PLAYER_COLORS := [
 	Color("#73c989"),
 ]
 
+const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
+var visuals = OriginalVisuals.new()
+var _scene: Dictionary = {}
+var _background: Texture2D
+
 var board_data: Array = []
 var players_data: Array = []
 var current_player_index := 0
@@ -38,6 +43,7 @@ var _pan_start := Vector2.ZERO
 var _layout_size := Vector2.ZERO
 
 func _ready() -> void:
+	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process_input(true)
 	queue_redraw()
@@ -207,6 +213,10 @@ func _draw_original_board() -> void:
 	var geometry := _geometry_board()
 	var frame := Rect2(Vector2(8.0, 8.0), size - Vector2(16.0, 16.0))
 	_draw_style_box(frame, Color("#11283a"), Color("#36546b"), 14.0, 1.0)
+	_scene = visuals.scene_for(map_definition)
+	_background = visuals.texture(_scene.get("image"))
+	if _background != null:
+		draw_texture_rect(_background, Rect2(_map_to_screen(Vector2.ZERO), Vector2(2304, 2304) * _map_scale() * map_zoom), false)
 	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
 	_draw_text("滾輪縮放 · 中鍵／右鍵平移", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
 	for index in range(geometry.size()):
@@ -216,7 +226,8 @@ func _draw_original_board() -> void:
 			var neighbor := int(neighbor_value)
 			if neighbor < 0 or neighbor >= geometry.size() or neighbor <= index:
 				continue
-			draw_line(from, _node_positions[neighbor], Color("#638697"), 2.0, true)
+			if _background == null:
+				draw_line(from, _node_positions[neighbor], Color("#638697"), 2.0, true)
 	var current_position := _current_position()
 	if current_position >= 0 and current_position < _node_positions.size():
 		for option in route_options:
@@ -225,9 +236,19 @@ func _draw_original_board() -> void:
 				draw_line(_node_positions[current_position], _node_positions[next_index], Color("#e0a958"), 4.0, true)
 	for index in range(geometry.size()):
 		_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
+	_draw_original_houses()
 	_draw_original_players()
 
 func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
+	if _background != null:
+		var owner := int(tile.get("owner", -1))
+		if owner >= 0:
+			draw_circle(center, 4.0, PLAYER_COLORS[owner % PLAYER_COLORS.size()])
+		if selected_index == index or _route_options_has(index):
+			draw_arc(center, radius, 0.0, TAU, 32, Color("#ffe098"), 3.0)
+			if _route_options_has(index):
+				_draw_text("選擇", center + Vector2(-18, -radius - 4), 36, 11, Color.WHITE)
+		return
 	var kind := String(tile.get("kind", "rest"))
 	var color := _tile_color(kind)
 	var border := Color("#f1d28a") if selected_index == index else Color("#d6e5d6")
@@ -263,6 +284,10 @@ func _draw_original_players() -> void:
 			var angle: float = TAU * float(occupant_index) / max(1.0, float(occupants.size()))
 			var radius: float = _node_radii[int(tile_index)]
 			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
+			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index))) if _background != null else {}
+			if _draw_sprite(frame, center, _map_scale() * map_zoom):
+				draw_arc(center, 8.0, 0.0, TAU, 24, PLAYER_COLORS[player_index % PLAYER_COLORS.size()], 2.0)
+				continue
 			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
 			var active := player_index == current_player_index
 			draw_circle(center + Vector2(0.0, 2.0), 9.0 if active else 7.0, Color(0.0, 0.0, 0.0, 0.38))
@@ -543,3 +568,27 @@ func _draw_style_box(rect: Rect2, background: Color, border: Color, radius: floa
 	style.set_border_width_all(int(border_width))
 	style.set_corner_radius_all(int(radius))
 	draw_style_box(style, rect)
+
+func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bool:
+	var sprite: Texture2D = visuals.texture(frame)
+	if sprite == null:
+		return false
+	var anchor := Vector2(float(frame.get("x", 0)), float(frame.get("y", 0)))
+	draw_texture_rect(sprite, Rect2(center - anchor * scale_factor, sprite.get_size() * scale_factor), false)
+	return true
+
+func _draw_original_houses() -> void:
+	if _background == null:
+		return
+	var properties: Dictionary = {}
+	for index in range(_geometry_board().size()):
+		var tile := _merged_tile(index)
+		if tile.get("kind") == "property":
+			properties[int(tile.get("source_object_id", 0))] = tile
+	for land in _scene.get("lands", []):
+		if not land is Dictionary or not properties.has(int(land.get("id", 0))):
+			continue
+		var tile: Dictionary = properties[int(land.id)]
+		var level := int(tile.get("building_level", 0))
+		if level > 0:
+			_draw_sprite(visuals.house(_scene, level, int(land.get("direction", 0))), _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0)))), _map_scale() * map_zoom)

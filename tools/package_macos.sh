@@ -11,6 +11,10 @@ catalog_path="${RICHMAN4_MAP_CATALOG:-}"
 if [[ -n "$catalog_path" ]]; then
   "$GODOT_BIN" --headless --path . --script tools/validate_catalog.gd -- "$catalog_path"
 fi
+scene_path="${RICHMAN4_SCENE_MANIFEST:-}"
+if [[ -n "$scene_path" ]]; then
+  python3 tools/package_scene_images.py "$scene_path"
+fi
 mkdir -p build
 "$GODOT_BIN" --headless --path . --export-release macOS build/Richman4.zip
 # Extract only our generated application, keeping earlier artifacts untouched.
@@ -22,6 +26,11 @@ output_zip="build/Richman4.zip"
 if [[ -n "$catalog_path" ]]; then
   mkdir -p "$app_path/Contents/Resources/Original/maps"
   cp "$catalog_path" "$app_path/Contents/Resources/Original/maps/catalog.json"
+fi
+if [[ -n "$scene_path" ]]; then
+  python3 tools/package_scene_images.py "$scene_path" --destination "$app_path/Contents/Resources/Original/scenes"
+fi
+if [[ -n "$catalog_path" || -n "$scene_path" ]]; then
   codesign --force --deep --sign - "$app_path"
   output_zip="build/Richman4-private.zip"
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_zip"

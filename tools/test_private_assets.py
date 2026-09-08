@@ -153,6 +153,41 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertEqual(worktree_path.resolve(), expected.resolve())
             self.assertEqual((expected / "source/dfw4cskzl_136622/Game/map.mkf").read_bytes(), b"fixture original asset\n")
 
+    def test_bootstrap_rejects_same_physical_destination_and_link_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, revision = self._make_fixture(temporary)
+            temporary_root = Path(temporary)
+            real_parent = temporary_root / "real-parent"
+            real_parent.mkdir()
+            checkout = real_parent / "private-assets"
+            run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(checkout),
+            ], cwd=ROOT, env=bootstrap_env())
+            payload_path = checkout / "source/dfw4cskzl_136622/Game/map.mkf"
+            before = payload_path.read_bytes()
+
+            alias_parent = temporary_root / "alias-parent"
+            alias_parent.symlink_to(real_parent, target_is_directory=True)
+            result = run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(alias_parent / "private-assets"),
+                "--link", str(checkout),
+            ], cwd=ROOT, check=False, env=bootstrap_env())
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("destination/link paths overlap", result.stderr)
+            self.assertTrue(checkout.is_dir())
+            self.assertFalse(checkout.is_symlink())
+            self.assertEqual(payload_path.read_bytes(), before)
+            self.assertEqual(run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=ROOT).stdout.strip(), revision)
+
     def test_bootstrap_rejects_invalid_existing_destination_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, config, revision = self._make_fixture(temporary)

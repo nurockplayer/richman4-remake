@@ -26,6 +26,7 @@ var _scene_draws: Array = []
 var _graph_fallback_edges := false
 var _focused_player_position := Vector2i(-1, -1)
 var _focused_map_identity := ""
+var _focused_viewport_size := Vector2.ZERO
 
 var board_data: Array = []
 var players_data: Array = []
@@ -77,10 +78,11 @@ func _focus_moving_player() -> void:
 	var map_identity := str(map_definition.get("id", ""))
 	var position := _current_position()
 	var identity := Vector2i(current_player_index, position)
-	if (identity == _focused_player_position and map_identity == _focused_map_identity) or position < 0 or position >= _geometry_board().size():
+	if (identity == _focused_player_position and map_identity == _focused_map_identity and size == _focused_viewport_size) or position < 0 or position >= _geometry_board().size():
 		return
 	_focused_player_position = identity
 	_focused_map_identity = map_identity
+	_focused_viewport_size = size
 	var scene: Dictionary = visuals.scene_for(map_definition)
 	if scene.is_empty() or visuals.texture(scene.get("image")) == null:
 		return

@@ -96,6 +96,11 @@ func run() -> void:
 			first_non_road_index = job_index
 	expect(last_road_index >= 0 and first_non_road_index > last_road_index, "all road icons draw before the combined world-object sort")
 	expect(board.get_screen_position_for_index(0).distance_to(board.size * 0.5) < 1, "camera centers the active player")
+	for viewport_size in [Vector2(1000, 360), Vector2(700, 600)]:
+		board.size = viewport_size
+		await process_frame
+		await process_frame
+		expect(board.get_screen_position_for_index(0).distance_to(board.size * 0.5) < 1, "resize recenters the active player using the new viewport scale")
 	var point: Vector2 = board.get_screen_position_for_index(1)
 	expect(board.select_at_position(point) == 1, "route remains clickable over background")
 	board.zoom_by(1.8)

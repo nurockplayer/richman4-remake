@@ -1149,10 +1149,10 @@ func _ai_action(player_id: int) -> void:
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":
 		var owner: int = int(tile.get("owner", -1))
-		if owner == -1 and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= int(tile.get("cost", 0)) and not _is_sunday():
+		if owner == -1 and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
 			choose_action("buy")
 			return
-		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < MAX_PROPERTY_LEVEL and not _is_sunday() and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
+		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
 			choose_action("upgrade")
 			return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:

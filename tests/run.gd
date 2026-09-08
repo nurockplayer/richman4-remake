@@ -291,6 +291,21 @@ func _test_sunday_property_actions() -> void:
 	game.state["property_action_used"] = false
 	var upgrade_result: Dictionary = game.choose_action("upgrade")
 	_expect(bool(upgrade_result.get("ok", false)), "Sunday permits property upgrade")
+	var ai: GameState = GameState.new_game(325, 2)
+	ai.set_player_ai(0, true)
+	ai.state["day"] = 7
+	ai._sync_state()
+	ai.state["phase"] = "await_action"
+	ai.state["players"][0]["position"] = 1
+	ai._ai_action(0)
+	_expect_equal(ai.state["board"][1]["owner"], 0, "AI purchases property on Sunday")
+	ai.state["phase"] = "await_action"
+	ai.state["current_player"] = 0
+	ai.state["property_action_used"] = false
+	ai.state["board"][1]["owner"] = 0
+	ai.state["players"][0]["properties"] = [1]
+	ai._ai_action(0)
+	_expect_equal(ai.state["board"][1]["building_level"], 1, "AI upgrades property on Sunday")
 
 
 func _test_bank_and_monthly_interest() -> void:

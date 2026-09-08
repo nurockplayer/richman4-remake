@@ -15,6 +15,7 @@ func _initialize() -> void:
 	_test_shop_landing_and_atomic_trades()
 	_test_inventory_card_lifecycle()
 	_test_inventory_ai_skips_unsupported_cards()
+	_test_inventory_remote_turn_guards()
 	_test_v3_remains_legacy()
 	_test_inventory_ai_continuation()
 	print("Inventory runtime checks: %d, failures: %d" % [_checks, _failures])
@@ -154,11 +155,11 @@ func _test_shop_landing_and_atomic_trades() -> void:
 			implemented_cards += 1
 		if item.get("item_kind", "") == "tool" and bool(item.get("implemented", false)):
 			research_tools += 1
-	_expect_equal(implemented_cards, 5, "shop metadata marks exactly five implemented cards")
-	_expect_equal(research_tools, 0, "shop metadata marks no tools implemented")
+	_expect_equal(implemented_cards, 7, "shop metadata marks exactly seven implemented cards")
+	_expect_equal(research_tools, 3, "shop metadata marks exactly three implemented tools")
 	_expect(game.item_is_implemented("card", "均富"), "implemented card metadata is public")
-	_expect(not game.item_is_implemented("card", "均貧"), "unimplemented card metadata is public")
-	_expect(not game.item_is_implemented("tool", "機車"), "tool metadata is unimplemented")
+	_expect(not game.item_is_implemented("card", "天使"), "unimplemented card metadata is public")
+	_expect(game.item_is_implemented("tool", "機車"), "implemented tool metadata is public")
 	var player: Dictionary = game.state["players"][0]
 	player["points"] = 500
 	var buy_card: Dictionary = game.choose_action("buy_item", {"item_kind": "card", "item_id": "均貧", "quantity": 1})
@@ -251,17 +252,17 @@ func _test_inventory_card_lifecycle() -> void:
 	_expect(bool(used.get("ok", false)), "inventory card can be used before rolling")
 	_expect_equal(game.state["phase"], phase_before, "card use keeps the current phase")
 	_expect_equal(int(supply["cards"]["停留"]), supply_before_use + 1, "successful card use returns the card to supply")
-	var unknown_grant: Dictionary = Inventory.grant_card(supply, player["cards"], "均貧")
+	var unknown_grant: Dictionary = Inventory.grant_card(supply, player["cards"], "天使")
 	_expect(bool(unknown_grant.get("ok", false)), "unimplemented card can be held")
 	var unknown_cards: Array = player["cards"].duplicate(true)
 	var unknown_supply: Dictionary = supply.duplicate(true)
-	var unknown_use: Dictionary = game.choose_action("use_card", {"card_id": "均貧"})
+	var unknown_use: Dictionary = game.choose_action("use_card", {"card_id": "天使"})
 	_expect(not bool(unknown_use.get("ok", false)), "unimplemented card use returns an error")
 	_expect_equal(player["cards"], unknown_cards, "unknown card error does not consume the card")
 	_expect_equal(supply, unknown_supply, "unknown card error does not change supply")
 	game.state["phase"] = "await_route"
 	game._set_action_options(0)
-	_expect(not bool(game.choose_action("use_card", {"card_id": "均貧"}).get("ok", false)), "route phase rejects card use")
+	_expect(not bool(game.choose_action("use_card", {"card_id": "天使"}).get("ok", false)), "route phase rejects card use")
 	game.state["phase"] = "await_roll"
 	game._set_action_options(0)
 	game.state["players"][0]["cash"] = 0
@@ -295,16 +296,82 @@ func _test_inventory_ai_skips_unsupported_cards() -> void:
 	player["cash"] = 0
 	player["cards"] = []
 	var supply: Dictionary = game.state["inventory_supply"]
-	_expect(bool(Inventory.grant_card(supply, player["cards"], "均貧").get("ok", false)), "AI fixture grants unsupported card")
+	_expect(bool(Inventory.grant_card(supply, player["cards"], "天使").get("ok", false)), "AI fixture grants unsupported card")
 	_expect(bool(Inventory.grant_card(supply, player["cards"], "停留").get("ok", false)), "AI fixture grants implemented card after it")
 	game.state["current_player"] = 0
 	game.state["phase"] = "await_action"
 	game._set_action_options(0)
 	game._ai_action(0)
-	_expect(player["cards"].has("均貧"), "AI retains unsupported card")
+	_expect(player["cards"].has("天使"), "AI retains unsupported card")
 	_expect(not player["cards"].has("停留"), "AI scans past unsupported card")
 	_expect_equal(player["stay_next"], 1, "AI uses later implemented card")
 	_expect_equal(int(supply["cards"]["停留"]), 4, "AI use returns implemented card to pool")
+
+
+func _test_inventory_remote_turn_guards() -> void:
+	var blocked_cases := [
+		{"field": "skip_turns", "message": "skip turn"},
+		{"field": "turtle_days", "message": "turtle turn"},
+		{"field": "stay_next", "message": "stay turn"},
+	]
+	for blocked_case in blocked_cases:
+		var blocked: Object = GameState.new_game(106 + _checks, 2, _options())
+		_expect(blocked != null, "remote guard fixture creates a game: " + str(blocked_case.message))
+		if blocked == null:
+			continue
+		var blocked_player: Dictionary = blocked.state["players"][0]
+		var blocked_supply: Dictionary = blocked.state["inventory_supply"]
+		var remote_before: int = int(blocked_player["tools"].get("遙控骰子", 0))
+		var remote_pool_before: int = int(blocked_supply["tools"]["遙控骰子"])
+		blocked_player[blocked_case.field] = 1
+		blocked.state["phase"] = "await_roll"
+		blocked._set_action_options(0)
+		var blocked_use: Dictionary = blocked.choose_action("use_tool", {"tool_id": "遙控骰子", "value": 4})
+		_expect(not bool(blocked_use.get("ok", false)), "remote rejects unusable " + str(blocked_case.message))
+		_expect_equal(int(blocked_player["tools"].get("遙控骰子", 0)), remote_before, "rejected remote leaves tool for " + str(blocked_case.message))
+		_expect_equal(int(blocked_supply["tools"]["遙控骰子"]), remote_pool_before, "rejected remote leaves supply for " + str(blocked_case.message))
+		_expect(not blocked.state["action_options"].has("use_tool"), "unusable remote is absent from options for " + str(blocked_case.message))
+
+	var pending_game: Object = GameState.new_game(120, 2, _options())
+	_expect(pending_game != null, "pending remote guard fixture creates a game")
+	if pending_game == null:
+		return
+	var pending_player: Dictionary = pending_game.state["players"][0]
+	var pending_supply: Dictionary = pending_game.state["inventory_supply"]
+	pending_game.state["phase"] = "await_roll"
+	pending_game._set_action_options(0)
+	var pending_use: Dictionary = pending_game.choose_action("use_tool", {"tool_id": "遙控骰子", "value": 6})
+	_expect(bool(pending_use.get("ok", false)), "remote can be staged for pending guard")
+	var stay_supply_before: int = int(pending_supply["cards"]["停留"])
+	_expect(bool(Inventory.grant_card(pending_supply, pending_player["cards"], "停留").get("ok", false)), "pending guard stages movement card")
+	var pending_cards_before: Array = pending_player["cards"].duplicate(true)
+	var pending_card_use: Dictionary = pending_game.choose_action("use_card", {"card_id": "停留"})
+	_expect(not bool(pending_card_use.get("ok", false)), "pending remote rejects stay card")
+	_expect_equal(pending_player["cards"], pending_cards_before, "pending remote leaves movement card held")
+	_expect_equal(int(pending_supply["cards"]["停留"]), stay_supply_before - 1, "pending remote leaves card supply unchanged after staging")
+	var pending_vehicle: Dictionary = pending_game.choose_action("set_vehicle", {"vehicle": "walking"})
+	_expect(not bool(pending_vehicle.get("ok", false)), "pending remote rejects vehicle changes")
+	_expect_equal(pending_game.state["pending_remote_dice"]["value"], 6, "pending remote remains after rejected movement actions")
+	_expect(not pending_game.state["action_options"].has("use_card"), "pending remote hides card action")
+	_expect(not pending_game.state["action_options"].has("use_tool"), "pending remote hides tool action")
+	var pending_save: Dictionary = pending_game.to_dict()
+	_expect(bool(GameState.validate_save(pending_save).get("ok", false)), "clean pending remote save validates")
+	for modifier in ["skip_turns", "turtle_days", "stay_next"]:
+		for malformed_value in [{}, [], "invalid", 0.5]:
+			var malformed_modifier_save: Dictionary = pending_save.duplicate(true)
+			malformed_modifier_save["players"][0][modifier] = malformed_value
+			var malformed_modifier_result: Variant = GameState.validate_save(malformed_modifier_save)
+			_expect(malformed_modifier_result is Dictionary and not bool(malformed_modifier_result.get("ok", true)), "malformed pending movement modifier is rejected without runtime error: " + modifier)
+	var blocked_save: Dictionary = pending_save.duplicate(true)
+	blocked_save["players"][0]["skip_turns"] = 1
+	_expect(not bool(GameState.validate_save(blocked_save).get("ok", false)), "pending remote with skip turn cannot load")
+	_expect(GameState.from_dict(blocked_save) == null, "pending remote with skip turn is rejected on load")
+	var blocked_turtle_save: Dictionary = pending_save.duplicate(true)
+	blocked_turtle_save["players"][0]["turtle_days"] = 1
+	_expect(not bool(GameState.validate_save(blocked_turtle_save).get("ok", false)), "pending remote with turtle turn cannot load")
+	var blocked_stay_save: Dictionary = pending_save.duplicate(true)
+	blocked_stay_save["players"][0]["stay_next"] = 1
+	_expect(not bool(GameState.validate_save(blocked_stay_save).get("ok", false)), "pending remote with stay turn cannot load")
 
 
 func _test_inventory_ai_continuation() -> void:

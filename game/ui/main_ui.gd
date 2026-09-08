@@ -1529,6 +1529,9 @@ func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
 	turn_label.text = "第 %d 回合 · 第 %d 輪" % [int(state.get("turn", 1)), int(state.get("round", 1))]
 	phase_label.text = _phase_text(phase)
+	var remote: Dictionary = state.get("pending_remote_dice", {})
+	if phase == "await_roll" and not remote.is_empty():
+		phase_label.text += " · 遙控 %d 點" % int(remote.get("value", 0))
 	if setup_summary_label != null:
 		setup_summary_label.text = _setup_summary_text()
 	var map_name := str(_active_map_definition.get("name", ""))
@@ -1750,14 +1753,14 @@ func _update_cards_popup() -> void:
 				symbol_option.add_item("能源股", 2)
 				row.add_child(symbol_option)
 			var target_option: OptionButton = null
-			if card_id == "停留" or card_id == "烏龜":
+			if ["停留", "烏龜", "轉向", "均貧"].has(card_id):
 				target_option = OptionButton.new()
 				target_option.custom_minimum_size = Vector2(120.0, 34.0)
 				target_option.add_theme_font_size_override("font_size", 11)
 				var target_players: Array = state.get("players", [])
 				for target_index in range(target_players.size()):
 					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
-					if bool(target_player.get("alive", false)):
+					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
 				row.add_child(target_option)
 			var use := _make_button("使用", func() -> void:
@@ -2111,6 +2114,37 @@ func _shop_transaction(action: String, item_kind: String, item_id: String, quant
 	call_deferred("_update_shop_popup")
 
 func _append_tool_inventory() -> void:
+	var player := _current_player()
+	var vehicle := str(player.get("vehicle", "walking"))
+	var vehicle_names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
+	var vehicle_dice := {"walking": 1, "motorcycle": 2, "car": 3}
+	var vehicle_row := HBoxContainer.new()
+	var vehicle_label := _make_label("目前交通：%s" % str(vehicle_names.get(vehicle, vehicle)), 12, TEXT_MAIN)
+	vehicle_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vehicle_row.add_child(vehicle_label)
+	var dice_option := OptionButton.new()
+	dice_option.name = "VehicleDice"
+	for count in range(1, int(vehicle_dice.get(vehicle, 1)) + 1):
+		dice_option.add_item("%d 顆骰子" % count, count)
+	dice_option.select(clampi(int(player.get("dice_count", 1)) - 1, 0, dice_option.item_count - 1))
+	dice_option.disabled = str(state.get("phase", "")) != "await_roll" or not state.get("pending_remote_dice", {}).is_empty()
+	dice_option.item_selected.connect(func(index: int) -> void:
+		var result := _invoke_game("choose_action", ["set_vehicle", {"vehicle": vehicle, "dice_count": dice_option.get_item_id(index)}])
+		_handle_result(result)
+		call_deferred("_update_cards_popup")
+	)
+	vehicle_row.add_child(dice_option)
+	if vehicle != "walking":
+		var walk := _make_button("改為步行", func() -> void:
+			var result := _invoke_game("choose_action", ["set_vehicle", {"vehicle": "walking"}])
+			_append_local_log(_result_text(result, "已送出交通指令。"))
+			_handle_result(result)
+			call_deferred("_update_cards_popup")
+		)
+		walk.name = "UnequipVehicle"
+		walk.disabled = dice_option.disabled
+		vehicle_row.add_child(walk)
+	cards_popup_list.add_child(vehicle_row)
 	cards_popup_list.add_child(_make_label("道具（每種最多 9 個）", 15, TEXT_GOLD))
 	var tools: Dictionary = _current_player().get("tools", {})
 	var has_tools := false
@@ -2124,8 +2158,30 @@ func _append_tool_inventory() -> void:
 		var label := _make_label("%s × %d" % [record.name, count], 12, TEXT_MAIN)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(label)
-		var use := _make_button("尚未還原", func() -> void: pass)
-		use.disabled = true
+		var value_option: OptionButton = null
+		if item_id == "遙控骰子":
+			value_option = OptionButton.new()
+			value_option.name = "RemoteValue"
+			for value in range(1, 7):
+				value_option.add_item("%d 點" % value, value)
+			row.add_child(value_option)
+		var use := _make_button("使用", func() -> void:
+			var params: Dictionary = {"tool_id": item_id}
+			if value_option != null:
+				params["value"] = value_option.get_selected_id()
+			var result := _invoke_game("choose_action", ["use_tool", params])
+			_append_local_log("使用道具 %s：%s" % [item_id, _result_text(result, "已送出道具指令。")])
+			_handle_result(result)
+			cards_popup.hide()
+		)
+		use.name = "UseTool_" + item_id
+		var implemented := _item_implemented("tool", item_id)
+		use.disabled = not implemented or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
+		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car"):
+			use.disabled = true
+			use.text = "使用中"
+		if not implemented:
+			use.text = "尚未還原"
 		row.add_child(use)
 		cards_popup_list.add_child(row)
 	if not has_tools:

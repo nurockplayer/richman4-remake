@@ -47,7 +47,12 @@ const SETUP_CHARACTER_NAMES = [
 const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
-const IMPLEMENTED_CARD_IDS = ["均富", "停留", "烏龜", "紅", "黑"]
+const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "停留", "轉向", "烏龜", "紅", "黑"]
+const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "遙控骰子"]
+const VEHICLE_TOOL_IDS = {
+	"motorcycle": "機車",
+	"car": "汽車",
+}
 
 const VEHICLE_DICE = {
 	"walking": 1,
@@ -248,6 +253,7 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 	state["bank"] = bank
 	if _is_inventory():
 		state["inventory_supply"] = OriginalInventory.new_supply()
+		state["pending_remote_dice"] = {}
 		var inventory_result: Dictionary = OriginalInventory.initialize_players(state["players"], state["inventory_supply"])
 		if not bool(inventory_result.get("ok", false)):
 			state = {}
@@ -586,8 +592,17 @@ func _set_action_options(player_id: int) -> void:
 		if int(player.get("cash", 0)) >= 10:
 			options.push_front("buy_stock")
 	if phase != "await_action":
-		if _is_inventory() and phase == "await_roll" and player.get("cards", []).size() > 0:
-			options.push_front("use_card")
+		if _is_inventory() and phase == "await_roll":
+			var pending_remote: Variant = state.get("pending_remote_dice", {})
+			if typeof(pending_remote) != TYPE_DICTIONARY or pending_remote.is_empty():
+				if player.get("cards", []).size() > 0:
+					options.push_front("use_card")
+				var tools: Dictionary = player.get("tools", {})
+				if not _inventory_movement_blocked(player):
+					for tool_id in IMPLEMENTED_TOOL_IDS:
+						if int(tools.get(tool_id, 0)) > 0:
+							options.push_front("use_tool")
+							break
 		state["action_options"] = options
 		return
 	options.push_back("end_turn")
@@ -621,7 +636,9 @@ func _set_action_options(player_id: int) -> void:
 			for vehicle in ["motorcycle", "car"]:
 				if not bool(vehicles.get(vehicle, false)) and int(player.get("cash", 0)) >= int(VEHICLE_COSTS[vehicle]):
 					options.push_front("buy_vehicle")
-	if player.get("cards", []).size() > 0:
+	var action_pending_remote: Variant = state.get("pending_remote_dice", {})
+	var action_remote_pending: bool = _is_inventory() and typeof(action_pending_remote) == TYPE_DICTIONARY and not action_pending_remote.is_empty()
+	if player.get("cards", []).size() > 0 and not action_remote_pending:
 		options.push_front("use_card")
 	state["action_options"] = options
 
@@ -641,6 +658,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
 		return IMPLEMENTED_CARD_IDS.has(item_id)
+	if normalized_kind == "tool":
+		return IMPLEMENTED_TOOL_IDS.has(item_id)
 	return false
 
 
@@ -744,6 +763,65 @@ func set_player_ai(player_id: int, enabled: bool) -> bool:
 	return true
 
 
+func _inventory_vehicle_tool_id(vehicle: String) -> String:
+	return str(VEHICLE_TOOL_IDS.get(vehicle, ""))
+
+
+static func _inventory_movement_blocked(player: Dictionary) -> bool:
+	for field in ["skip_turns", "turtle_days", "stay_next"]:
+		if _valid_int(player.get(field, 0), 1):
+			return true
+	return false
+
+
+func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
+	if not _require_phase("await_roll"):
+		return _error("只能在擲骰前選擇交通工具")
+	var player: Dictionary = _current_player()
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("目前玩家無法行動")
+	if not VEHICLE_DICE.has(vehicle):
+		return _error("未知的交通工具")
+	var pending_remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+		return _error("遙控骰子已經排程")
+	var maximum: int = int(VEHICLE_DICE[vehicle])
+	var selected: int = maximum if dice_count < 1 else dice_count
+	if selected < 1 or selected > maximum:
+		return _error("骰子數量超出交通工具限制")
+	var current_vehicle: String = str(player.get("vehicle", "walking"))
+	if current_vehicle == vehicle:
+		player["dice_count"] = selected
+		_record_event("vehicle_selected", {"player_id": int(player["id"]), "vehicle": vehicle, "dice_count": selected})
+		_set_action_options(int(player["id"]))
+		return _result(true, "已選擇交通工具")
+	var tools: Dictionary = player.get("tools", {}).duplicate(true)
+	var old_tool_id: String = _inventory_vehicle_tool_id(current_vehicle)
+	if not old_tool_id.is_empty():
+		if int(tools.get(old_tool_id, 0)) >= OriginalInventory.TOOL_CAPACITY_PER_TYPE:
+			return _error("道具數量超出上限")
+	var new_tool_id: String = _inventory_vehicle_tool_id(vehicle)
+	if not new_tool_id.is_empty() and int(tools.get(new_tool_id, 0)) < 1:
+		return _error("尚未持有這項交通工具")
+	if not old_tool_id.is_empty():
+		tools[old_tool_id] = int(tools.get(old_tool_id, 0)) + 1
+	if not new_tool_id.is_empty():
+		var remaining: int = int(tools.get(new_tool_id, 0)) - 1
+		if remaining <= 0:
+			tools.erase(new_tool_id)
+		else:
+			tools[new_tool_id] = remaining
+	player["tools"] = tools
+	var vehicles: Dictionary = player.get("vehicles", {}).duplicate(true)
+	vehicles[vehicle] = true
+	player["vehicles"] = vehicles
+	player["vehicle"] = vehicle
+	player["dice_count"] = selected
+	_record_event("vehicle_selected", {"player_id": int(player["id"]), "vehicle": vehicle, "dice_count": selected})
+	_set_action_options(int(player["id"]))
+	return _result(true, "已選擇交通工具")
+
+
 func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 	if not _require_phase("await_roll"):
 		return _error("只能在擲骰前選擇交通工具")
@@ -752,6 +830,8 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 		return _error("目前玩家無法行動")
 	if not VEHICLE_DICE.has(vehicle):
 		return _error("未知的交通工具")
+	if _is_inventory():
+		return _set_inventory_vehicle(vehicle, dice_count)
 	var vehicles: Dictionary = player.get("vehicles", {})
 	if not bool(vehicles.get(vehicle, false)):
 		return _error("尚未擁有這項交通工具")
@@ -772,6 +852,14 @@ func roll(dice_count: int = -1) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法擲骰")
+	var pending_remote: Dictionary = {}
+	if _is_inventory() and typeof(state.get("pending_remote_dice", {})) == TYPE_DICTIONARY:
+		pending_remote = state.get("pending_remote_dice", {})
+	if not pending_remote.is_empty():
+		if int(pending_remote.get("player_id", -1)) != player_id:
+			return _error("遙控骰子待命玩家不一致")
+		if _inventory_movement_blocked(player):
+			return _error("目前移動狀態無法執行遙控骰子")
 	if int(player.get("skip_turns", 0)) > 0:
 		player["skip_turns"] = int(player.get("skip_turns", 0)) - 1
 		state["last_roll"] = []
@@ -791,7 +879,14 @@ func roll(dice_count: int = -1) -> Dictionary:
 		return _error("骰子數量超出交通工具限制")
 	var dice: Array = []
 	var total: int = 0
-	if turtle_step:
+	if not pending_remote.is_empty():
+		var remote_value: Variant = pending_remote.get("value", null)
+		if not _valid_int(remote_value, 1, 6):
+			return _error("遙控骰子待命點數無效")
+		dice = [int(remote_value)]
+		total = int(remote_value)
+		state["pending_remote_dice"] = {}
+	elif turtle_step:
 		dice = [1]
 		total = 1
 	else:
@@ -814,7 +909,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 	# Monopoly-style bonus turns or automatic penalties.
 	state["doubles_count"] = 0
 	state["extra_roll"] = false
-	_record_event("roll", {"player_id": player_id, "dice": dice, "total": total, "vehicle": player.get("vehicle", "walking")})
+	var roll_payload: Dictionary = {"player_id": player_id, "dice": dice, "total": total, "vehicle": player.get("vehicle", "walking")}
+	if not pending_remote.is_empty():
+		roll_payload["remote_dice"] = true
+	_record_event("roll", roll_payload)
 	if graph_should_move:
 		_graph_begin_movement(player_id, total)
 	if not _is_graph() or state.get("phase", "") != "await_route":
@@ -1195,13 +1293,18 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
 	if normalized == "set_vehicle":
+		if _is_inventory():
+			var pending_remote: Variant = state.get("pending_remote_dice", {})
+			if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+				return _error("遙控骰子已經排程")
 		return set_vehicle(str(params.get("vehicle", "walking")), int(params.get("dice_count", -1)))
 	if normalized == "end_turn":
 		return end_turn()
 	if normalized == "buy_stock" or normalized == "sell_stock":
 		return _trade_stock(normalized, params)
 	var inventory_card_phase: bool = _is_inventory() and normalized == "use_card" and state.get("phase", "") in ["await_roll", "await_action"]
-	if not inventory_card_phase and not _require_phase("await_action"):
+	var inventory_tool_phase: bool = _is_inventory() and normalized == "use_tool" and state.get("phase", "") == "await_roll"
+	if not inventory_card_phase and not inventory_tool_phase and not _require_phase("await_action"):
 		return _error("目前不是行動階段")
 	var player_id: int = int(state.get("current_player", -1))
 	var player: Dictionary = _player(player_id)
@@ -1228,6 +1331,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _buy_vehicle(player_id, str(params.get("vehicle", "")))
 		"buy_item", "sell_item":
 			return _trade_item(player_id, normalized, params)
+		"use_tool":
+			return _use_tool(player_id, params)
 		"use_card":
 			return _use_card(player_id, str(params.get("card_id", "")), int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower())
 		_:
@@ -1292,6 +1397,48 @@ func _trade_item(player_id: int, action: String, params: Dictionary) -> Dictiona
 		_record_event("item_sold", {"player_id": player_id, "item_kind": item_kind, "item_id": item_id, "quantity": quantity, "sale_price": sale_price})
 	_set_action_options(player_id)
 	return _result(true, "商品交易完成", {"item_kind": item_kind, "item_id": item_id, "quantity": quantity, "price": price, "sale_price": sale_price})
+
+
+func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
+	if not _is_inventory() or not _require_phase("await_roll"):
+		return _error("道具只能在擲骰前使用")
+	var player: Dictionary = _player(player_id)
+	var tool_id: String = str(params.get("tool_id", ""))
+	if not IMPLEMENTED_TOOL_IDS.has(tool_id):
+		return _error("此道具效果尚未還原")
+	var tools: Dictionary = player.get("tools", {})
+	if int(tools.get(tool_id, 0)) <= 0:
+		return _error("玩家沒有這項道具")
+	if tool_id == "遙控骰子" and _inventory_movement_blocked(player):
+		return _error("目前移動狀態無法使用遙控骰子")
+	if (tool_id == "機車" and str(player.get("vehicle", "walking")) == "motorcycle") or (tool_id == "汽車" and str(player.get("vehicle", "walking")) == "car"):
+		return _error("這項交通工具已經啟用")
+	var pending_remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+		return _error("遙控骰子已經排程")
+	if tool_id == "機車":
+		var motorcycle_result: Dictionary = _set_inventory_vehicle("motorcycle")
+		if bool(motorcycle_result.get("ok", false)):
+			motorcycle_result["tool_id"] = tool_id
+		return motorcycle_result
+	if tool_id == "汽車":
+		var car_result: Dictionary = _set_inventory_vehicle("car")
+		if bool(car_result.get("ok", false)):
+			car_result["tool_id"] = tool_id
+		return car_result
+	if bool(params.get("cancel", false)):
+		_set_action_options(player_id)
+		return _result(true, "已取消遙控骰子", {"cancelled": true, "tool_id": tool_id})
+	var remote_value: Variant = params.get("value", null)
+	if not _valid_int(remote_value, 1, 6):
+		return _error("遙控骰子點數必須介於 1 到 6")
+	var consume_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
+	if not bool(consume_result.get("ok", false)):
+		return _error(str(consume_result.get("error", "道具無法使用")))
+	state["pending_remote_dice"] = {"player_id": player_id, "value": int(remote_value)}
+	_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "value": int(remote_value), "effect": "remote_dice"})
+	_set_action_options(player_id)
+	return _result(true, "遙控骰子已排程", {"tool_id": tool_id, "value": int(remote_value)})
 
 
 func _buy_property(player_id: int) -> Dictionary:
@@ -1466,6 +1613,10 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 
 
 func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "") -> Dictionary:
+	if _is_inventory():
+		var pending_remote: Variant = state.get("pending_remote_dice", {})
+		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+			return _error("遙控骰子已經排程")
 	var player: Dictionary = _player(player_id)
 	var cards: Array = player.get("cards", [])
 	if card_id.is_empty():
@@ -1477,10 +1628,14 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		return _error("此卡片效果尚未還原")
 	if target_id < 0:
 		target_id = player_id
-	if card_id == "停留" or card_id == "烏龜":
+	if card_id == "停留" or card_id == "烏龜" or card_id == "轉向" or card_id == "均貧":
 		var target_check: Dictionary = _player(target_id)
 		if target_check.is_empty() or not bool(target_check.get("alive", false)):
 			return _error("卡片目標無效")
+	if card_id == "均貧" and target_id == player_id:
+		return _error("均貧卡只能指定其他存活玩家")
+	if card_id == "轉向" and not _is_graph():
+		return _error("轉向卡只能在圖形地圖使用")
 	if card_id == "紅" or card_id == "黑":
 		if not STOCK_SYMBOLS.has(symbol):
 			return _error("紅／黑卡需要指定股票代號")
@@ -1506,6 +1661,14 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 			if remainder > 0:
 				player["cash"] = int(player.get("cash", 0)) + remainder
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "effect": "equalize_cash"})
+	elif card_id == "均貧":
+		var poor_target: Dictionary = _player(target_id)
+		var combined_cash: int = int(player.get("cash", 0)) + int(poor_target.get("cash", 0))
+		var poor_share: int = int(combined_cash / 2)
+		var poor_remainder: int = combined_cash - poor_share * 2
+		player["cash"] = poor_share
+		poor_target["cash"] = poor_share
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "equalize_poor", "combined_cash": combined_cash, "share": poor_share, "rounding_remainder": poor_remainder})
 	elif card_id == "停留":
 		# The target is intentionally supplied through the action's target_id.
 		var target: Dictionary = _player(target_id)
@@ -1515,6 +1678,26 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		var turtle_target: Dictionary = _player(target_id)
 		turtle_target["turtle_days"] = max(3, int(turtle_target.get("turtle_days", 0)))
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "turtle"})
+	elif card_id == "轉向":
+		var turn_target: Dictionary = _player(target_id)
+		var current_node: int = int(turn_target.get("position", -1))
+		var old_previous_node: int = int(turn_target.get("previous_position", -1))
+		var turn_candidates: Array = []
+		var turn_tile: Dictionary = _tile_at(current_node)
+		var adjacent: Variant = turn_tile.get("adjacent", [])
+		if typeof(adjacent) == TYPE_ARRAY:
+			for neighbor in adjacent:
+				if not _valid_int(neighbor, 0, state.get("board", []).size() - 1):
+					continue
+				var neighbor_id: int = int(neighbor)
+				if neighbor_id != old_previous_node and not turn_candidates.has(neighbor_id):
+					turn_candidates.append(neighbor_id)
+		turn_candidates.sort()
+		var selected_previous: int = -1
+		if not turn_candidates.is_empty():
+			selected_previous = int(turn_candidates[_rng.randi_range(0, turn_candidates.size() - 1)])
+		turn_target["previous_position"] = selected_previous
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "reverse_direction", "from_previous_position": old_previous_node, "to_previous_position": selected_previous, "candidates": turn_candidates})
 	elif card_id == "紅" or card_id == "黑":
 		var market: Dictionary = state.get("market", {})
 		var trends: Dictionary = market.get("trends", {})
@@ -1941,6 +2124,8 @@ func run_ai_turn() -> Dictionary:
 			break
 		safety += 1
 		if state.get("phase", "") == "await_roll":
+			if _is_inventory():
+				_ai_roll_action(player_id)
 			var roll_result: Dictionary = roll()
 			if not bool(roll_result.get("ok", false)):
 				return _result(false, str(roll_result.get("message", "AI 擲骰失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
@@ -1991,6 +2176,19 @@ func _ai_action(player_id: int) -> void:
 				var inventory_card_params: Dictionary = {"card_id": card_id}
 				if card_id == "停留" or card_id == "烏龜":
 					inventory_card_params["target_id"] = player_id
+				elif card_id == "轉向":
+					inventory_card_params["target_id"] = player_id
+				elif card_id == "均貧":
+					var poor_target_id: int = -1
+					for candidate in _players():
+						var candidate_id: int = int(candidate.get("id", -1))
+						if candidate_id != player_id and bool(candidate.get("alive", false)):
+							poor_target_id = candidate_id
+							break
+					if poor_target_id >= 0:
+						inventory_card_params["target_id"] = poor_target_id
+					else:
+						continue
 				elif card_id == "紅" or card_id == "黑":
 					inventory_card_params["symbol"] = STOCK_SYMBOLS[player_id % STOCK_SYMBOLS.size()]
 				var inventory_card_result: Dictionary = choose_action("use_card", inventory_card_params)
@@ -2006,6 +2204,27 @@ func _ai_action(player_id: int) -> void:
 			choose_action("use_card", card_params)
 			return
 	end_turn()
+
+
+func _ai_roll_action(player_id: int) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return
+	if _inventory_movement_blocked(player):
+		return
+	var tools: Dictionary = player.get("tools", {})
+	var active_vehicle: String = str(player.get("vehicle", "walking"))
+	for tool_id in ["汽車", "機車", "遙控骰子"]:
+		if int(tools.get(tool_id, 0)) <= 0:
+			continue
+		if tool_id == "機車" and active_vehicle == "car":
+			continue
+		var params: Dictionary = {"tool_id": tool_id}
+		if tool_id == "遙控骰子":
+			params["value"] = 1 + (player_id % 6)
+		var result: Dictionary = choose_action("use_tool", params)
+		if bool(result.get("ok", false)):
+			return
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:
@@ -2322,7 +2541,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if data.has("board_mode") and (typeof(board_mode_marker) != TYPE_STRING or board_mode_marker != GRAPH_BOARD_MODE):
 			errors.append("invalid setup board mode")
 	if inventory_save:
-		required_top.append("inventory_supply")
+		required_top.append_array(["inventory_supply", "pending_remote_dice"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
@@ -2504,24 +2723,55 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		for event in event_log:
 			if typeof(event) != TYPE_DICTIONARY:
 				errors.append("invalid event entry")
+	if inventory_save:
+		var pending_remote_value: Variant = data.get("pending_remote_dice", null)
+		if typeof(pending_remote_value) != TYPE_DICTIONARY:
+			errors.append("invalid pending remote dice")
+		else:
+			var pending_remote: Dictionary = pending_remote_value
+			if not pending_remote.is_empty():
+				if pending_remote.size() != 2 or not pending_remote.has("player_id") or not pending_remote.has("value"):
+					errors.append("pending remote dice keys are not canonical")
+				var pending_remote_player: Variant = pending_remote.get("player_id", null)
+				var pending_remote_face: Variant = pending_remote.get("value", null)
+				if not _valid_int(pending_remote_player, 0, max(0, player_count - 1)) or int(pending_remote_player) != current_player:
+					errors.append("pending remote dice player mismatch")
+				if not _valid_int(pending_remote_face, 1, 6):
+					errors.append("pending remote dice value invalid")
+				if phase_name != "await_roll":
+					errors.append("pending remote dice outside roll phase")
+				if typeof(players) == TYPE_ARRAY and _valid_int(pending_remote_player, 0, max(0, player_count - 1)) and int(pending_remote_player) < players.size() and typeof(players[int(pending_remote_player)]) == TYPE_DICTIONARY:
+					var pending_remote_actor: Dictionary = players[int(pending_remote_player)]
+					if _inventory_movement_blocked(pending_remote_actor):
+						errors.append("pending remote dice conflicts with movement modifier")
 	var action_options: Variant = data.get("action_options", null)
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
 	if inventory_save:
-		known_actions.append_array(["buy_item", "sell_item"])
+		known_actions.append_array(["buy_item", "sell_item", "use_tool"])
 	if typeof(action_options) != TYPE_ARRAY:
 		errors.append("invalid action_options")
 	else:
+		var saved_remote_pending_value: Variant = data.get("pending_remote_dice", {})
+		var saved_remote_pending: bool = inventory_save and typeof(saved_remote_pending_value) == TYPE_DICTIONARY and not saved_remote_pending_value.is_empty()
+		var saved_current_movement_blocked: bool = false
+		if inventory_save and phase_name == "await_roll" and typeof(players) == TYPE_ARRAY and current_player >= 0 and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+			var saved_current_actor: Dictionary = players[current_player]
+			saved_current_movement_blocked = _inventory_movement_blocked(saved_current_actor)
 		for option in action_options:
 			if typeof(option) != TYPE_STRING or not known_actions.has(option):
 				errors.append("invalid action option")
 			if inventory_save and option == "buy_vehicle":
 				errors.append("inventory save cannot buy vehicle with cash")
+			if inventory_save and phase_name == "await_roll" and saved_remote_pending and ["use_card", "use_tool"].has(option):
+				errors.append("pending remote dice has unavailable action")
+			if inventory_save and phase_name == "await_roll" and saved_current_movement_blocked and option == "use_tool":
+				errors.append("movement modifier has unavailable tool action")
 		if phase_name == "await_action" and not action_options.has("end_turn"):
 			errors.append("await_action missing end_turn")
 		if phase_name in ["await_roll", "await_route"]:
 			var non_action_phase_options: Array = ["buy_stock", "sell_stock"]
 			if inventory_save and phase_name == "await_roll":
-				non_action_phase_options.append("use_card")
+				non_action_phase_options.append_array(["use_card", "use_tool"])
 			for option in action_options:
 				if not non_action_phase_options.has(option):
 					errors.append("await_roll has non-stock action")
@@ -2878,6 +3128,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 							errors.append("player %d tool quantity invalid" % index)
 							continue
 						held_inventory_tools[str(tool_id)] = int(held_inventory_tools.get(str(tool_id), 0)) + int(tool_quantity)
+				if vehicle_valid and VEHICLE_TOOL_IDS.has(str(vehicle_value)):
+					var active_tool_id: String = str(VEHICLE_TOOL_IDS[str(vehicle_value)])
+					held_inventory_tools[active_tool_id] = int(held_inventory_tools.get(active_tool_id, 0)) + 1
 			var vehicles: Variant = player.get("vehicles", null)
 			if typeof(vehicles) != TYPE_DICTIONARY:
 				errors.append("player %d vehicles invalid" % index)

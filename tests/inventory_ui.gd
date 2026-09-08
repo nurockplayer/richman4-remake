@@ -2,6 +2,7 @@ extends SceneTree
 const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
+const InventoryRules = preload("res://game/core/inventory_rules.gd")
 var checks := 0
 var failures := 0
 func _initialize() -> void:
@@ -76,6 +77,68 @@ func run() -> void:
 			var use = row.get_child(row.get_child_count() - 1)
 			unsupported_found = use is Button and use.disabled and use.text == "尚未還原"
 	expect(unsupported_found, "unsupported card remains visible with use disabled")
+	ui.cards_popup.hide()
+	ui.game_state._grant_card(0, "均貧")
+	ui.game_state._grant_card(0, "轉向")
+	ui.game_state._set_action_options(0)
+	ui._refresh_from_state()
+	ui._on_cards_pressed()
+	var poor_targets := -1
+	var reverse_targets := -1
+	for row in ui.cards_popup_list.get_children():
+		if not row is HBoxContainer or not row.get_child(0) is Label:
+			continue
+		var text: String = row.get_child(0).text
+		if text == "均貧卡" or text == "轉向卡":
+			var targets = row.get_child(1)
+			if targets is OptionButton:
+				if text == "均貧卡":
+					poor_targets = targets.item_count
+				else:
+					reverse_targets = targets.item_count
+	expect(poor_targets == 1, "equal-poor target selector excludes current player")
+	expect(reverse_targets == 2, "reverse target selector includes alive players")
+	var remote: Button = ui.cards_popup.find_child("UseTool_遙控骰子", true, false)
+	expect(remote != null, "remote control has a named use button")
+	if remote != null:
+		var values: OptionButton = remote.get_parent().find_child("RemoteValue", true, false)
+		expect(values != null and values.item_count == 6 and values.get_item_id(5) == 6, "remote control offers source-verified values one through six")
+		expect(not remote.disabled, "implemented remote control is available before rolling")
+		if values != null and not remote.disabled:
+			values.select(3)
+			remote.pressed.emit()
+			expect(int(ui.state.get("pending_remote_dice", {}).get("value", 0)) == 4, "remote use button sends selected value to core")
+			expect(ui.phase_label.text.contains("遙控 4 點"), "pending remote value is visible after closing backpack")
+			expect(not ui.cards_popup.visible, "successful remote selection closes backpack")
+			ui._on_cards_pressed()
+			var pending_use: Button = ui.cards_popup.find_child("UseTool_遙控骰子", true, false)
+			expect(pending_use == null or pending_use.disabled, "pending remote cannot be consumed twice from UI")
+	ui.cards_popup.hide()
+	expect(ui._new_game(51, 2, definition, options), "vehicle UI fixture starts")
+	var grant: Dictionary = InventoryRules.grant_tool(ui.game_state.state.inventory_supply, ui.game_state.state.players[0].tools, "汽車")
+	expect(bool(grant.get("ok", false)), "vehicle UI fixture receives car")
+	ui.game_state._set_action_options(0)
+	ui._refresh_from_state()
+	ui._on_cards_pressed()
+	var car: Button = ui.cards_popup.find_child("UseTool_汽車", true, false)
+	expect(car != null and not car.disabled, "car can be equipped from backpack")
+	if car != null and not car.disabled:
+		car.pressed.emit()
+		expect(ui.state.players[0].vehicle == "car" and int(ui.state.players[0].dice_count) == 3, "car button equips three dice")
+		ui._on_cards_pressed()
+		var dice: OptionButton = ui.cards_popup.find_child("VehicleDice", true, false)
+		expect(dice != null and dice.item_count == 3, "equipped car exposes one to three dice")
+		if dice != null:
+			dice.select(1)
+			dice.item_selected.emit(1)
+			await process_frame
+			expect(int(ui.state.players[0].dice_count) == 2, "dice selector changes equipped car roll count")
+		var walk: Button = ui.cards_popup.find_child("UnequipVehicle", true, false)
+		expect(walk != null and not walk.disabled, "equipped car can return to walking")
+		if walk != null and not walk.disabled:
+			walk.pressed.emit()
+			await process_frame
+			expect(ui.state.players[0].vehicle == "walking" and int(ui.state.players[0].tools.get("汽車", 0)) == 1, "walking button returns equipped car to backpack")
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	print("Inventory UI checks: %d, failures: %d" % [checks, failures])

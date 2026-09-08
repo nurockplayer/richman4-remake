@@ -60,6 +60,29 @@ static func _hash(value: Variant) -> bool:
 			return false
 	return true
 
+## Return the one canonical runtime classification for a source node.
+##
+## Keeping this mapping next to normalize_map means a graph save cannot change
+## the observed event into a different runtime action by editing only `kind`.
+static func classify_source_node(type_and_idx: Variant, event_code: Variant) -> Dictionary:
+	if not _integer(type_and_idx, 0, 65535) or not _integer(event_code, 0, 255):
+		return {"ok": false, "kind": ""}
+	var object_type := int(type_and_idx)
+	var event := int(event_code)
+	if object_type > 2000 and object_type < 4000:
+		return {"ok": true, "kind": "property"}
+	if event == 14:
+		return {"ok": true, "kind": "bank"}
+	if object_type >= 4000:
+		return {"ok": true, "kind": "unsupported"}
+	if event == 13:
+		return {"ok": true, "kind": "card"}
+	if event in [10, 11, 12]:
+		return {"ok": true, "kind": "points", "points": {10: 50, 11: 30, 12: 10}[event]}
+	if event > 1:
+		return {"ok": true, "kind": "unsupported"}
+	return {"ok": true, "kind": "rest"}
+
 static func normalize_map(raw: Variant) -> Dictionary:
 	if not raw is Dictionary or raw.get("schema", "") != "richman4.map/v1":
 		return _failure("原版地圖格式無效。")
@@ -111,11 +134,12 @@ static func normalize_map(raw: Variant) -> Dictionary:
 			return _failure("原版地圖格位類別無效。")
 		var object_type := int(node.type_and_idx)
 		var event_code := int(node.event_code)
+		var classification: Dictionary = classify_source_node(object_type, event_code)
 		var tile := {"index": index, "source_node_id": index + 1, "x": int(node.x), "y": int(node.y), "adjacent": adjacent,
 			"type_and_idx": object_type, "visual_index": node.get("visual_index", 0), "event_code": event_code, "source_object_id": 0,
 			"kind": "rest", "name": EVENT_NAMES.get(event_code, "未知事件 %d" % event_code), "owner": -1, "building_level": 0,
 			"cost": 0, "upgrade_cost": 0, "base_rent": 0, "rent": 0, "group": "", "tax_amount": 0}
-		if object_type > 2000 and object_type < 4000:
+		if classification.kind == "property":
 			var land_id := object_type - 2000
 			if not lands.has(land_id) or referenced_lands.has(land_id):
 				return _failure("住宅參照缺失或重複。")
@@ -125,22 +149,22 @@ static func normalize_map(raw: Variant) -> Dictionary:
 				"cost": int(land.land_price), "land_price": int(land.land_price), "house_price": int(land.house_price),
 				"upgrade_cost": int(land.house_price), "base_rent": int(land.rent_by_level[0]), "rent": int(land.rent_by_level[0]),
 				"rent_by_level": land.rent_by_level.duplicate(), "group": str(land.get("name_bytes_hex", "land:%d" % land_id))}, true)
-		elif event_code == 14:
+		elif classification.kind == "bank":
 			# Bank service is an event on company nodes in the original maps.
 			# Company ownership remains separate from passing/landing service.
 			tile.kind = "bank"
-		elif object_type >= 4000:
+		elif classification.kind == "unsupported":
 			tile.kind = "unsupported"
-			tile.name = "醫院" if object_type == 8001 else ("監獄" if object_type == 8002 else "特殊設施")
-			tile.name += "（待還原）"
-		elif event_code == 13:
+			if object_type >= 4000:
+				tile.name = "醫院" if object_type == 8001 else ("監獄" if object_type == 8002 else "特殊設施")
+				tile.name += "（待還原）"
+			else:
+				tile.name += "（待還原）"
+		elif classification.kind == "card":
 			tile.kind = "card"
-		elif event_code in [10, 11, 12]:
+		elif classification.kind == "points":
 			tile.kind = "points"
-			tile.points = {10: 50, 11: 30, 12: 10}[event_code]
-		elif event_code > 1:
-			tile.kind = "unsupported"
-			tile.name += "（待還原）"
+			tile.points = int(classification.points)
 		if start_position < 0 and adjacent.size() >= 2 and object_type < 4000:
 			start_position = index
 		board.append(tile)

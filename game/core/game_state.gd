@@ -13,12 +13,16 @@ const GRAPH_SAVE_VERSION = 2
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
+const OriginalMaps = preload("res://game/content/original_maps.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
 const START_CASH = 15000
 const START_POSITION = 0
 const MAX_PROPERTY_LEVEL = 5
+const MAX_GRAPH_STEPS = 18
+const MAX_AI_TURN_ITERATIONS = 16
+const MAX_GRAPH_POINTS = 1000000000000
 const PASS_START_BONUS = 0 # The reference manual does not support an invented bonus.
 const DAYS_PER_MONTH = 30
 const MONTHLY_DEPOSIT_RATE = 0.10
@@ -577,9 +581,18 @@ func _graph_begin_movement(player_id: int, steps: int) -> void:
 	var player: Dictionary = _player(player_id)
 	var current_node: int = int(player.get("position", -1))
 	var previous_node: int = int(player.get("previous_position", -1))
+	var requested_steps: int = max(0, steps)
+	var roll_total: int = int(state.get("last_total", 0))
+	if requested_steps > MAX_GRAPH_STEPS or requested_steps > roll_total:
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
+		state["phase"] = "await_roll"
+		_record_event("movement_invalid", {"player_id": player_id, "steps": requested_steps, "last_total": roll_total})
+		return
 	state["bank_access"] = false
 	state["bank_landing"] = false
-	state["remaining_steps"] = max(0, steps)
+	state["remaining_steps"] = requested_steps
 	state["pending_movement"] = {
 		"player_id": player_id,
 		"current_node": current_node,
@@ -592,6 +605,15 @@ func _graph_begin_movement(player_id: int, steps: int) -> void:
 func _graph_continue_movement(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty():
+		return
+	var remaining: int = int(state.get("remaining_steps", 0))
+	var roll_total: int = int(state.get("last_total", 0))
+	if remaining < 0 or remaining > MAX_GRAPH_STEPS or remaining > roll_total:
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
+		state["phase"] = "await_roll"
+		_record_event("movement_invalid", {"player_id": player_id, "steps": remaining, "last_total": roll_total})
 		return
 	while int(state.get("remaining_steps", 0)) > 0:
 		var current_node: int = int(player.get("position", -1))
@@ -645,6 +667,10 @@ func choose_route(route: int) -> Dictionary:
 	var options: Array = state.get("route_options", [])
 	if not _array_contains_int(options, route):
 		return _error("選擇的路線無效")
+	var remaining_steps: Variant = state.get("remaining_steps", null)
+	var roll_total: Variant = state.get("last_total", null)
+	if not _valid_int(remaining_steps, 1, MAX_GRAPH_STEPS) or not _valid_int(roll_total, 1, MAX_GRAPH_STEPS) or int(remaining_steps) > int(roll_total):
+		return _error("待選路線步數無效")
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or int(player.get("position", -1)) != int(pending.get("current_node", -2)):
 		return _error("待選路線與玩家位置不一致")
@@ -692,8 +718,10 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) ->
 		"points":
 			var player: Dictionary = _player(player_id)
 			var points: int = int(tile.get("points", 0))
-			player["points"] = int(player.get("points", 0)) + points
-			_record_event("points_landed" if final_landing else "points_passed", {"player_id": player_id, "tile": tile_index, "points": points})
+			var current_points: int = clampi(int(player.get("points", 0)), 0, MAX_GRAPH_POINTS)
+			var awarded_points: int = clampi(points, 0, MAX_GRAPH_POINTS - current_points)
+			player["points"] = current_points + awarded_points
+			_record_event("points_landed" if final_landing else "points_passed", {"player_id": player_id, "tile": tile_index, "points": awarded_points, "source_points": points})
 		"card":
 			if final_landing:
 				_draw_event_card(player_id)
@@ -1402,15 +1430,26 @@ func run_ai_turn() -> Dictionary:
 	if not bool(player.get("is_ai", false)):
 		return _error("目前玩家不是 AI")
 	var safety: int = 0
-	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id and safety < 16:
-		safety += 1
-		if state.get("phase", "") == "await_roll":
-			roll()
-		elif state.get("phase", "") == "await_route":
+	var route_safety: int = 0
+	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		if state.get("phase", "") == "await_route":
+			if route_safety >= MAX_GRAPH_STEPS:
+				return _result(false, "AI 路線在限制內未完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
 			var options: Array = state.get("route_options", [])
 			if options.is_empty():
-				return _error("AI 找不到可用路線")
-			choose_route(int(options[0]))
+				return _result(false, "AI 找不到可用路線", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
+			var route_result: Dictionary = choose_route(int(options[0]))
+			route_safety += 1
+			if not bool(route_result.get("ok", false)):
+				return _result(false, str(route_result.get("message", "AI 選路失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
+			continue
+		if safety >= MAX_AI_TURN_ITERATIONS:
+			break
+		safety += 1
+		if state.get("phase", "") == "await_roll":
+			var roll_result: Dictionary = roll()
+			if not bool(roll_result.get("ok", false)):
+				return _result(false, str(roll_result.get("message", "AI 擲骰失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
 		elif state.get("phase", "") == "await_action":
 			if not bool(_player(player_id).get("alive", false)):
 				_advance_to_next_alive(player_id)
@@ -1419,8 +1458,13 @@ func run_ai_turn() -> Dictionary:
 		else:
 			break
 	if state.get("phase", "") == "await_action" and int(state.get("current_player", -1)) == player_id:
-		end_turn()
-	return _result(true, "AI 回合完成", {"player_id": player_id, "iterations": safety})
+		var end_result: Dictionary = end_turn()
+		if not bool(end_result.get("ok", false)):
+			return _result(false, str(end_result.get("message", "AI 結束回合失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
+	var completed: bool = state.get("phase", "") == "game_over" or int(state.get("current_player", -1)) != player_id
+	if not completed:
+		return _result(false, "AI 回合在限制內未完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
+	return _result(true, "AI 回合完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": true})
 
 
 func _ai_action(player_id: int) -> void:
@@ -1625,6 +1669,8 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		var event_value: Variant = tile.get("event_code", null)
 		if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 			errors.append("invalid graph source tile status %d" % index)
+		else:
+			_validate_graph_source_classification(tile, index, errors)
 	var start_position: Variant = definition.get("start_position", null)
 	if not _valid_int(start_position, 0, max(0, board_array.size() - 1)):
 		errors.append("invalid graph start position")
@@ -1665,6 +1711,26 @@ static func _valid_bool(value: Variant) -> bool:
 
 static func _valid_string(value: Variant) -> bool:
 	return typeof(value) == TYPE_STRING
+
+
+static func _validate_graph_source_classification(tile: Dictionary, index: int, errors: Array) -> void:
+	var type_value: Variant = tile.get("type_and_idx", null)
+	var event_value: Variant = tile.get("event_code", null)
+	if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
+		return
+	var classification: Dictionary = OriginalMaps.classify_source_node(type_value, event_value)
+	if not bool(classification.get("ok", false)):
+		return
+	var kind: Variant = tile.get("kind", null)
+	var canonical_kind: String = str(classification.get("kind", ""))
+	if typeof(kind) != TYPE_STRING or str(kind) != canonical_kind:
+		errors.append("graph tile kind does not match source %d" % index)
+	if canonical_kind == "points":
+		var expected_points: int = int(classification.get("points", 0))
+		if not _valid_int(tile.get("points", null), expected_points, expected_points):
+			errors.append("invalid graph points value %d" % index)
+	elif tile.has("points"):
+		errors.append("non-points graph tile has points %d" % index)
 
 
 static func validate_save(data: Dictionary) -> Dictionary:
@@ -1774,14 +1840,25 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		errors.append("unsupported doubles state")
 
 	var last_roll: Variant = data.get("last_roll", null)
+	var last_roll_sum: int = 0
+	var last_roll_valid: bool = typeof(last_roll) == TYPE_ARRAY and last_roll.size() <= 3
 	if typeof(last_roll) != TYPE_ARRAY or last_roll.size() > 3:
 		errors.append("invalid last_roll")
 	else:
 		for face in last_roll:
 			if not _valid_int(face, 1, 6):
 				errors.append("invalid die face")
-	if not _valid_int(data.get("last_total", null), 0, 18):
+			else:
+				last_roll_sum += int(face)
+	var last_total_value: Variant = data.get("last_total", null)
+	var last_total_valid: bool = _valid_int(last_total_value, 0, MAX_GRAPH_STEPS)
+	if not last_total_valid:
 		errors.append("invalid last_total")
+	if graph_save and last_roll_valid and last_total_valid:
+		if last_roll.is_empty() and int(last_total_value) != 0:
+			errors.append("graph last roll is missing for total")
+		elif not last_roll.is_empty() and last_roll_sum != int(last_total_value):
+			errors.append("graph last roll total mismatch")
 	if typeof(data.get("last_event", null)) != TYPE_DICTIONARY:
 		errors.append("invalid last_event")
 	var event_log: Variant = data.get("event_log", null)
@@ -1871,6 +1948,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
+			if graph_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
+				errors.append("unowned graph property has improvements %d" % index)
 			if owner_valid and tile.get("kind", "") != "property" and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
 			if owner_valid and tile.get("kind", "") == "property" and int(owner_value) >= 0:
@@ -1906,8 +1985,12 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				var source_node_id: Variant = tile.get("source_node_id", null)
 				if not _valid_int(source_node_id, index + 1, index + 1):
 					errors.append("graph source node mismatch %d" % index)
-				if not _valid_int(tile.get("type_and_idx", null), 0, 65535) or not _valid_int(tile.get("event_code", null), 0, 255):
+				var type_value: Variant = tile.get("type_and_idx", null)
+				var event_value: Variant = tile.get("event_code", null)
+				if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
+				else:
+					_validate_graph_source_classification(tile, index, errors)
 				var tile_kind: Variant = tile.get("kind", null)
 				if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(tile_kind) != TYPE_STRING or tile_kind != "property"):
 					errors.append("housing source must remain a property %d" % index)
@@ -1950,7 +2033,6 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("graph property cost mismatch %d" % index)
 					if house_price_valid and _valid_int(tile.get("upgrade_cost", null), 0, 1000000000) and int(tile["upgrade_cost"]) != int(house_price):
 						errors.append("graph property upgrade price mismatch %d" % index)
-					var type_value: Variant = tile.get("type_and_idx", null)
 					var property_type_valid: bool = _valid_int(type_value, 2001, 3999)
 					if not property_type_valid:
 						errors.append("invalid graph property source type %d" % index)
@@ -2109,7 +2191,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		var remaining_steps_value: Variant = data.get("remaining_steps", null)
 		if typeof(route_options) != TYPE_ARRAY:
 			errors.append("invalid graph route options")
-		if not _valid_int(remaining_steps_value, 0, 1000000000):
+		if not _valid_int(remaining_steps_value, 0, MAX_GRAPH_STEPS):
 			errors.append("invalid graph remaining steps")
 		var pending_value: Variant = data.get("pending_movement", null)
 		if typeof(pending_value) != TYPE_DICTIONARY:
@@ -2118,8 +2200,17 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if phase_name == "await_route":
 			if typeof(route_options) != TYPE_ARRAY or route_options.is_empty():
 				errors.append("route phase missing route options")
-			if not _valid_int(remaining_steps_value, 1, 1000000000):
+			if not _valid_int(remaining_steps_value, 1, MAX_GRAPH_STEPS):
 				errors.append("route phase has no remaining steps")
+			if _valid_int(remaining_steps_value, 0, MAX_GRAPH_STEPS) and last_total_valid and int(remaining_steps_value) > int(last_total_value):
+				errors.append("route phase exceeds pending roll")
+			if not last_roll_valid or last_roll.is_empty():
+				errors.append("route phase missing pending roll")
+			if last_roll_valid and typeof(players) == TYPE_ARRAY and current_player >= 0 and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+				var pending_actor: Dictionary = players[current_player]
+				var pending_vehicle: Variant = pending_actor.get("vehicle", null)
+				if _valid_string(pending_vehicle) and VEHICLE_DICE.has(pending_vehicle) and last_roll.size() > int(VEHICLE_DICE[pending_vehicle]):
+					errors.append("route phase exceeds vehicle dice limit")
 			if pending.is_empty():
 				errors.append("route phase missing pending movement")
 			else:
@@ -2167,7 +2258,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		else:
 			if typeof(route_options) == TYPE_ARRAY and not route_options.is_empty():
 				errors.append("non-route phase has route options")
-			if _valid_int(remaining_steps_value, 0, 1000000000) and int(remaining_steps_value) != 0:
+			if _valid_int(remaining_steps_value, 0, MAX_GRAPH_STEPS) and int(remaining_steps_value) != 0:
 				errors.append("non-route phase has remaining steps")
 			if typeof(pending_value) == TYPE_DICTIONARY and not pending.is_empty():
 				errors.append("non-route phase has pending movement")

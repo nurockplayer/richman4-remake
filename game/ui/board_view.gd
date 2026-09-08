@@ -57,9 +57,11 @@ func set_game_data(next_board: Array, next_players: Array, current_index: int, d
 	current_player_index = current_index
 	route_options = next_route_options.duplicate(true)
 	if not definition.is_empty():
+		_reset_for_geometry_change(definition)
 		map_definition = definition.duplicate(true)
 		preview_mode = false
 	elif _has_coordinate_board(next_board):
+		_reset_for_geometry_change({"board": next_board})
 		map_definition = {"board": next_board.duplicate(true)}
 		preview_mode = false
 	if selected_index >= _geometry_board().size():
@@ -87,8 +89,21 @@ func _focus_moving_player() -> void:
 	map_pan = -(point - bounds.get_center()) * _map_scale() * map_zoom
 	_layout_size = Vector2.ZERO
 
+func _reset_for_geometry_change(definition: Dictionary) -> void:
+	if _geometry_signature(map_definition) != _geometry_signature(definition):
+		_focused_player_position = Vector2i(-1, -1)
+		reset_view()
+
+func _geometry_signature(definition: Dictionary) -> Array:
+	var result: Array = [definition.get("id", ""), definition.get("source", {})]
+	for tile in definition.get("board", []):
+		if tile is Dictionary:
+			result.append([tile.get("x"), tile.get("y"), tile.get("adjacent", [])])
+	return result
+
 
 func set_map_definition(definition: Dictionary, is_preview := true) -> void:
+	_reset_for_geometry_change(definition)
 	map_definition = definition.duplicate(true)
 	preview_mode = is_preview
 	var geometry: Variant = map_definition.get("board", [])
@@ -106,6 +121,7 @@ func set_preview_definition(definition: Dictionary) -> void:
 	set_map_definition(definition, true)
 
 func clear_map_definition() -> void:
+	reset_view()
 	map_definition = {}
 	_focused_player_position = Vector2i(-1, -1)
 	preview_mode = false

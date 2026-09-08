@@ -1531,6 +1531,7 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		errors.append("invalid graph board")
 	var board_array: Array = board if typeof(board) == TYPE_ARRAY else []
 	var property_count := 0
+	var source_properties: Dictionary = {}
 	for index in range(board_array.size()):
 		var tile_value: Variant = board_array[index]
 		if typeof(tile_value) != TYPE_DICTIONARY:
@@ -1545,6 +1546,8 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 			if not _valid_int(tile.get(coordinate, null), -1000000, 1000000):
 				errors.append("invalid graph tile coordinate %d" % index)
 		var kind: Variant = tile.get("kind", null)
+		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
+			errors.append("housing source must remain a property %d" % index)
 		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event"]
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
 			errors.append("invalid graph tile kind %d" % index)
@@ -1583,6 +1586,10 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 			var source_object_id: Variant = tile.get("source_object_id", null)
 			if not _valid_int(source_object_id, 1, 1999):
 				errors.append("invalid graph property identity %d" % index)
+			elif source_properties.has(int(source_object_id)):
+				errors.append("duplicate graph property identity %d" % index)
+			else:
+				source_properties[int(source_object_id)] = true
 			var land_price: Variant = tile.get("land_price", null)
 			var house_price: Variant = tile.get("house_price", null)
 			if not _valid_int(land_price, 0, 1000000) or not _valid_int(house_price, 0, 1000000):
@@ -1838,6 +1845,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("invalid market trend rate")
 
 	var graph_reachable: Dictionary = {}
+	var source_properties: Dictionary = {}
 	var property_owners: Dictionary = {}
 	if typeof(board) == TYPE_ARRAY:
 		for index in range(board.size()):
@@ -1901,11 +1909,17 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if not _valid_int(tile.get("type_and_idx", null), 0, 65535) or not _valid_int(tile.get("event_code", null), 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
 				var tile_kind: Variant = tile.get("kind", null)
+				if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(tile_kind) != TYPE_STRING or tile_kind != "property"):
+					errors.append("housing source must remain a property %d" % index)
 				if typeof(tile_kind) == TYPE_STRING and tile_kind == "property":
 					var source_object_id: Variant = tile.get("source_object_id", null)
 					var source_object_valid: bool = _valid_int(source_object_id, 1, 1999)
 					if not source_object_valid:
 						errors.append("invalid graph property identity %d" % index)
+					elif source_properties.has(int(source_object_id)):
+						errors.append("duplicate graph property identity %d" % index)
+					else:
+						source_properties[int(source_object_id)] = true
 					var land_price: Variant = tile.get("land_price", null)
 					var house_price: Variant = tile.get("house_price", null)
 					var land_price_valid: bool = _valid_int(land_price, 0, 1000000)

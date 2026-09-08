@@ -126,6 +126,13 @@ func _test_graph_constructor_and_legacy_compatibility() -> void:
 	var invalid_level: Dictionary = _definition.duplicate(true)
 	invalid_level["board"][0]["building_level"] = 6
 	_expect(_new_game_from_definition(invalid_level) == null, "non-property cannot start with invalid level")
+	var disguised_housing: Dictionary = _definition.duplicate(true)
+	disguised_housing["board"][2]["kind"] = "rest"
+	_expect(_new_game_from_definition(disguised_housing) == null, "housing cannot be admitted as inert non-property")
+	var duplicate_housing: Dictionary = _definition.duplicate(true)
+	duplicate_housing["board"][3]["source_object_id"] = 1
+	duplicate_housing["board"][3]["type_and_idx"] = 2001
+	_expect(_new_game_from_definition(duplicate_housing) == null, "one source house cannot occupy two purchase records")
 	var bad_identity: Dictionary = _definition.duplicate(true)
 	bad_identity["source"]["payload_sha256"] = ""
 	_expect(_new_game_from_definition(bad_identity) == null, "missing source hash rejects graph game")
@@ -272,6 +279,13 @@ func _test_pending_route_save_load_and_validation() -> void:
 		var first_roll: Dictionary = game.roll()
 		var second_roll: Dictionary = restored.roll()
 		_expect_equal(second_roll.get("dice", []), first_roll.get("dice", []), "restored RNG continues after route replay")
+	var disguised_housing: Dictionary = saved.duplicate(true)
+	disguised_housing["board"][2]["kind"] = "rest"
+	_expect(not bool(GameState.validate_save(disguised_housing).get("ok", false)), "save housing cannot masquerade as a non-property")
+	var duplicate_housing: Dictionary = saved.duplicate(true)
+	duplicate_housing["board"][3]["source_object_id"] = 1
+	duplicate_housing["board"][3]["type_and_idx"] = 2001
+	_expect(not bool(GameState.validate_save(duplicate_housing).get("ok", false)), "duplicate source house in save is rejected")
 	var bad_identity: Dictionary = saved.duplicate(true)
 	bad_identity["map_id"] = "Game:tampered"
 	_expect(not bool(GameState.validate_save(bad_identity).get("ok", false)), "tampered map identity is rejected")

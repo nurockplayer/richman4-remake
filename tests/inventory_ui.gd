@@ -147,6 +147,27 @@ func run() -> void:
 			walk.pressed.emit()
 			await process_frame
 			expect(ui.state.players[0].vehicle == "walking" and int(ui.state.players[0].tools.get("汽車", 0)) == 1, "walking button returns equipped car to backpack")
+	ui.cards_popup.hide()
+	expect(ui._new_game(52, 2, definition, options), "equipped capacity shop fixture starts")
+	InventoryRules.grant_tool(ui.game_state.state.inventory_supply, ui.game_state.state.players[0].tools, "汽車")
+	expect(bool(ui.game_state.choose_action("use_tool", {"tool_id": "汽車"}).get("ok", false)), "capacity fixture equips car")
+	ui.game_state.state.players[0].position = 1
+	ui.game_state.state.players[0].points = 10000
+	ui.game_state.state.phase = "await_action"
+	ui.game_state._set_action_options(0)
+	ui._refresh_from_state()
+	ui.shop_button.pressed.emit()
+	var buy_car: Button = ui.shop_popup.find_child("Buy_汽車", true, false)
+	var sell_car: Button = ui.shop_popup.find_child("Sell_汽車", true, false)
+	expect(buy_car != null and sell_car != null, "shop exposes vehicle transaction controls")
+	if buy_car != null and sell_car != null:
+		var count: SpinBox = buy_car.get_parent().get_child(1)
+		count.value = 9
+		expect(buy_car.disabled, "equipped car prevents buying nine more cars")
+		count.value = 8
+		expect(not buy_car.disabled, "equipped car permits eight additional cars")
+		count.value = 1
+		expect(sell_car.disabled, "equipped car cannot be sold as a backpack unit")
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	print("Inventory UI checks: %d, failures: %d" % [checks, failures])

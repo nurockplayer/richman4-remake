@@ -2133,6 +2133,8 @@ func _update_shop_popup() -> void:
 		var description := str(item.get("name", item_id))
 		if not bool(item.get("implemented", false)):
 			description += " · 效果尚未還原"
+		if int(item.get("equipped", 0)) > 0:
+			description += " · 裝備中 %d" % int(item.get("equipped", 0))
 		var label := _make_label(description + "\n持有 %d · 庫存 %d" % [int(item.get("owned", 0)), int(item.get("stock", 0))], 11, TEXT_MAIN)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2163,7 +2165,7 @@ func _update_shop_popup() -> void:
 			var price: int = InventoryRules.quote_buy(kind, item_id, count)
 			buy.text = "買入 %d 點" % price
 			sell.text = "出售 %d 點" % InventoryRules.quote_sale(kind, item_id, count)
-			buy.disabled = not _is_human_turn() or int(_current_player().get("points", 0)) < price or int(item.get("stock", 0)) < count or (kind == "tool" and int(item.get("owned", 0)) + count > 9) or (kind == "card" and _as_array(_current_player().get("cards", [])).size() >= 15)
+			buy.disabled = not _is_human_turn() or int(_current_player().get("points", 0)) < price or int(item.get("stock", 0)) < count or (kind == "tool" and int(item.get("owned", 0)) + int(item.get("equipped", 0)) + count > 9) or (kind == "card" and _as_array(_current_player().get("cards", [])).size() >= 15)
 			sell.disabled = not _is_human_turn() or int(item.get("owned", 0)) < count
 		quantity.value_changed.connect(update_quote)
 		update_quote.call()

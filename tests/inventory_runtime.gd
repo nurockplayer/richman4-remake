@@ -13,6 +13,7 @@ func _initialize() -> void:
 	_test_inventory_setup_and_round_trip()
 	_test_inventory_validation_and_conservation()
 	_test_shop_landing_and_atomic_trades()
+	_test_equipped_vehicle_tool_capacity()
 	_test_inventory_card_lifecycle()
 	_test_inventory_ai_skips_unsupported_cards()
 	_test_inventory_remote_turn_guards()
@@ -195,6 +196,55 @@ func _test_shop_landing_and_atomic_trades() -> void:
 		pass_game.state["players"][0]["position"] = 0
 		pass_game._set_action_options(0)
 		_expect(not pass_game.is_shop_available(), "shop is unavailable away from landing")
+
+
+func _test_equipped_vehicle_tool_capacity() -> void:
+	var game: Object = _new_graph_inventory()
+	_expect(game != null, "equipped vehicle capacity fixture creates a graph game")
+	if game == null:
+		return
+	var player: Dictionary = game.state["players"][0]
+	var supply: Dictionary = game.state["inventory_supply"]
+	_expect(bool(Inventory.grant_tool(supply, player["tools"], "汽車").get("ok", false)), "capacity fixture stages a car")
+	game.state["phase"] = "await_roll"
+	game.state["current_player"] = 0
+	game._set_action_options(0)
+	var equip: Dictionary = game.choose_action("use_tool", {"tool_id": "汽車"})
+	_expect(bool(equip.get("ok", false)), "capacity fixture equips the car")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 0, "equipped car is removed from the backpack")
+	var equipped_item: Dictionary = {}
+	for item in game.shop_items():
+		if item.get("item_kind", "") == "tool" and item.get("item_id", "") == "汽車":
+			equipped_item = item
+			break
+	_expect_equal(int(equipped_item.get("equipped", 0)), 1, "shop reports the equipped car separately")
+
+	player["position"] = 1
+	player["points"] = 10000
+	game.state["phase"] = "await_action"
+	game._set_action_options(0)
+	var buy_nine: Dictionary = game.choose_action("buy_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 9})
+	_expect(not bool(buy_nine.get("ok", false)), "equipped car rejects nine additional tools")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 0, "rejected equipped-cap purchase leaves backpack unchanged")
+	game._set_action_options(0)
+	var buy_eight: Dictionary = game.choose_action("buy_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 8})
+	_expect(bool(buy_eight.get("ok", false)), "equipped car permits eight additional tools")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 8, "eight purchased tools enter the backpack")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "equipped car plus eight tools remains save-valid")
+
+	game.state["phase"] = "await_roll"
+	game._set_action_options(0)
+	var unequip: Dictionary = game.set_vehicle("walking")
+	_expect(bool(unequip.get("ok", false)), "equipped car can be unequipped at the nine-tool boundary")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 9, "unequipping returns the car to a backpack of nine")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "unequipped nine-tool backpack remains save-valid")
+
+	var malformed: Dictionary = game.to_dict()
+	malformed["players"][0]["vehicle"] = "car"
+	malformed["players"][0]["vehicles"]["car"] = true
+	malformed["players"][0]["tools"]["汽車"] = 9
+	malformed["inventory_supply"]["tools"]["汽車"] = 0
+	_expect(not bool(GameState.validate_save(malformed).get("ok", false)), "active car plus nine backpack tools is rejected by save validation")
 
 
 func _test_inventory_card_lifecycle() -> void:

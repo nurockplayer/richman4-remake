@@ -1,4 +1,6 @@
 extends SceneTree
+const Game = preload("res://game/core/game_state.gd")
+const Status = preload("res://tests/fixtures/status_fixture.gd")
 const Maps = preload("res://game/content/original_maps.gd")
 const Base = preload("res://tests/fixtures/original_map_fixture.gd")
 const Companies = preload("res://tests/fixtures/company_fixture.gd")
@@ -34,5 +36,16 @@ func _initialize() -> void:
 	legacy.erase("stock_rows")
 	result=Maps.normalize_map(legacy,true)
 	expect(result.get("ok",false) and not result.definition.get("supports_original_statuses",false),"legacy catalog cannot claim status capability")
+	var options := {"original_facilities":true,"original_gods":true,"original_companies":true,"original_statuses":true,"start_date":{"year":1998,"month":1,"day":1}}
+	expect(Game.new_game_on_board(42,4,Status.definition(),options)!=null,"complete direct status definition starts")
+	for marker in ["yes",1,[],{}]:
+		var invalid := Status.definition()
+		invalid.supports_original_statuses=marker
+		expect(not Game.validate_board_definition(invalid,true).get("ok",false),"definition rejects malformed status marker")
+		expect(Game.new_game_on_board(42,4,invalid,options)==null,"constructor rejects non-boolean status capability")
+	for node in [0,4]:
+		var invalid := Status.definition()
+		invalid.board[node].type_and_idx=8003
+		expect(Game.new_game_on_board(42,4,invalid,options)==null,"constructor rejects claimed status capability missing anchor")
 	print("Status loader checks: %d, failures: %d"%[checks,failures])
 	quit(1 if failures else 0)

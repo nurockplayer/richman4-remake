@@ -32,13 +32,14 @@ func reject(data: Dictionary, message: String) -> void:
 
 
 func _initialize() -> void:
+	_test_facility_god_overlap()
+	_test_facility_roadblock_overlap()
 	var game := make_status_game()
 	expect(game != null, "status save fixture starts")
 	if game == null:
 		_finish()
 		return
-	# Keep the save fixture free of source actor occupancy conflicts while the
-	# status schema is exercised; actor synchronization is covered in flow.
+	# Isolate schema mutations; facility god coexistence is covered separately.
 	game.state["god_objects"] = []
 	var player: Dictionary = game.state.players[0]
 	player["hospital_days"] = 3
@@ -140,3 +141,67 @@ func _initialize() -> void:
 func _finish() -> void:
 	print("Status save checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
+
+
+func _test_facility_god_overlap() -> void:
+	for kind in ["hospital", "prison"]:
+		var game := make_status_game()
+		var node: int = game._status_node_index(kind)
+		game.state.god_objects = [{"id":1,"node":node,"owner":-1,"days":0}]
+		game.state.players[0].position=2
+		var admitted: Dictionary = game._admit_player_status(0,kind,1)
+		expect(admitted.get("ok",false),kind+" admission onto unbound god succeeds")
+		expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" admission onto unbound god saves")
+		expect(Game.from_dict(JSON.parse_string(game.to_json()))!=null,kind+" overlapping god reloads")
+		game.state.players[0][kind+"_days"]=128
+		game.state.players[0].stay_next=1
+		game.state.current_player=0
+		game.state.phase="await_roll"
+		game.state.action_options=[]
+		var released: Dictionary=game.roll()
+		expect(released.get("ok",false) and game.state.players[0][kind+"_days"]==0,kind+" terminal marker releases")
+		expect(game.state.players[0].position==node,kind+" stay_next leaves released player at facility")
+		expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" released overlap saves")
+		expect(Game.from_dict(JSON.parse_string(game.to_json()))!=null,kind+" released overlap reloads")
+		game.state.players[0].position=2
+		game.state.god_objects[0].node=2
+		reject(game.to_dict(),kind+" ordinary road overlap remains invalid")
+
+	for company_mode in [false,true]:
+		var options := {"original_facilities":true,"original_gods":true,"start_date":{"year":1998,"month":1,"day":1}}
+		if company_mode: options["original_companies"]=true
+		var legacy: Object=Game.new_game_on_board(42,4,StatusFixture.definition(),options)
+		expect(legacy!=null,"legacy overlap fixture starts")
+		if legacy==null: continue
+		legacy.state.god_objects=[{"id":1,"node":0,"owner":-1,"days":0}]
+		legacy.state.players[0].position=0
+		reject(legacy.to_dict(),"legacy facility overlap remains invalid")
+		legacy.state.god_objects=[]
+		legacy.state.roadblocks={"0":0}
+		reject(legacy.to_dict(),"legacy roadblock facility overlap remains invalid")
+
+
+func _test_facility_roadblock_overlap() -> void:
+	for kind in ["hospital", "prison"]:
+		var game := make_status_game()
+		var node: int=game._status_node_index(kind)
+		game.state.god_objects=[]
+		game.state.players[0].position=2
+		var placed: Dictionary=game.choose_action("use_tool",{"tool_id":"路障","tile_id":node})
+		expect(placed.get("ok",false),kind+" vacant anchor permits roadblock placement")
+		expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" placed roadblock save is valid")
+		var admitted: Dictionary=game._admit_player_status(0,kind,1)
+		expect(admitted.get("ok",false),kind+" admission onto roadblock succeeds")
+		expect(game.state.roadblocks.has(str(node)),kind+" teleport preserves roadblock")
+		expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" detained roadblock overlap saves")
+		expect(Game.from_dict(JSON.parse_string(game.to_json()))!=null,kind+" detained roadblock overlap reloads")
+		game.state.players[0][kind+"_days"]=128
+		game.state.players[0].stay_next=1
+		var released: Dictionary=game.roll()
+		expect(released.get("ok",false) and game.state.players[0][kind+"_days"]==0,kind+" roadblock overlap releases")
+		expect(game.state.players[0].position==node and game.state.roadblocks.has(str(node)),kind+" release/stay preserves player and roadblock")
+		expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" released roadblock overlap saves")
+		expect(Game.from_dict(JSON.parse_string(game.to_json()))!=null,kind+" released roadblock overlap reloads")
+		game.state.roadblocks={"2":0}
+		game.state.players[0].position=2
+		reject(game.to_dict(),kind+" ordinary roadblock overlap remains invalid")

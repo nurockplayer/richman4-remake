@@ -18,10 +18,16 @@ func _initialize() -> void:
 	var map_count:=0
 	for definition in catalog.maps:
 		var id:=str(definition.id)
-		var game:=Game.new_game_on_board(42727,4,definition,{"original_facilities":true,"original_gods":true,"original_companies":true,"original_statuses":true,"day_limit":30,"start_date":{"year":1998,"month":1,"day":1}})
+		var seed_value:=6 if id=="Game:1" else 42727
+		var game:=Game.new_game_on_board(seed_value,4,definition,{"original_facilities":true,"original_gods":true,"original_companies":true,"original_statuses":true,"day_limit":30,"start_date":{"year":1998,"month":1,"day":1}})
 		if game==null:
 			fail(id+" cannot start status game");continue
 		map_count+=1
+		if id=="Game:1":
+			var occupied:=false
+			for god in game.state.god_objects:
+				if god.owner==-1 and god.node==game._status_node_index("hospital"): occupied=true
+			if not occupied: fail("Game:1 seed 6 must exercise admission onto an unbound god")
 		for player_id in range(4): game.set_player_ai(player_id,true)
 		game._admit_player_status(2,"hospital",3)
 		game._admit_player_status(3,"prison",2)

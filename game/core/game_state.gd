@@ -171,7 +171,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if bool(options.get("original_companies", false)) and not bool(definition.get("supports_original_companies", false)):
 		return null
-	if bool(options.get("original_statuses", false)) and not bool(definition.get("supports_original_statuses", false)):
+	if bool(options.get("original_statuses", false)) and (typeof(definition.get("supports_original_statuses")) != TYPE_BOOL or not definition.get("supports_original_statuses", false)):
 		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
@@ -5126,6 +5126,13 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 			errors.append("invalid original facilities marker")
 		else:
 			definition_facilities = bool(definition.get("original_facilities"))
+	if definition.has("supports_original_statuses"):
+		if typeof(definition.get("supports_original_statuses")) != TYPE_BOOL:
+			errors.append("invalid original statuses capability")
+		elif definition.get("supports_original_statuses", false):
+			for status_kind in ["hospital", "prison"]:
+				if _status_node_index_in_board(definition.get("board", null), status_kind) < 0:
+					errors.append("status-capable map lacks " + status_kind)
 	var facility_mode: bool = original_facilities or definition_facilities
 	if definition.get("schema", "") != RUNTIME_MAP_SCHEMA:
 		errors.append("unsupported map schema")
@@ -6050,7 +6057,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("roadblock target is not a road")
 				if not graph_reachable.has(roadblock_index):
 					errors.append("roadblock target is unreachable")
-				if typeof(players) == TYPE_ARRAY:
+				# Status teleport/release does not collide with or consume road objects.
+				var status_anchor_overlap: bool = status_save and roadblock_index in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
+				if typeof(players) == TYPE_ARRAY and not status_anchor_overlap:
 					for roadblock_player in players:
 						if typeof(roadblock_player) == TYPE_DICTIONARY and _valid_bool(roadblock_player.get("alive", null)) and bool(roadblock_player.get("alive", false)) and _valid_int(roadblock_player.get("position", null), 0, graph_board_size_for_roadblocks - 1) and int(roadblock_player.get("position")) == roadblock_index:
 							errors.append("roadblock target is occupied")
@@ -6377,8 +6386,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if typeof(board[int(god_node_value)]) != TYPE_DICTIONARY or not OriginalGods.source_tile_eligible(board[int(god_node_value)]):
 							errors.append("unattached god %d node is not eligible" % god_id)
 					if typeof(players) == TYPE_ARRAY and _valid_int(god_node_value, 0, god_board_limit):
+						# Admission/release preserves unbound gods at source status anchors.
+						# Released players may remain there with a zero counter (stay_next).
+						var status_anchor_overlap: bool = status_save and int(god_node_value) in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
 						for god_player in players:
-							if typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
+							if not status_anchor_overlap and typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
 								errors.append("unattached god %d is on player" % god_id)
 			if typeof(players) == TYPE_ARRAY:
 				var god_claimed_by_player: Dictionary = {}

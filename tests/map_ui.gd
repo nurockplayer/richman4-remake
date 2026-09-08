@@ -4,6 +4,7 @@ const Maps = preload("res://game/content/original_maps.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 const MainScene = preload("res://game/main.tscn")
 const BoardView = preload("res://game/ui/board_view.gd")
+const GameState = preload("res://game/core/game_state.gd")
 
 var checks := 0
 var failures := 0
@@ -61,6 +62,7 @@ func _run() -> void:
 	_test_catalog_selection_and_map8(ui, Fixture.make())
 	_test_route_controls_and_ai_guard(ui, definition)
 	_test_saved_map_identity(ui, definition)
+	_test_v3_classic_map_fallback(ui, definition)
 	_test_invalid_seed_preserves_game(ui)
 	ui.queue_free()
 	await create_timer(0.15).timeout
@@ -271,6 +273,27 @@ func _test_saved_map_identity(ui: Control, definition: Dictionary) -> void:
 	ui._adopt_map_from_snapshot(legacy_snapshot)
 	_expect(ui._active_map_definition.id == "test:classic40", "identity-free v1 save clears original-map identity")
 	_expect(ui._active_map_definition.board == legacy_snapshot.board, "identity-free v1 save restores actual legacy geometry")
+
+
+func _test_v3_classic_map_fallback(ui: Control, definition: Dictionary) -> void:
+	_expect(ui._new_game(37, 2, definition), "graph game is active before loading a classic v3 save")
+	_expect(ui.board_view.board_mode() == "original", "graph game renders original map geometry before classic load")
+	var classic: Object = GameState.new_game(41, 2, {"start_date": {"year": 1998, "month": 1, "day": 1}})
+	_expect(classic != null, "classic v3 save fixture starts")
+	if classic == null:
+		return
+	var classic_snapshot: Dictionary = classic.get_snapshot()
+	_expect(int(classic_snapshot.get("version", -1)) == 3 and not classic_snapshot.has("board_mode"), "classic fixture is a non-graph v3 save")
+	ui.game_state = GameState.from_dict(classic_snapshot)
+	ui._refresh_from_state()
+	_expect(str(ui._active_map_definition.get("id", "")) == "test:classic40", "classic v3 load adopts the fallback map identity")
+	_expect(ui.board_view.board_mode() == "legacy", "classic v3 load restores legacy board geometry in the HUD")
+	_expect(str(ui.map_identity_label.text).contains("測試棋盤"), "classic v3 load updates the HUD map label")
+	ui._restart_game()
+	_expect(int(ui.state.get("version", -1)) == 3 and not ui.state.has("board_mode"), "restart from classic v3 save uses the fallback constructor")
+	_expect(str(ui._active_map_definition.get("id", "")) == "test:classic40", "restart from classic v3 save keeps the fallback map")
+	_expect(ui.board_view.board_mode() == "legacy", "restart from classic v3 save keeps legacy HUD geometry")
+
 
 func _test_invalid_seed_preserves_game(ui: Control) -> void:
 	ui._new_game(17, 2, ui._selected_map_definition)

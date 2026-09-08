@@ -8,9 +8,11 @@ Reimplement **Richman 4 itself** faithfully for the owner's private personal pla
 
 ## Operating model
 
-- Astra Medium leads; delegate bounded implementation to Luna when the environment actually supports it. Verify model routing rather than trusting role names. Do not overwrite global agent configuration or silently switch billing paths.
+- Astra Medium leads. Luna is the default implementation sub-agent. Sol is available for bounded independent review or difficult technical investigation when the risk justifies it; Astra remains the final decision-maker. Use the globally configured sub-agents rather than redefining their model configuration in this repository.
+- Do not send every small change through Sol. Prefer Sol for core architecture, simulation/state model, deterministic RNG/replay, save/load, AI, complex rule resolution, major refactors, difficult bugs, and playable-milestone reviews.
+- Verify the actual delegated model when practical rather than trusting role names. Do not overwrite global agent configuration or silently switch billing paths.
 - Work through actionable issues and scoped PRs. Define acceptance independently of implementation, test, review, fix and merge autonomously within repository permissions. Do not wait for routine human approval. Never force-push or bypass protections.
-- Default to one implementation worker. Isolate ownership before parallel writing. Use a fresh independent review session for high-risk changes; do not mislabel self-review.
+- Default to one implementation worker. Isolate ownership before parallel writing. A Sol review should be independent of the implementation session; do not mislabel self-review.
 - Keep evidence-backed fidelity differences explicit. Missing original assets may delay audiovisual fidelity, not unrelated implementation. Keep original assets, derived asset caches and secrets out of version control and remote uploads.
 - Update the canonical `agent-handoff:v1` comment on #1 as described there. Inspect any existing local hook contract before choosing its writer or schema. Persist exact HEAD, active work, verification, gaps and next action before ending a run.
 

@@ -22,6 +22,16 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
 
     def visit(value):
         if isinstance(value, dict):
+            if "frames" in value:
+                if not isinstance(value["frames"], list):
+                    raise ValueError("invalid sprite frames")
+                for frame in value["frames"]:
+                    logical = frame.get("logical") if isinstance(frame, dict) else None
+                    if not isinstance(logical, dict) or any(
+                        type(logical.get(key)) is not int or not (1 if key in ("width", "height") else -65535) <= logical[key] <= 65535
+                        for key in ("width", "height", "anchor_x", "anchor_y")
+                    ):
+                        raise ValueError("invalid sprite logical bounds")
             if "path" in value:
                 relative = value["path"]
                 if (not isinstance(relative, str) or not relative.startswith("images/")
@@ -36,8 +46,10 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
                 if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
                     raise ValueError(f"invalid scene PNG: {relative}")
                 width, height = struct.unpack_from(">II", data, 16)
-                if not (0 < width <= 4096 and 0 < height <= 4096):
+                if not (0 < width <= 16384 and 0 < height <= 16384):
                     raise ValueError("scene PNG dimensions out of range")
+                if (width, height) != (value.get("width"), value.get("height")):
+                    raise ValueError("scene PNG dimensions mismatch")
                 paths.add(Path(relative))
                 dimensions[relative] = (width, height)
             for child in value.values():
@@ -48,10 +60,12 @@ def validate(path: Path) -> tuple[dict, list[Path]]:
 
     visit(manifest)
     for scene in manifest["maps"]:
-        if scene.get("width") != 2304 or scene.get("height") != 2304:
-            raise ValueError("unsupported scene dimensions")
-        if dimensions.get(scene["image"]["path"]) != (2304, 2304):
-            raise ValueError("background PNG dimensions mismatch")
+        rect = scene.get("world_rect")
+        if not isinstance(rect, dict) or any(
+            type(rect.get(key)) is not int or not (1 if key in ("width", "height") else -65535) <= rect[key] <= 65535
+            for key in ("x", "y", "width", "height")
+        ):
+            raise ValueError("invalid scene world rectangle")
         if Path(scene["image"]["path"]) not in paths:
             raise ValueError("missing scene background")
     return manifest, sorted(paths)

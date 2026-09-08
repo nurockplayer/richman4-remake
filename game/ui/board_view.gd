@@ -47,6 +47,7 @@ var _layout_size := Vector2.ZERO
 
 func _ready() -> void:
 	clip_contents = true
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process_input(true)
 	queue_redraw()
@@ -257,10 +258,9 @@ func _draw_original_board() -> void:
 	_draw_style_box(frame, Color("#11283a"), Color("#36546b"), 14.0, 1.0)
 	_scene = visuals.scene_for(map_definition)
 	_background = visuals.texture(_scene.get("image"))
-	if _background != null and _background.get_size() != Vector2(2304, 2304):
-		_background = null
 	if _background != null:
-		draw_texture_rect(_background, Rect2(_map_to_screen(Vector2.ZERO), Vector2(2304, 2304) * _map_scale() * map_zoom), false)
+		var bounds: Rect2 = visuals.world_rect(_scene)
+		draw_texture_rect(_background, Rect2(_map_to_screen(bounds.position), bounds.size * _map_scale() * map_zoom), false)
 	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
 	_draw_text("滾輪縮放 · 中鍵／右鍵平移", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
 	for index in range(geometry.size()):
@@ -623,8 +623,7 @@ func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bo
 	var sprite: Texture2D = visuals.texture(frame)
 	if sprite == null:
 		return false
-	var anchor := Vector2(float(frame.get("x", 0)), float(frame.get("y", 0)))
-	draw_texture_rect(sprite, Rect2(center - anchor * scale_factor, sprite.get_size() * scale_factor), false)
+	draw_texture_rect(sprite, visuals.sprite_rect(frame, center, scale_factor), false)
 	return true
 
 func _draw_original_houses() -> void:

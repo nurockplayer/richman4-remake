@@ -40,3 +40,15 @@ SPR 的 x/y 為 anchor，繪製左上角從世界位置減去 anchor。
 +0x1b 為方向、+0x20 為 sprite ID。Game資源為 ID+26，資料片為 ID+38。
 已直接檢查兩個原作執行檔的 0x407b39／0x407b8b 與 0x407f01／0x407f52 加法，
 並實看 Game ID61→resource87 的醫院圖。圖層依螢幕 y 排序，讓前方建物遮住後方角色。
+
+## 呈現座標與圖片解析度
+
+manifest 的 `world_rect` 是 GND 圖塊格式推導的地圖世界範圍，不是 UI 或螢幕的固定解析度。
+每張 PNG 的 `width`／`height` 僅描述與驗證該張 texture 的像素；sprite 另有 `logical`
+呈現尺寸與 `anchor_x`／`anchor_y`。初次匯入採原作 SPR 座標與 GND 圖塊尺度；後續替換
+2×／4× 圖像只更新像素尺寸、路徑與 hash，保留 logical／world_rect 即可。
+路網、hitbox、camera 與存檔完全不讀 texture 尺寸。尚未宣稱原版 canonical UI logical resolution。
+
+Board 明確使用 `TEXTURE_FILTER_NEAREST`，保留原圖像素邊界。合成測試用 4／8／16 像素
+背景與住宅／人物 texture，驗證相同 logical 矩形、anchor、鏡頭與選路命中位置；包裝驗證亦接受
+同一 world_rect 的不同像素尺寸。像素上限 16384 是載入資源限制，不是遊戲幾何。

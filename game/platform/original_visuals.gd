@@ -29,7 +29,7 @@ func scene_for(definition: Dictionary) -> Dictionary:
 	var identity := "%s:%d" % [source.get("edition", ""), int(source.get("map_number", 0))]
 	for entry in manifest.get("maps", []):
 		if entry is Dictionary and entry.get("id") == identity and entry.get("source_file_sha256") == source.get("source_file_sha256") and entry.get("graph_payload_sha256") == source.get("payload_sha256"):
-			if entry.get("width") == 2304 and entry.get("height") == 2304 and entry.get("lands") is Array and entry.get("house_sprites") is Array and entry.get("scenery", []) is Array and entry.get("scenery_sprites", []) is Array:
+			if world_rect(entry).has_area() and entry.get("lands") is Array and entry.get("house_sprites") is Array and entry.get("scenery", []) is Array and entry.get("scenery_sprites", []) is Array:
 				var valid := true
 				for land in entry.lands + entry.get("scenery", []):
 					if not land is Dictionary:
@@ -55,7 +55,7 @@ func texture(record: Variant) -> Texture2D:
 	if not FileAccess.file_exists(path) or FileAccess.get_sha256(path) != record.sha256:
 		return null
 	var loaded := Image.load_from_file(path)
-	if loaded == null or loaded.is_empty():
+	if loaded == null or loaded.is_empty() or loaded.get_width() != record.get("width") or loaded.get_height() != record.get("height") or loaded.get_width() > 16384 or loaded.get_height() > 16384:
 		return null
 	var result := ImageTexture.create_from_image(loaded)
 	_textures[key] = result
@@ -80,11 +80,26 @@ func _frame(sprites: Array, field: String, value: int, direction: int) -> Dictio
 		var frames: Variant = sprite.get("frames", [])
 		if frames is Array and direction >= 0 and direction < frames.size() and frames[direction] is Dictionary:
 			var frame: Dictionary = frames[direction]
-			for key in ["x", "y", "width", "height"]:
-				if not _number(frame.get(key), -4096, 4096):
+			if not frame.get("logical") is Dictionary:
+				return {}
+			for key in ["anchor_x", "anchor_y", "width", "height"]:
+				if not _number(frame.logical.get(key), 1 if key in ["width", "height"] else -65535, 65535):
 					return {}
 			return frame
 	return {}
 
 func _number(value: Variant, low: int, high: int) -> bool:
 	return (value is int or value is float) and is_finite(float(value)) and floor(float(value)) == float(value) and value >= low and value <= high
+
+func world_rect(scene: Dictionary) -> Rect2:
+	var rect: Variant = scene.get("world_rect")
+	if not rect is Dictionary:
+		return Rect2()
+	for key in ["x", "y", "width", "height"]:
+		if not _number(rect.get(key), 1 if key in ["width", "height"] else -65535, 65535):
+			return Rect2()
+	return Rect2(rect.x, rect.y, rect.width, rect.height)
+
+func sprite_rect(frame: Dictionary, center: Vector2, scale_factor: float) -> Rect2:
+	var logical: Dictionary = frame.get("logical", {})
+	return Rect2(center - Vector2(logical.get("anchor_x", 0), logical.get("anchor_y", 0)) * scale_factor, Vector2(logical.get("width", 0), logical.get("height", 0)) * scale_factor)

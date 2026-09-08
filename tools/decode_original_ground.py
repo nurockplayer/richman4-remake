@@ -75,7 +75,8 @@ def export_sprite(archive, index: int, stage: Path, relative: Path) -> dict | No
         frames.append({"path": image_path.as_posix(),
                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                        "width": chunk.width, "height": chunk.height,
-                       "x": chunk.x, "y": chunk.y})
+                       "logical": {"width": chunk.width, "height": chunk.height,
+                                   "anchor_x": chunk.x, "anchor_y": chunk.y}})
     return {"resource_index": index, "payload_sha256": hashlib.sha256(payload).hexdigest(),
             "frames": frames}
 
@@ -175,14 +176,15 @@ def decode_source(source: Path, output: Path) -> dict:
                     "graph_payload_sha256": hashlib.sha256(graph).hexdigest(),
                     "ground_payload_sha256": hashlib.sha256(payload).hexdigest(),
                     "entry_index": entry.index,
-                    "width": SIDE * TILE_SIZE,
-                    "height": SIDE * TILE_SIZE,
+                    "world_rect": {"x": 0, "y": 0, "width": SIDE * TILE_SIZE,
+                                   "height": SIDE * TILE_SIZE},
                     "lands": [{"id": land["id"], "x": land["x"], "y": land["y"],
                                "direction": (8 - land["field_0x1b"]) & 7}
                               for land in graph_data["lands"]],
                     "house_sprites": house_sprites,
                     "scenery": objects, "scenery_sprites": scenery_sprites,
                     "image": {"path": relative.as_posix(),
+                              "width": SIDE * TILE_SIZE, "height": SIDE * TILE_SIZE,
                               "sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
                 })
         if not manifest["maps"]:

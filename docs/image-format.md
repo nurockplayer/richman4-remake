@@ -107,3 +107,6 @@ MKF 的第一個 little-endian `u32` 是索引表偏移。檔案尾端的每個 
 MultiverseJourney 461），解碼 bytes 與研究用 C oracle 全部一致。Panel
 樣本產生 100 筆 SPR/SMP 資源、1,451 張 PNG，另實際查看面板、人物及
 透明金幣樣本。位元組一致不等於已核實所有色彩、透明與遊戲中的組合方式。
+
+Git worktree 內必須忽略整個 output 目錄，不能只忽略 images/ 與 manifest.json；
+暫存檔與回復失敗時保留的 backup 也可能含原版衍生資料，因此同樣受目錄邊界保護。

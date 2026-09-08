@@ -4,7 +4,7 @@ Read the live [mission issue #1](https://github.com/nurockplayer/richman4-remake
 
 ## Mission
 
-Reimplement **Richman 4 itself** faithfully for the owner's private personal play. Modernize the implementation, not the game design. Deliver a standalone macOS/Apple Silicon application. Keep runtime and game content reasonably separated without building a generic platform. Engine, language and implementation design belong to the lead; this repository does not inherit Tachiko Fortune/Formosa constraints.
+Reimplement **Richman 4 itself** faithfully for the owner's private personal play. Modernize the implementation, not the game design. **Use Godot.** Deliver macOS/Apple Silicon first as a standalone desktop application while preserving a reasonable path to Windows/Linux. Keep runtime and game content reasonably separated without building a generic platform. This repository does not inherit Tachiko Fortune/Formosa constraints.
 
 ## Operating model
 
@@ -16,4 +16,4 @@ Reimplement **Richman 4 itself** faithfully for the owner's private personal pla
 
 ## First run
 
-Check working-tree ownership, GitHub access, available models/tools and build/play-test capability. Make the minimum necessary architecture decision, open the first executable implementation issue and start building. Do not stop at documentation or a toy scaffold. Do not claim macOS packaging, GUI behavior, fidelity or tests were verified unless actually checked; record unavailable capabilities and proceed with unblocked work.
+Check working-tree ownership, GitHub access, available models/tools and Godot build/play-test capability. Make only the remaining implementation decisions needed to begin, open the first executable implementation issue and start building. Do not stop at documentation or a toy scaffold. Do not claim macOS packaging, GUI behavior, fidelity or tests were verified unless actually checked; record unavailable capabilities and proceed with unblocked work.

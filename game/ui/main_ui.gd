@@ -27,6 +27,7 @@ const CHARACTER_NAMES := [
 const MIN_START_YEAR := 1998
 const MAX_START_YEAR := 9999
 const COMPANY_SAVE_VERSION := 7
+const STATUS_SAVE_VERSION := 8
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -108,6 +109,11 @@ var shop_popup_list: VBoxContainer
 var shop_scroll: ScrollContainer
 var stocks_popup: PopupPanel
 var company_popup: PopupPanel
+var trap_popup: PopupPanel
+var trap_prompt_label: Label
+var trap_target_option: OptionButton
+var trap_redirect_button: Button
+var _trap_response_busy := false
 var audio_controller: Object
 var audio_button: Button
 var audio_config_button: Button
@@ -692,6 +698,28 @@ func _build_popups() -> void:
 	company_scroll.add_child(company_popup_list)
 	company_box.add_child(_make_button("關閉", company_popup.hide))
 
+	trap_popup = _make_popup(Vector2i(570, 290))
+	trap_popup.name = "TrapResponsePopup"
+	var trap_box := _popup_box(trap_popup)
+	trap_box.add_child(_make_label("使用嫁禍卡？", 19, TEXT_MAIN))
+	trap_prompt_label = _make_label("", 13, TEXT_MAIN)
+	trap_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	trap_box.add_child(trap_prompt_label)
+	trap_target_option = OptionButton.new()
+	trap_target_option.name = "TrapRedirectTarget"
+	trap_target_option.custom_minimum_size = Vector2(0, 38)
+	trap_box.add_child(trap_target_option)
+	trap_redirect_button = _make_button("使用嫁禍卡", func() -> void: _respond_to_trap(false))
+	trap_redirect_button.name = "RedirectTrap"
+	trap_box.add_child(trap_redirect_button)
+	var decline_trap := _make_button("不使用，接受入獄", func() -> void: _respond_to_trap(true))
+	decline_trap.name = "DeclineTrap"
+	trap_box.add_child(decline_trap)
+	trap_popup.popup_hide.connect(func() -> void:
+		if not _trap_response_busy and _human_trap_response_pending():
+			call_deferred("_respond_to_trap", true)
+	)
+
 	audio_folder_dialog = FileDialog.new()
 	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	audio_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -771,6 +799,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_facilities": supports_facilities,
 		"original_gods": supports_facilities,
 		"original_companies": supports_companies,
+		"original_statuses": bool(capability_definition.get("supports_original_statuses", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -845,10 +874,11 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_statuses": _has_original_statuses(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -924,6 +954,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_facilities": supports_facilities,
 		"original_gods": supports_facilities,
 		"original_companies": supports_companies,
+		"original_statuses": bool(_selected_map_definition.get("supports_original_statuses", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1441,7 +1472,8 @@ func _load_game() -> void:
 func _on_roll_pressed() -> void:
 	if roll_button.disabled:
 		return
-	var resting := _has_original_gods() and int(_current_player().get("hospital_days", 0)) > 0
+	var rest_status := _player_rest_status(_current_player())
+	var resting := not rest_status.is_empty() and int(rest_status.count) != 128
 	var result := _invoke_game("roll")
 	_append_local_log(_result_text(result, "休養中。") if resting else "你擲出 %s。" % _roll_text(result))
 	_handle_result(result)
@@ -1611,7 +1643,8 @@ func _is_human_turn() -> bool:
 	return game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
-	if method != "run_ai_turn" and not _is_human_turn():
+	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
+	if method != "run_ai_turn" and not _is_human_turn() and not is_trap_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var result: Variant = game_state.callv(method, args)
@@ -1666,6 +1699,7 @@ func _update_all() -> void:
 		_update_company_popup()
 	_update_event_log()
 	_update_end_overlay(phase)
+	_update_trap_response_popup()
 	_last_rendered_phase = phase
 
 func _update_header(phase: String, current_index: int) -> void:
@@ -1742,8 +1776,9 @@ func _update_players(players: Array, current_index: int) -> void:
 				if actor is Dictionary and int(actor.get("owner", -1)) == index and int(actor.get("id", 0)) == god_id:
 					days = int(actor.get("days", 0))
 			name_column.add_child(_make_label("%s · %d 天" % [OriginalGods.name_for(god_id), days], 10, TEXT_GOLD))
-		if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
-			name_column.add_child(_make_label("住院 · %d 天" % int(player.hospital_days), 10, TEXT_GOLD))
+		var rest_status := _player_rest_status(player)
+		if not rest_status.is_empty():
+			name_column.add_child(_make_label(_rest_status_label(rest_status), 10, TEXT_GOLD))
 		if _has_original_companies() and player.has("insurance_status"):
 			var insurance_status := int(player.get("insurance_status", 0))
 			if insurance_status == 128:
@@ -1811,6 +1846,8 @@ func _update_property_card(tile: Dictionary) -> void:
 	elif _has_original_inventory() and int(tile.get("event_code", 0)) == 15:
 		current_property_label.text = "點券商店"
 		details += "\n停在此格可購買或出售卡片與道具。"
+	elif _has_original_statuses() and int(tile.get("type_and_idx", 0)) in [8001,8002]:
+		details = "%s　·　格位 %02d\n休養或服刑結束後，從這個格位繼續行動。" % ["醫院" if int(tile.type_and_idx) == 8001 else "監獄", int(tile.get("index", 0))+1]
 	elif kind == "unsupported":
 		details += "\n此格尚未還原，暫不執行其效果。"
 	else:
@@ -1822,8 +1859,13 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var game_over := phase == "game_over"
 	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
-	roll_button.text = "休養" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "擲骰"
-	roll_button.disabled = not (human_turn and phase == "await_roll")
+	var rest_status := _player_rest_status(player)
+	var detained := _has_original_statuses() and not rest_status.is_empty()
+	var reaction_pending := not _pending_trap_for_ui().is_empty()
+	roll_button.text = "擲骰"
+	if not rest_status.is_empty():
+		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")
+	roll_button.disabled = not (human_turn and phase == "await_roll") or reaction_pending
 	var can_buy_company := _has_action_option(action_options, "buy_company")
 	var can_buy_property := _has_action_option(action_options, "buy")
 	buy_button.text = "購買企業股份" if can_buy_company else "購買地產"
@@ -1833,9 +1875,9 @@ func _update_actions(phase: String, current_index: int) -> void:
 	upgrade_button.text = "企業建設" if can_company_upgrade else "建造設施" if can_build else "升級"
 	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build or can_company_upgrade))
 	end_turn_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "end_turn"))
-	bank_button.disabled = not human_turn
-	cards_button.disabled = not human_turn
-	stocks_button.disabled = not (human_turn and bool(state.get("market", {}).get("open", true)))
+	bank_button.disabled = not human_turn or detained or reaction_pending
+	cards_button.disabled = not human_turn or detained or reaction_pending
+	stocks_button.disabled = not (human_turn and bool(state.get("market", {}).get("open", true))) or detained or reaction_pending
 	bank_shortcut.disabled = bank_button.disabled
 	cards_shortcut.disabled = cards_button.disabled
 	stocks_shortcut.disabled = stocks_button.disabled
@@ -1849,21 +1891,28 @@ func _update_actions(phase: String, current_index: int) -> void:
 		facility_popup.hide()
 	if not human_turn or phase != "await_action" or (not can_buy_company and not can_company_upgrade):
 		company_popup.hide()
-	if not human_turn:
+	if not human_turn or detained or reaction_pending:
 		bank_popup.hide()
 		cards_popup.hide()
 		stocks_popup.hide()
 	if game_over:
 		action_hint_label.text = "本局已結束"
+	elif reaction_pending:
+		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
 	elif not human_turn:
 		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
 	elif phase == "await_route":
 		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
-		action_hint_label.text = "住院休養中，按休養推進回合" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "輪到你了，請擲骰"
+		action_hint_label.text = "輪到你了，請擲骰"
+		if not rest_status.is_empty():
+			if int(rest_status.count) == 128:
+				action_hint_label.text = "按%s回到道路並開始行動" % roll_button.text
+			else:
+				action_hint_label.text = "%s，按%s推進回合" % [_rest_status_label(rest_status), roll_button.text]
 	elif can_company_upgrade:
 		action_hint_label.text = "請先完成企業建設服務"
-	elif _has_original_gods() and phase == "await_action" and (int(player.get("hospital_days", 0)) > 0 or _as_array(state.get("last_roll", [])).is_empty()):
+	elif _has_original_gods() and phase == "await_action" and (not rest_status.is_empty() or _as_array(state.get("last_roll", [])).is_empty()):
 		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
 		action_hint_label.text = "%s將在結束回合時影響停留地產" % OriginalGods.name_for(int(player.god_id))
@@ -1921,8 +1970,46 @@ func _update_end_overlay(phase: String) -> void:
 	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
 	end_overlay.show()
 
+func _pending_trap_for_ui() -> Dictionary:
+	if not _has_original_statuses(): return {}
+	var pending: Variant = state.get("pending_trap", {})
+	return pending if pending is Dictionary else {}
+
+func _human_trap_response_pending() -> bool:
+	var pending := _pending_trap_for_ui()
+	if pending.is_empty(): return false
+	var target := int(pending.get("target_id", -1))
+	var players := _as_array(state.get("players", []))
+	return target >= 0 and target < players.size() and bool(players[target].get("is_human", false)) and bool(players[target].get("alive", false))
+
+func _update_trap_response_popup() -> void:
+	if trap_popup == null: return
+	if not _human_trap_response_pending():
+		trap_popup.hide()
+		return
+	var pending := _pending_trap_for_ui()
+	trap_prompt_label.text = "%s 對你使用陷害卡。可將入獄處罰轉給另一位玩家；拒絕時保留嫁禍卡。" % _player_name(int(pending.get("caster_id", -1)))
+	var prior_target := trap_target_option.get_selected_id() if trap_target_option.item_count > 0 else -1
+	trap_target_option.clear()
+	var targets: Array = _as_array(game_state.call("trap_response_targets")) if game_state != null and game_state.has_method("trap_response_targets") else []
+	for target in targets:
+		trap_target_option.add_item(_player_name(int(target)), int(target))
+		if int(target) == prior_target: trap_target_option.select(trap_target_option.item_count-1)
+	trap_redirect_button.disabled = trap_target_option.item_count == 0
+	if not trap_popup.visible: trap_popup.popup_centered()
+
+func _respond_to_trap(decline: bool) -> void:
+	if _trap_response_busy or not _human_trap_response_pending(): return
+	_trap_response_busy = true
+	var params: Dictionary = {"cancel":true} if decline else {"target_id":trap_target_option.get_selected_id()}
+	var result := _invoke_game("choose_action", ["respond_trap", params])
+	_append_local_log(_result_text(result, "已回應陷害卡。"))
+	_handle_result(result)
+	_trap_response_busy = false
+
+
 func _maybe_schedule_ai_turn() -> void:
-	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over":
+	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
 	if bool(player.get("is_human", true)) or bool(player.get("bankrupt", false)):
@@ -1933,13 +2020,13 @@ func _maybe_schedule_ai_turn() -> void:
 
 func _on_ai_timer_timeout() -> void:
 	_ai_pending = false
-	if String(state.get("phase", "")) == "game_over":
+	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
 	if bool(player.get("is_human", true)):
 		return
 	var result := _invoke_game("run_ai_turn")
-	_append_local_log("%s 完成了自動回合。" % str(player.get("name", "AI")))
+	_append_local_log("%s 等待嫁禍卡回應。" % str(player.get("name", "AI")) if bool(result.get("awaiting_response", false)) else "%s 完成了自動回合。" % str(player.get("name", "AI")))
 	_handle_result(result)
 
 func _update_cards_popup() -> void:
@@ -1972,15 +2059,22 @@ func _update_cards_popup() -> void:
 					symbol_option.add_item("%s · %s" % [card_symbol, _stock_name_for_ui(card_symbol)], stock_index)
 				row.add_child(symbol_option)
 			var target_option: OptionButton = null
-			if ["停留", "烏龜", "轉向", "均貧"].has(card_id):
+			if ["停留", "烏龜", "轉向", "均貧", "陷害"].has(card_id):
 				target_option = OptionButton.new()
+				target_option.name = "CardTarget_" + card_id
 				target_option.custom_minimum_size = Vector2(120.0, 34.0)
 				target_option.add_theme_font_size_override("font_size", 11)
 				var target_players: Array = state.get("players", [])
+				var trap_targets: Array = _as_array(game_state.call("trap_target_players", int(state.get("current_player", -1)))) if card_id == "陷害" and game_state != null and game_state.has_method("trap_target_players") else []
+				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id == "陷害" and board_view != null and board_view.has_method("visible_node_indices") else []
 				for target_index in range(target_players.size()):
 					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
-					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))):
+					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id != "陷害" or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
+				if card_id == "陷害" and target_option.item_count == 0:
+					target_option.add_item("畫面內沒有可用對手", -1)
+					target_option.disabled = true
+					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"
 				row.add_child(target_option)
 			var tile_option: OptionButton = null
 			if card_id in ["拆除", "漲價", "查封"]:
@@ -2007,15 +2101,18 @@ func _update_cards_popup() -> void:
 			var implemented := _item_implemented("card", card_id)
 			use.disabled = not implemented or not _has_action_option(options, "use_card")
 			use.name = "UseCard_" + card_id
-			if tile_option != null and tile_option.disabled:
+			if (tile_option != null and tile_option.disabled) or (target_option != null and target_option.disabled):
 				use.disabled = true
 			if card_id == "購地":
 				var current_tile := _current_tile()
 				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or _inventory_purchase_price(current_tile) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
 				if _has_original_gods():
-					use.disabled = use.disabled or int(current_tile.get("owner", -1)) < 0 or int(_current_player().get("hospital_days", 0)) > 0
+					use.disabled = use.disabled or int(current_tile.get("owner", -1)) < 0 or not _player_rest_status(_current_player()).is_empty()
 			if not implemented:
 				use.text = "尚未還原"
+			elif _has_original_statuses() and card_id in ["免罪", "復仇", "嫁禍"]:
+				use.disabled = true
+				use.text = "遭陷害時選擇" if card_id == "嫁禍" else "自動觸發"
 			row.add_child(use)
 			cards_popup_list.add_child(row)
 
@@ -2500,6 +2597,20 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s暫無可出現的位置" % OriginalGods.name_for(int(event.get("god_id", 0)))
 		"dog_encounter":
 			return "遭惡犬咬傷，住院 3 天" if int(event.get("hospital_days", 0)) > 0 else "乘坐交通工具通過惡犬"
+		"trap_response_requested":
+			return "%s 決定是否使用嫁禍卡" % _player_name(int(event.get("target_id", -1)))
+		"trap_blocked":
+			return "免罪卡自動抵銷陷害"
+		"trap_redirected":
+			return "嫁禍卡將處罰轉給%s" % _player_name(int(event.get("target_id", -1)))
+		"trap_revenge":
+			return "復仇卡自動反擊，%s也被送入監獄" % _player_name(int(event.get("caster_id", -1)))
+		"status_admitted":
+			return "%s · %s" % ["送往醫院" if event.get("status_kind", "") == "hospital" else "送往監獄", _tile_name(int(event.get("node", -1)))]
+		"status_skipped":
+			return _rest_status_label({"kind":event.get("status_kind", "hospital"),"count":int(event.get("remaining",0))})
+		"status_released":
+			return "康復出院，從醫院格繼續行動" if event.get("status_kind", "") == "hospital" else "刑滿出獄，從監獄格繼續行動"
 		"hospital_started":
 			return "開始住院休養 · %d 天" % int(event.get("hospital_days", 0))
 		"hospital_skipped":
@@ -2522,7 +2633,7 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s免除費用 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("amount", 0)))]
 		"property_fee_waived":
 			var fee_name := "設施費" if event.get("kind", "") == "facility" else "租金"
-			var owner_status := "住院" if event.get("reason", "") == "hospital" else "死神附身"
+			var owner_status := "住院" if event.get("reason", "") == "hospital" else "入獄" if event.get("reason", "") == "prison" else "死神附身"
 			return "地主%s，本次免收%s" % [owner_status, fee_name]
 		"god_fortune_construction":
 			return "%s額外加蓋%s至第 %d 級" % [OriginalGods.name_for(int(event.get("god_id", 0))), _tile_name(int(event.get("tile_id", -1))), int(event.get("to_level", 0))]
@@ -2725,13 +2836,32 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false))
+
+func _has_original_statuses() -> bool:
+	return int(state.get("version", 0)) == STATUS_SAVE_VERSION and bool(state.get("original_statuses", false))
+
+func _player_rest_status(player: Dictionary) -> Dictionary:
+	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
+		return {"kind":"hospital", "count":int(player.hospital_days)}
+	if _has_original_statuses() and int(player.get("prison_days", 0)) > 0:
+		return {"kind":"prison", "count":int(player.prison_days)}
+	return {}
+
+func _rest_status_label(rest_status: Dictionary) -> String:
+	var title := "住院" if rest_status.get("kind", "") == "hospital" else "服刑"
+	var count := int(rest_status.get("count", 0))
+	if _has_original_statuses():
+		if count == 128: return "待出院" if rest_status.get("kind", "") == "hospital" else "待出獄"
+		return "%s · 剩餘 %d 回合" % [title, count]
+	return "%s · %d 天" % [title, count]
+
 
 func _item_implemented(item_kind: String, item_id: String) -> bool:
 	if not _has_original_inventory():

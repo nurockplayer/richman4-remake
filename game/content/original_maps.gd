@@ -467,6 +467,16 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	for tile in board:
 		if tile.kind == "property" and not reachable.has(tile.index):
 			return _failure("原版地圖包含無法從起點到達的住宅。")
+	var has_hospital := false
+	var has_prison := false
+	for tile in board:
+		has_hospital = has_hospital or int(tile.type_and_idx) == 8001
+		has_prison = has_prison or int(tile.type_and_idx) == 8002
+	var supports_original_statuses := original_facilities and supports_original_companies and has_hospital and has_prison
+	if supports_original_statuses:
+		for tile in board:
+			if int(tile.type_and_idx) in [8001,8002]:
+				tile.name = "醫院" if int(tile.type_and_idx) == 8001 else "監獄"
 	var supported := not referenced_lands.is_empty() or (original_facilities and not referenced_facilities.is_empty())
 	var source := {"edition": raw.edition, "map_number": int(raw.map_number), "archive": "%s/map.mkf" % raw.edition,
 		"entry_index": raw.get("entry_index", 0), "payload_sha256": raw.get("payload_sha256", ""), "source_file_sha256": raw.get("source_file_sha256", "")}
@@ -478,5 +488,5 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"board": board, "start_position": start_position, "supports_new_game": supported,
 		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。",
 		"companies": companies, "stock_rows": stock_rows,
-		"supports_original_companies": supports_original_companies}
+		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses}
 	return {"ok": true, "error": "", "definition": definition}

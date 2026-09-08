@@ -15,6 +15,7 @@ const INVENTORY_SAVE_VERSION = 4
 const FACILITY_SAVE_VERSION = 5
 const GODS_SAVE_VERSION = 6
 const COMPANY_SAVE_VERSION = 7
+const STATUS_SAVE_VERSION = 8
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -44,6 +45,7 @@ const MAX_GRAPH_STEPS = 18
 const MAX_AI_TURN_ITERATIONS = 16
 const MAX_GRAPH_POINTS = 1000000000000
 const MAX_INVENTORY_ROADBLOCKS = 10
+const MAX_STATUS_ADMISSION_DAYS = 128
 const PASS_START_BONUS = 0 # The reference manual does not support an invented bonus.
 const DAYS_PER_MONTH = 30
 const MONTHLY_DEPOSIT_RATE = 0.10
@@ -65,6 +67,7 @@ const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封"]
+const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
 const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "遙控骰子", "機器工人"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
@@ -141,7 +144,7 @@ static func new_game(seed_value: int, player_count: int = 4, options: Dictionary
 		return null
 	if not options.is_empty():
 		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
-		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)):
+		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)) or bool(setup_options.get("original_statuses", false)):
 			return null
 		var setup_game = new()
 		setup_game._initialize_setup(seed_value, player_count, setup_options)
@@ -164,7 +167,11 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if options.has("original_companies") and typeof(options.get("original_companies")) != TYPE_BOOL:
 		return null
+	if options.has("original_statuses") and typeof(options.get("original_statuses")) != TYPE_BOOL:
+		return null
 	if bool(options.get("original_companies", false)) and not bool(definition.get("supports_original_companies", false)):
+		return null
+	if bool(options.get("original_statuses", false)) and not bool(definition.get("supports_original_statuses", false)):
 		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
@@ -172,6 +179,8 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 	if original_facilities and options.is_empty():
 		return null
 	if bool(options.get("original_gods", false)) and not original_facilities:
+		return null
+	if bool(options.get("original_statuses", false)) and (not original_facilities or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false))):
 		return null
 	if bool(options.get("original_companies", false)) and not _company_definition_errors(definition, player_count).is_empty():
 		return null
@@ -195,7 +204,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -266,6 +275,11 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	var original_companies: bool = bool(options.get("original_companies", false))
 	if original_companies and not original_gods:
 		return {}
+	if options.has("original_statuses") and typeof(options["original_statuses"]) != TYPE_BOOL:
+		return {}
+	var original_statuses: bool = bool(options.get("original_statuses", false))
+	if original_statuses and (not original_facilities or not original_gods or not original_companies):
+		return {}
 
 	return {
 		"initial_fund": initial_fund,
@@ -277,6 +291,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_facilities": original_facilities,
 		"original_gods": original_gods,
 		"original_companies": original_companies,
+		"original_statuses": original_statuses,
 	}
 
 
@@ -295,11 +310,13 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 func _configure_setup(options: Dictionary, player_count: int) -> void:
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	var original_gods: bool = bool(options.get("original_gods", false))
-	state["version"] = COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	state["version"] = STATUS_SAVE_VERSION if bool(options.get("original_statuses", false)) else COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
 	state["original_facilities"] = original_facilities
 	state["original_gods"] = original_gods
 	if bool(options.get("original_companies", false)):
 		state["original_companies"] = true
+	if bool(options.get("original_statuses", false)):
+		state["original_statuses"] = true
 	if original_facilities:
 		state["price_index"] = 1
 		state["last_roll_total"] = 0
@@ -319,6 +336,10 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		start_position,
 		_is_graph(),
 	)
+	if bool(options.get("original_statuses", false)):
+		for player in state["players"]:
+			player["prison_days"] = 0
+		state["pending_trap"] = {}
 	var total_deposits: int = 0
 	for player in state["players"]:
 		total_deposits += int(player.get("deposit", 0))
@@ -360,19 +381,19 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
 
 
 func _is_facilities() -> bool:
-	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
 
 
 func _is_gods() -> bool:
-	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -520,7 +541,327 @@ func _build_players(player_count: int, start_position: int = START_POSITION, gra
 
 
 func _is_companies() -> bool:
-	return int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false))
+
+
+func _is_statuses() -> bool:
+	return int(state.get("version", 0)) == STATUS_SAVE_VERSION and bool(state.get("original_statuses", false))
+
+
+func _status_key(kind: String) -> String:
+	return "hospital_days" if kind == "hospital" else "prison_days" if kind == "prison" else ""
+
+
+func _status_type(kind: String) -> int:
+	return 8001 if kind == "hospital" else 8002 if kind == "prison" else -1
+
+
+func _status_node_index(kind: String) -> int:
+	return _status_node_index_in_board(state.get("board", null), kind) if _is_statuses() else -1
+
+
+static func _status_node_index_in_board(board: Variant, kind: String) -> int:
+	var wanted: int = 8001 if kind == "hospital" else 8002 if kind == "prison" else -1
+	if typeof(board) != TYPE_ARRAY or wanted < 0:
+		return -1
+	var result: int = -1
+	for index in range(board.size()):
+		if typeof(board[index]) == TYPE_DICTIONARY and _valid_int(board[index].get("type_and_idx", null), wanted, wanted):
+			result = index
+	return result
+
+
+func _status_active(player: Dictionary, kind: String = "") -> bool:
+	if player.is_empty():
+		return false
+	if kind == "hospital":
+		return int(player.get("hospital_days", 0)) > 0
+	if kind == "prison":
+		return _is_statuses() and int(player.get("prison_days", 0)) > 0
+	return int(player.get("hospital_days", 0)) > 0 or (_is_statuses() and int(player.get("prison_days", 0)) > 0)
+
+
+func _pending_trap() -> Dictionary:
+	if not _is_statuses():
+		return {}
+	var value: Variant = state.get("pending_trap", {})
+	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func _trap_pending() -> bool:
+	return not _pending_trap().is_empty()
+
+
+func trap_target_players(caster_id: int) -> Array:
+	# The attack target list is deliberately limited to living, non-detained
+	# players.  It contains only runtime players, so source/NPC actors can never
+	# become card targets.
+	var targets: Array = []
+	if not _is_statuses() or not _valid_player(caster_id, true):
+		return targets
+	for player in _players():
+		if typeof(player) != TYPE_DICTIONARY:
+			continue
+		var target_id_value: Variant = player.get("id", null)
+		if not _valid_int(target_id_value) or int(target_id_value) == caster_id:
+			continue
+		if not bool(player.get("alive", false)) or _status_active(player):
+			continue
+		targets.append(int(target_id_value))
+	targets.sort()
+	return targets
+
+
+func _ai_trap_target(caster_id: int) -> int:
+	for target_id in trap_target_players(caster_id):
+		if not _trap_has_card(_player(int(target_id)), "復仇"):
+			return int(target_id)
+	return -1
+
+
+func trap_response_targets() -> Array:
+	# A scapegoat may point at any other living player, including the caster or
+	# a player currently detained.  Detention is resolved by the final direct
+	# admission and never recursively invokes another trap defense.
+	var targets: Array = []
+	if not _is_statuses():
+		return targets
+	var pending: Dictionary = _pending_trap()
+	if pending.size() != 2 or not pending.has("caster_id") or not pending.has("target_id"):
+		return targets
+	var original_target_value: Variant = pending.get("target_id", null)
+	if typeof(original_target_value) != TYPE_INT:
+		return targets
+	var original_target_id: int = int(original_target_value)
+	if _player(original_target_id).is_empty():
+		return targets
+	for player in _players():
+		if typeof(player) != TYPE_DICTIONARY:
+			continue
+		var target_id_value: Variant = player.get("id", null)
+		if typeof(target_id_value) != TYPE_INT or int(target_id_value) == original_target_id:
+			continue
+		if bool(player.get("alive", false)):
+			targets.append(int(target_id_value))
+	targets.sort()
+	return targets
+
+
+func _trap_cards(player: Dictionary) -> Array:
+	var cards: Variant = player.get("cards", [])
+	return cards if typeof(cards) == TYPE_ARRAY else []
+
+
+func _trap_has_card(player: Dictionary, card_id: String) -> bool:
+	return _trap_cards(player).has(card_id)
+
+
+func _trap_consume_card(player_id: int, card_id: String) -> bool:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not _trap_has_card(player, card_id):
+		return false
+	var consumed: Dictionary = OriginalInventory.consume_card(state.get("inventory_supply", {}), player["cards"], card_id)
+	return bool(consumed.get("ok", false))
+
+
+func _trap_valid_pending_context(require_human_target: bool = true) -> bool:
+	if not _is_statuses():
+		return false
+	var pending: Dictionary = _pending_trap()
+	if pending.size() != 2 or not pending.has("caster_id") or not pending.has("target_id"):
+		return false
+	var caster_value: Variant = pending.get("caster_id", null)
+	var target_value: Variant = pending.get("target_id", null)
+	if typeof(caster_value) != TYPE_INT or typeof(target_value) != TYPE_INT:
+		return false
+	var caster: Dictionary = _player(int(caster_value))
+	var target: Dictionary = _player(int(target_value))
+	if caster.is_empty() or target.is_empty() or int(caster_value) == int(target_value):
+		return false
+	if not bool(caster.get("alive", false)) or not bool(target.get("alive", false)):
+		return false
+	if int(state.get("current_player", -1)) != int(caster_value):
+		return false
+	if _status_active(caster):
+		return false
+	if require_human_target and (not bool(target.get("is_human", false)) or bool(target.get("is_ai", false))):
+		return false
+	if _status_active(target):
+		return false
+	if not _trap_has_card(target, "嫁禍") or _trap_has_card(target, "免罪"):
+		return false
+	var pending_remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(pending_remote) != TYPE_DICTIONARY or not pending_remote.is_empty():
+		return false
+	var phase: String = str(state.get("phase", ""))
+	return phase in ["await_roll", "await_action"]
+
+
+func _resolve_trap_direct(target_id: int, days: int, trigger_revenge: bool = false, caster_id: int = -1) -> Dictionary:
+	# This path intentionally calls the status admission primitive directly;
+	# redirected targets do not get another immunity, scapegoat, or revenge
+	# decision.
+	var target: Dictionary = _player(target_id)
+	if target.is_empty() or not bool(target.get("alive", false)) or not _valid_int(days, 1, MAX_STATUS_ADMISSION_DAYS):
+		return _error("陷害卡目標無效")
+	var admission: Dictionary = _admit_player_status(target_id, "prison", days)
+	if not bool(admission.get("ok", false)):
+		return admission
+	if trigger_revenge and caster_id >= 0 and _trap_has_card(target, "復仇"):
+		if not _trap_consume_card(target_id, "復仇"):
+			return _error("復仇卡無法使用")
+		_record_event("trap_revenge", {"caster_id": caster_id, "target_id": target_id})
+		var revenge_admission: Dictionary = _admit_player_status(caster_id, "prison", 5)
+		if not bool(revenge_admission.get("ok", false)):
+			return revenge_admission
+	return admission
+
+
+func _respond_trap(params: Dictionary) -> Dictionary:
+	if not _trap_valid_pending_context(true):
+		return _error("陷害卡回應已失效")
+	var pending: Dictionary = _pending_trap()
+	var caster_id: int = int(pending["caster_id"])
+	var original_target_id: int = int(pending["target_id"])
+	var has_cancel: bool = params.has("cancel")
+	if has_cancel and typeof(params.get("cancel")) != TYPE_BOOL:
+		return _error("陷害卡回應格式無效")
+	var cancel: bool = has_cancel and bool(params.get("cancel", false))
+	if has_cancel and cancel:
+		state["pending_trap"] = {}
+		var direct_result: Dictionary = _resolve_trap_direct(original_target_id, 5, true, caster_id)
+		if not bool(direct_result.get("ok", false)):
+			return direct_result
+		_record_event("trap_resolved", {"caster_id": caster_id, "target_id": original_target_id, "redirected": false})
+		_set_action_options(int(state.get("current_player", -1)))
+		return _result(true, "已接受陷害處罰", {"target_id": original_target_id, "redirected": false})
+	if has_cancel and not cancel and not params.has("target_id"):
+		return _error("陷害卡回應缺少目標")
+	var response_target_value: Variant = params.get("target_id", null)
+	if typeof(response_target_value) != TYPE_INT:
+		return _error("陷害卡目標格式無效")
+	var response_target_id: int = int(response_target_value)
+	if not trap_response_targets().has(response_target_id):
+		return _error("陷害卡目標無效")
+	# Validate the destination before consuming 嫁禍 or clearing the pending
+	# record, keeping malformed responses atomic.
+	var destination: Dictionary = _player(response_target_id)
+	if destination.is_empty() or not bool(destination.get("alive", false)):
+		return _error("陷害卡目標無效")
+	if not _trap_consume_card(original_target_id, "嫁禍"):
+		return _error("嫁禍卡無法使用")
+	state["pending_trap"] = {}
+	var days: int = 4 if response_target_id == caster_id else 5
+	var direct_result: Dictionary = _resolve_trap_direct(response_target_id, days)
+	if not bool(direct_result.get("ok", false)):
+		return direct_result
+	_record_event("trap_redirected", {"caster_id": caster_id, "from_target_id": original_target_id, "target_id": response_target_id, "days": days})
+	_set_action_options(int(state.get("current_player", -1)))
+	return _result(true, "已將陷害處罰轉移", {"target_id": response_target_id, "redirected": true, "days": days})
+
+
+func _use_trap_card(player_id: int, target_id: int, cancel: bool = false) -> Dictionary:
+	var caster: Dictionary = _player(player_id)
+	if caster.is_empty() or not bool(caster.get("alive", false)):
+		return _error("目前玩家無法使用陷害卡")
+	if not _trap_has_card(caster, "陷害"):
+		return _error("沒有這張卡片")
+	if cancel:
+		return _result(true, "已取消陷害卡")
+	if not trap_target_players(player_id).has(target_id):
+		return _error("陷害卡目標無效")
+	var target: Dictionary = _player(target_id)
+	# The attack card is consumed before any defense card is inspected.
+	if not _trap_consume_card(player_id, "陷害"):
+		return _error("陷害卡無法使用")
+	_record_event("card_used", {"player_id": player_id, "card_id": "陷害", "target_id": target_id, "effect": "trap"})
+	if _trap_has_card(target, "免罪"):
+		if not _trap_consume_card(target_id, "免罪"):
+			return _error("免罪卡無法使用")
+		_record_event("trap_blocked", {"caster_id": player_id, "target_id": target_id})
+		_set_action_options(player_id)
+		return _result(true, "免罪卡抵銷陷害", {"blocked": true, "target_id": target_id})
+	if _trap_has_card(target, "嫁禍"):
+		if bool(target.get("is_human", false)) and not bool(target.get("is_ai", false)):
+			state["pending_trap"] = {"caster_id": player_id, "target_id": target_id}
+			state["action_options"] = ["respond_trap"]
+			_record_event("trap_response_requested", {"caster_id": player_id, "target_id": target_id})
+			return _result(true, "等待嫁禍卡回應", {"awaiting_response": true, "target_id": target_id})
+		var response_targets: Array = []
+		for candidate in _players():
+			if typeof(candidate) != TYPE_DICTIONARY or int(candidate.get("id", -1)) == target_id or not bool(candidate.get("alive", false)):
+				continue
+			response_targets.append(int(candidate.get("id", -1)))
+		response_targets.sort()
+		if not response_targets.is_empty():
+			if not _trap_consume_card(target_id, "嫁禍"):
+				return _error("嫁禍卡無法使用")
+			var redirected_id: int = int(response_targets[0])
+			var redirected_days: int = 4 if redirected_id == player_id else 5
+			var redirect_result: Dictionary = _resolve_trap_direct(redirected_id, redirected_days)
+			if not bool(redirect_result.get("ok", false)):
+				return redirect_result
+			_record_event("trap_redirected", {"caster_id": player_id, "from_target_id": target_id, "target_id": redirected_id, "days": redirected_days, "ai": true})
+			_set_action_options(player_id)
+			return _result(true, "AI 已使用嫁禍卡", {"redirected": true, "target_id": redirected_id, "days": redirected_days})
+	# No scapegoat response is available; revenge is checked only on the original
+	# target.  Direct admissions never recurse through defense cards.
+	var direct_result: Dictionary = _resolve_trap_direct(target_id, 5, true, player_id)
+	if not bool(direct_result.get("ok", false)):
+		return direct_result
+	_record_event("trap_resolved", {"caster_id": player_id, "target_id": target_id, "redirected": false})
+	_set_action_options(player_id)
+	return _result(true, "已執行陷害處罰", {"target_id": target_id, "redirected": false})
+
+
+func _admit_player_status(player_id: int, kind: String, added_days: int) -> Dictionary:
+	# Validate every input and destination before mutating any player or route
+	# field. Status counters intentionally use the source seven-bit wrap rule;
+	# zero is therefore a valid post-admission value for a 128-day addition.
+	if not _is_statuses() or not ["hospital", "prison"].has(kind):
+		return _error("目前地圖不支援此狀態")
+	if not _valid_int(added_days, 1, MAX_STATUS_ADMISSION_DAYS):
+		return _error("狀態天數無效")
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("目前玩家無法進入狀態設施")
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY or board.is_empty():
+		return _error("狀態設施地圖無效")
+	var from_node_value: Variant = player.get("position", null)
+	if not _valid_int(from_node_value, 0, board.size() - 1):
+		return _error("玩家位置無效")
+	var destination: int = _status_node_index(kind)
+	if destination < 0 or destination >= board.size() or typeof(board[destination]) != TYPE_DICTIONARY:
+		return _error("地圖缺少狀態設施")
+	var status_key := _status_key(kind)
+	var opposite_key := _status_key("prison" if kind == "hospital" else "hospital")
+	var old_value: Variant = player.get(status_key, null)
+	var opposite_value: Variant = player.get(opposite_key, null)
+	if not _valid_int(old_value, 0, MAX_STATUS_ADMISSION_DAYS) or not _valid_int(opposite_value, 0, MAX_STATUS_ADMISSION_DAYS):
+		return _error("玩家狀態資料無效")
+	var from_node: int = int(from_node_value)
+	var remaining: int = (int(old_value) + added_days) & 127
+	player[status_key] = remaining
+	player[opposite_key] = 0
+	player["position"] = destination
+	if player.has("previous_position"):
+		player["previous_position"] = -1
+	var current_player_id: int = int(state.get("current_player", -1))
+	if player_id == current_player_id:
+		state["route_options"] = []
+		state["remaining_steps"] = 0
+		state["pending_movement"] = {}
+		if state.get("phase", "") == "await_route":
+			state["phase"] = "await_action"
+	_sync_attached_gods()
+	# Insurance is charged for the admission input even when the status wraps or
+	# the player already owns the company's facility.
+	_pay_company_insurance(player_id, added_days)
+	_record_event("status_admitted", {"player_id": player_id, "status_kind": kind, "added_days": added_days, "remaining": remaining, "from_node": from_node, "node": destination})
+	if player_id == current_player_id:
+		_set_action_options(current_player_id)
+	return _result(true, "已送往%s" % ("醫院" if kind == "hospital" else "監獄"), {"status_kind": kind, "remaining": remaining, "from_node": from_node, "node": destination})
 
 
 func get_stock_symbols() -> Array:
@@ -1197,11 +1538,14 @@ func _encounter_dog(player_id: int, node_id: int) -> bool:
 	_remove_god(11)
 	_record_event("dog_encounter", {"player_id": player_id, "node": node_id, "vehicle": vehicle, "hospital_days": 3 if vehicle == "walking" else 0})
 	if vehicle == "walking":
-		var player: Dictionary = _player(player_id)
-		var old_hospital_days := int(player.get("hospital_days", 0))
-		player["hospital_days"] = max(old_hospital_days, 3)
-		_pay_company_insurance(player_id, int(player["hospital_days"]) - old_hospital_days)
-		_record_event("hospital_started", {"player_id": player_id, "hospital_days": int(player["hospital_days"])})
+		if _is_statuses():
+			_admit_player_status(player_id, "hospital", 3)
+		else:
+			var player: Dictionary = _player(player_id)
+			var old_hospital_days := int(player.get("hospital_days", 0))
+			player["hospital_days"] = max(old_hospital_days, 3)
+			_pay_company_insurance(player_id, int(player["hospital_days"]) - old_hospital_days)
+			_record_event("hospital_started", {"player_id": player_id, "hospital_days": int(player["hospital_days"])})
 	_god_pair_respawn(11, dog_node)
 	return vehicle == "walking"
 
@@ -1518,7 +1862,7 @@ func _require_phase(expected: String) -> bool:
 func _is_gods_hospital_action(player: Dictionary) -> bool:
 	if not _is_gods() or player.is_empty():
 		return false
-	if int(player.get("hospital_days", 0)) > 0:
+	if _status_active(player):
 		return true
 	var last_roll: Variant = state.get("last_roll", [])
 	return state.get("phase", "") == "await_action" and bool(state.get("property_action_used", false)) and typeof(last_roll) == TYPE_ARRAY and last_roll.is_empty()
@@ -1533,6 +1877,14 @@ func _set_action_options(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["action_options"] = options
+		return
+	if _trap_pending():
+		state["action_options"] = ["respond_trap"]
+		return
+	# v8 status turns expose only their legal turn control.  Keeping this gate
+	# here also makes snapshots consumed by the UI agree with choose_action.
+	if _is_statuses() and _status_active(player):
+		state["action_options"] = ["end_turn"] if phase == "await_action" else []
 		return
 	var bank_open: bool = not _is_sunday()
 	var stock_open: bool = bank_open and (not _is_companies() or bool(state.get("market", {}).get("open", false)))
@@ -1928,6 +2280,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	if normalized_kind == "card":
 		if item_id in ["漲價", "查封"] and not _is_facilities():
 			return false
+		if STATUS_CARD_IDS.has(item_id):
+			return _is_statuses()
 		return IMPLEMENTED_CARD_IDS.has(item_id)
 	if normalized_kind == "tool":
 		return IMPLEMENTED_TOOL_IDS.has(item_id)
@@ -2037,6 +2391,8 @@ func _player_owns_tile(player_id: int, tile_index: int) -> bool:
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
+	if _trap_pending():
+		return false
 	if not _valid_player(player_id):
 		return false
 	var player: Dictionary = _player(player_id)
@@ -2108,6 +2464,8 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 
 
 func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
+	if _trap_pending():
+		return _error("請先回應陷害卡")
 	if not _require_phase("await_roll"):
 		return _error("只能在擲骰前選擇交通工具")
 	var player: Dictionary = _current_player()
@@ -2131,6 +2489,8 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 
 
 func roll(dice_count: int = -1) -> Dictionary:
+	if _trap_pending():
+		return _error("請先回應陷害卡")
 	if not _require_phase("await_roll"):
 		return _error("目前不是擲骰階段")
 	var player_id: int = int(state.get("current_player", -1))
@@ -2138,7 +2498,41 @@ func roll(dice_count: int = -1) -> Dictionary:
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法擲骰")
 	var hospital_days: int = int(player.get("hospital_days", 0))
-	if _is_gods() and hospital_days > 0:
+	if _is_statuses():
+		var status_kind := "hospital" if hospital_days > 0 else "prison" if int(player.get("prison_days", 0)) > 0 else ""
+		if not status_kind.is_empty():
+			var status_key := _status_key(status_kind)
+			var remaining_before: int = int(player.get(status_key, 0))
+			if remaining_before == 128:
+				player[status_key] = 0
+				state["last_roll"] = []
+				state["last_total"] = 0
+				state["extra_roll"] = false
+				state["doubles_count"] = 0
+				state["property_action_used"] = false
+				state["bank_access"] = false
+				state["bank_landing"] = false
+				if _is_facilities():
+					state["last_roll_total"] = 0
+				_sync_attached_gods()
+				_record_event("status_released", {"player_id": player_id, "status_kind": status_kind, "node": int(player.get("position", -1))})
+			else:
+				var remaining_after: int = remaining_before - 1 if remaining_before > 1 else 128
+				player[status_key] = remaining_after
+				state["last_roll"] = []
+				state["last_total"] = 0
+				state["extra_roll"] = false
+				state["doubles_count"] = 0
+				state["property_action_used"] = true
+				state["bank_access"] = false
+				state["bank_landing"] = false
+				if _is_facilities():
+					state["last_roll_total"] = 0
+				state["phase"] = "await_action"
+				_set_action_options(player_id)
+				_record_event("status_skipped", {"player_id": player_id, "status_kind": status_kind, "remaining": remaining_after})
+				return _result(true, "服刑中，本回合跳過" if status_kind == "prison" else "住院中，本回合休養", {"skipped": true, "status_kind": status_kind, "remaining": remaining_after})
+	elif _is_gods() and hospital_days > 0:
 		player["hospital_days"] = hospital_days - 1
 		state["last_roll"] = []
 		state["last_total"] = 0
@@ -2363,7 +2757,7 @@ func _graph_continue_movement(player_id: int) -> bool:
 			state["pending_movement"] = {}
 			state["remaining_steps"] = 0
 			return false
-		if _is_gods() and int(player.get("hospital_days", 0)) > 0:
+		if _is_gods() and _status_active(player):
 			state["remaining_steps"] = 0
 			break
 		if _graph_consume_roadblock(player_id, next_node):
@@ -2422,7 +2816,7 @@ func choose_route(route: int) -> Dictionary:
 		state["pending_movement"] = {}
 		state["remaining_steps"] = 0
 		return _result(true, "已選擇路線", {"route": route})
-	if _is_gods() and int(player.get("hospital_days", 0)) > 0:
+	if _is_gods() and _status_active(player):
 		state["remaining_steps"] = 0
 	var hit_roadblock: bool = _graph_consume_roadblock(player_id, route)
 	if hit_roadblock:
@@ -2526,6 +2920,10 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 	if tile.is_empty():
 		return
 	var tile_index: int = int(tile.get("index", -1))
+	if _is_statuses() and int(tile.get("type_and_idx", -1)) in [8001, 8002]:
+		var status_kind := "hospital" if int(tile.get("type_and_idx", -1)) == 8001 else "prison"
+		_record_event("status_facility_landed" if final_landing else "status_facility_passed", {"player_id": player_id, "status_kind": status_kind, "node": tile_index, "name": str(tile.get("name", ""))})
+		return
 	if _is_companies() and not get_company_at(tile_index).is_empty():
 		if final_landing:
 			_resolve_company_visit(player_id, tile)
@@ -2629,8 +3027,8 @@ func _god_property_fee_waiver_reason(owner_id: int) -> String:
 	var owner: Dictionary = _player(owner_id)
 	if owner.is_empty() or not bool(owner.get("alive", false)):
 		return ""
-	if int(owner.get("hospital_days", 0)) > 0:
-		return "hospital"
+	if _status_active(owner):
+		return "hospital" if int(owner.get("hospital_days", 0)) > 0 else "prison"
 	if _player_god_id(owner_id) == 15:
 		return "death"
 	return ""
@@ -3026,6 +3424,10 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if normalized == "respond_trap":
+		return _respond_trap(params)
+	if _trap_pending():
+		return _error("請先回應陷害卡")
 	if _is_companies() and int(state.get("company_service_pending",0))>0 and normalized != "company_upgrade":
 		return _error("請先選擇企業建設目標")
 	if normalized == "set_vehicle":
@@ -3076,7 +3478,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		"use_tool":
 			return _use_tool(player_id, params)
 		"use_card":
-			return _use_card(player_id, str(params.get("card_id", "")), int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1))
+			return _use_card(player_id, str(params.get("card_id", "")), int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)))
 		_:
 			return _error("未知的行動")
 
@@ -3650,7 +4052,7 @@ func _inventory_demolition_card(player_id: int, tile_id: Variant) -> Dictionary:
 	return _result(true, "已使用拆除卡", {"card_id": "拆除", "tile_id": target_id, "effect": effect})
 
 
-func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "", tile_id: Variant = -1) -> Dictionary:
+func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "", tile_id: Variant = -1, cancel: bool = false) -> Dictionary:
 	if _is_inventory():
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
@@ -3688,6 +4090,10 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		return _error("沒有這張卡片")
 	if _is_inventory() and not item_is_implemented("card", card_id):
 		return _error("此卡片效果尚未還原")
+	if _is_statuses() and card_id in ["免罪", "嫁禍", "復仇"]:
+		return _error("這張卡片只能在陷害時自動觸發")
+	if _is_statuses() and card_id == "陷害":
+		return _use_trap_card(player_id, target_id, cancel)
 	if target_id < 0:
 		target_id = player_id
 	if card_id == "停留" or card_id == "烏龜" or card_id == "轉向" or card_id == "均貧":
@@ -3843,6 +4249,8 @@ func _grant_card(player_id: int, card_id: String) -> Dictionary:
 
 
 func end_turn() -> Dictionary:
+	if _trap_pending():
+		return _error("請先回應陷害卡")
 	if not _require_phase("await_action"):
 		return _error("目前不是結束回合階段")
 	if _is_companies() and int(state.get("company_service_pending",0))>0:
@@ -3858,7 +4266,7 @@ func end_turn() -> Dictionary:
 		# rent/service and the player's explicit property action. A skipped or
 		# dog-stopped turn has no successful landing settlement to mutate.
 		var last_roll_value: Variant = state.get("last_roll", [])
-		if _is_gods() and typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and int(player.get("hospital_days", 0)) == 0:
+		if _is_gods() and typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and not _status_active(player):
 			_apply_god_property_effect(player_id, _tile_at(int(player.get("position", -1))), true)
 	state["bank_access"] = false
 	state["bank_landing"] = false
@@ -4247,9 +4655,23 @@ func run_ai_turn() -> Dictionary:
 			return _error("目前玩家無法行動")
 	if not bool(player.get("is_ai", false)):
 		return _error("目前玩家不是 AI")
+	if _trap_pending():
+		# A human defender must answer outside the AI turn loop.  The caster's
+		# phase and current-player identity remain unchanged while waiting.
+		var pending: Dictionary = _pending_trap()
+		var pending_target: Dictionary = _player(int(pending.get("target_id", -1)))
+		if bool(pending_target.get("is_human", false)) and not bool(pending_target.get("is_ai", false)):
+			return _result(true, "等待人類玩家回應陷害卡", {"player_id": player_id, "awaiting_response": true, "completed": false})
+		return _error("陷害卡回應狀態無效")
 	var safety: int = 0
 	var route_safety: int = 0
 	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		if _trap_pending():
+			var pending: Dictionary = _pending_trap()
+			var pending_target: Dictionary = _player(int(pending.get("target_id", -1)))
+			if bool(pending_target.get("is_human", false)) and not bool(pending_target.get("is_ai", false)):
+				return _result(true, "等待人類玩家回應陷害卡", {"player_id": player_id, "awaiting_response": true, "completed": false})
+			return _result(false, "陷害卡回應狀態無效", {"player_id": player_id, "completed": false})
 		if state.get("phase", "") == "await_route":
 			if route_safety >= MAX_GRAPH_STEPS:
 				return _result(false, "AI 路線在限制內未完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
@@ -4267,6 +4689,8 @@ func run_ai_turn() -> Dictionary:
 		if state.get("phase", "") == "await_roll":
 			if _is_inventory():
 				_ai_roll_action(player_id)
+			if _trap_pending():
+				continue
 			var roll_result: Dictionary = roll()
 			if not bool(roll_result.get("ok", false)):
 				return _result(false, str(roll_result.get("message", "AI 擲骰失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
@@ -4289,6 +4713,14 @@ func run_ai_turn() -> Dictionary:
 
 func _ai_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
+	if _trap_pending():
+		return
+	# Status turns have no property/company action.  Ending the turn here keeps
+	# AI behaviour aligned with the status action gate and avoids retrying a
+	# stock/card fallback until the safety limit is reached.
+	if _status_active(player):
+		end_turn()
+		return
 	if _is_companies() and int(state.get("company_service_pending",0))>0:
 		var targets := _company_payable_upgrade_targets(player_id, get_company_at(int(player.get("position", -1))))
 		var selected := -1
@@ -4364,6 +4796,11 @@ func _ai_action(player_id: int) -> void:
 				if not item_is_implemented("card", card_id):
 					continue
 				var inventory_card_params: Dictionary = {"card_id": card_id}
+				if card_id == "陷害":
+					var trap_target: int = _ai_trap_target(player_id)
+					if trap_target < 0:
+						continue
+					inventory_card_params["target_id"] = trap_target
 				if card_id == "停留" or card_id == "烏龜":
 					inventory_card_params["target_id"] = player_id
 				elif card_id == "轉向":
@@ -4535,6 +4972,17 @@ func _ai_roll_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return
+	# A hospital/prison roll is consumed by the status lifecycle before any
+	# inventory action can be resolved.  In particular, do not leave a remote
+	# dice request pending when the status branch returns early from roll().
+	if _status_active(player):
+		return
+	# Give the status card a normal pre-roll opportunity before the repeated
+	# stock-trading heuristic. Human scapegoat responses pause run_ai_turn.
+	if _is_statuses() and _trap_has_card(player, "陷害"):
+		var trap_target: int = _ai_trap_target(player_id)
+		if trap_target >= 0 and choose_action("use_card", {"card_id": "陷害", "target_id": trap_target}).get("ok", false):
+			return
 	if _inventory_movement_blocked(player):
 		return
 	var tools: Dictionary = player.get("tools", {})
@@ -4563,6 +5011,8 @@ func _ai_roll_action(player_id: int) -> void:
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:
+	if _trap_pending():
+		return _error("請先回應陷害卡")
 	if max_turns < 1:
 		return _error("最大回合數無效")
 	for player in _players():
@@ -4962,10 +5412,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var companies_save: bool = _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
+	var status_save: bool = _valid_int(version_marker, STATUS_SAVE_VERSION, STATUS_SAVE_VERSION)
+	var companies_save: bool = status_save or _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
 	var stock_symbols: Array = OriginalStockMarket.symbols() if companies_save else STOCK_SYMBOLS
-	var gods_save: bool = companies_save or _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
-	var facility_save: bool = gods_save or _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
+	var gods_save: bool = status_save or companies_save or _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
+	var facility_save: bool = status_save or gods_save or _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
 	var inventory_save: bool = _valid_int(version_marker, INVENTORY_SAVE_VERSION, INVENTORY_SAVE_VERSION) or facility_save
 	var setup_save: bool = _valid_int(version_marker, SETUP_SAVE_VERSION, SETUP_SAVE_VERSION) or inventory_save
 	var graph_save: bool = facility_save or (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
@@ -4991,11 +5442,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		required_top.append_array(["original_gods", "god_objects"])
 	if companies_save:
 		required_top.append_array(["original_companies", "companies", "company_purchase_remaining", "jackpot", "company_months", "company_service_pending"])
+	if status_save:
+		required_top.append_array(["original_statuses", "pending_trap"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if facility_save:
@@ -5021,6 +5474,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid company turn state")
 	elif data.get("original_companies", false) == true:
 		errors.append("company marker requires v7 save")
+	if status_save:
+		if typeof(data.get("original_statuses")) != TYPE_BOOL or not data.get("original_statuses", false):
+			errors.append("invalid original statuses marker")
+		if not bool(data.get("original_companies", false)) or not bool(data.get("original_gods", false)) or not bool(data.get("original_facilities", false)):
+			errors.append("statuses marker requires companies, gods and facilities")
+	elif data.get("original_statuses", false) == true:
+		errors.append("statuses marker requires v8 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)
@@ -5220,6 +5680,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("pending remote dice conflicts with movement modifier")
 	var action_options: Variant = data.get("action_options", null)
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
+	if status_save:
+		known_actions.append("respond_trap")
 	if facility_save:
 		known_actions.append("build_facility")
 	if companies_save:
@@ -5244,9 +5706,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("pending remote dice has unavailable action")
 			if inventory_save and phase_name == "await_roll" and saved_current_movement_blocked and option == "use_tool":
 				errors.append("movement modifier has unavailable tool action")
-		if phase_name == "await_action" and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
+		var pending_trap_for_options: bool = status_save and typeof(data.get("pending_trap", {})) == TYPE_DICTIONARY and not data.get("pending_trap", {}).is_empty()
+		if phase_name == "await_action" and not pending_trap_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
 			errors.append("await_action missing end_turn")
-		if phase_name in ["await_roll", "await_route"]:
+		if pending_trap_for_options:
+			if action_options != ["respond_trap"]:
+				errors.append("pending trap action options mismatch")
+		elif phase_name in ["await_roll", "await_route"]:
 			var non_action_phase_options: Array = ["buy_stock", "sell_stock"]
 			if inventory_save and phase_name == "await_roll":
 				non_action_phase_options.append_array(["use_card", "use_tool"])
@@ -5605,6 +6071,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				required_player.append("insurance_status")
 			if gods_save:
 				required_player.append_array(["god_id", "hospital_days"])
+			if status_save:
+				required_player.append("prison_days")
 			if setup_save:
 				required_player.append_array(["character_id", "init_cash_ratio"])
 			for required_key in required_player:
@@ -5643,8 +6111,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("player %d god_id invalid" % index)
 				elif int(player_god_value) != 0 and not OriginalGods.valid_id(player_god_value):
 					errors.append("player %d god_id unknown" % index)
-				if not _valid_int(player.get("hospital_days", null), 0, 3):
+				var hospital_max: int = MAX_STATUS_ADMISSION_DAYS if status_save else 3
+				if not _valid_int(player.get("hospital_days", null), 0, hospital_max):
 					errors.append("player %d hospital_days invalid" % index)
+				if status_save and not _valid_int(player.get("prison_days", null), 0, MAX_STATUS_ADMISSION_DAYS):
+					errors.append("player %d prison_days invalid" % index)
 			if graph_save or inventory_save:
 				if not _valid_int(player.get("previous_position", null), -1, position_limit):
 					if graph_save:
@@ -5745,6 +6216,92 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d vehicle ownership invalid" % index)
 				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
+
+	if status_save:
+		var hospital_node: int = _status_node_index_in_board(board, "hospital")
+		var prison_node: int = _status_node_index_in_board(board, "prison")
+		if hospital_node < 0:
+			errors.append("status save missing hospital node")
+		if prison_node < 0:
+			errors.append("status save missing prison node")
+		if typeof(players) == TYPE_ARRAY and typeof(board) == TYPE_ARRAY:
+			for status_player_index in range(players.size()):
+				if typeof(players[status_player_index]) != TYPE_DICTIONARY:
+					continue
+				var status_player: Dictionary = players[status_player_index]
+				var hospital_value: Variant = status_player.get("hospital_days", null)
+				var prison_value: Variant = status_player.get("prison_days", null)
+				var hospital_valid: bool = _valid_int(hospital_value, 0, MAX_STATUS_ADMISSION_DAYS)
+				var prison_valid: bool = _valid_int(prison_value, 0, MAX_STATUS_ADMISSION_DAYS)
+				if hospital_valid and prison_valid and int(hospital_value) > 0 and int(prison_value) > 0:
+					errors.append("player %d has mutually exclusive statuses" % status_player_index)
+				var status_position_valid: bool = _valid_int(status_player.get("position", null), 0, board.size() - 1)
+				var status_previous_valid: bool = _valid_int(status_player.get("previous_position", null), -1, board.size() - 1)
+				if hospital_valid and int(hospital_value) > 0 and hospital_node >= 0:
+					if status_position_valid and int(status_player.get("position")) != hospital_node:
+						errors.append("player %d hospital position mismatch" % status_player_index)
+					if status_previous_valid and int(status_player.get("previous_position")) != -1:
+						errors.append("player %d hospital previous position mismatch" % status_player_index)
+				if prison_valid and int(prison_value) > 0 and prison_node >= 0:
+					if status_position_valid and int(status_player.get("position")) != prison_node:
+						errors.append("player %d prison position mismatch" % status_player_index)
+					if status_previous_valid and int(status_player.get("previous_position")) != -1:
+						errors.append("player %d prison previous position mismatch" % status_player_index)
+
+	if status_save:
+		var pending_trap_value: Variant = data.get("pending_trap", null)
+		if typeof(pending_trap_value) != TYPE_DICTIONARY:
+			errors.append("invalid pending trap")
+		else:
+			var pending_trap: Dictionary = pending_trap_value
+			if not pending_trap.is_empty():
+				if pending_trap.size() != 2 or not pending_trap.has("caster_id") or not pending_trap.has("target_id"):
+					errors.append("pending trap keys are not canonical")
+				var pending_caster: Variant = pending_trap.get("caster_id", null)
+				var pending_target: Variant = pending_trap.get("target_id", null)
+				var pending_ids_valid: bool = _valid_int(pending_caster, 0, max(0, player_count - 1)) and _valid_int(pending_target, 0, max(0, player_count - 1))
+				if not pending_ids_valid:
+					errors.append("pending trap player id invalid")
+				elif int(pending_caster) == int(pending_target):
+					errors.append("pending trap players must differ")
+				else:
+					var pending_caster_player: Variant = players[int(pending_caster)] if typeof(players) == TYPE_ARRAY and int(pending_caster) < players.size() else null
+					var pending_target_player: Variant = players[int(pending_target)] if typeof(players) == TYPE_ARRAY and int(pending_target) < players.size() else null
+					if typeof(pending_caster_player) != TYPE_DICTIONARY or typeof(pending_target_player) != TYPE_DICTIONARY:
+						errors.append("pending trap players missing")
+					else:
+						var pending_caster_record: Dictionary = pending_caster_player
+						var pending_target_record: Dictionary = pending_target_player
+						if int(pending_caster) != current_player:
+							errors.append("pending trap caster mismatch")
+						if not bool(pending_caster_record.get("alive", false)) or not bool(pending_target_record.get("alive", false)):
+							errors.append("pending trap player is dead")
+						var pending_caster_hospital: Variant = pending_caster_record.get("hospital_days", null)
+						var pending_caster_prison: Variant = pending_caster_record.get("prison_days", null)
+						if not _valid_int(pending_caster_hospital, 0, MAX_STATUS_ADMISSION_DAYS) or not _valid_int(pending_caster_prison, 0, MAX_STATUS_ADMISSION_DAYS) or int(pending_caster_hospital) > 0 or int(pending_caster_prison) > 0:
+							errors.append("pending trap caster is detained")
+						if not bool(pending_target_record.get("is_human", false)) or bool(pending_target_record.get("is_ai", false)):
+							errors.append("pending trap target must be human")
+						var pending_target_hospital: Variant = pending_target_record.get("hospital_days", null)
+						var pending_target_prison: Variant = pending_target_record.get("prison_days", null)
+						if not _valid_int(pending_target_hospital, 0, MAX_STATUS_ADMISSION_DAYS) or not _valid_int(pending_target_prison, 0, MAX_STATUS_ADMISSION_DAYS) or int(pending_target_hospital) > 0 or int(pending_target_prison) > 0:
+							errors.append("pending trap target is detained")
+						var pending_target_cards: Variant = pending_target_record.get("cards", null)
+						if typeof(pending_target_cards) != TYPE_ARRAY or not pending_target_cards.has("嫁禍"):
+							errors.append("pending trap target lacks scapegoat")
+						elif pending_target_cards.has("免罪"):
+							errors.append("pending trap target has immunity")
+						if phase_name not in ["await_roll", "await_action"]:
+							errors.append("pending trap outside action phase")
+						var pending_remote_for_trap: Variant = data.get("pending_remote_dice", {})
+						if typeof(pending_remote_for_trap) != TYPE_DICTIONARY or not pending_remote_for_trap.is_empty():
+							errors.append("pending trap conflicts with remote dice")
+						if typeof(action_options) == TYPE_ARRAY and action_options != ["respond_trap"]:
+							errors.append("pending trap action options mismatch")
+	else:
+		var legacy_pending_trap: Variant = data.get("pending_trap", {})
+		if typeof(legacy_pending_trap) == TYPE_DICTIONARY and not legacy_pending_trap.is_empty():
+			errors.append("pending trap requires v8 save")
 
 	if gods_save:
 		var god_objects_value: Variant = data.get("god_objects", null)

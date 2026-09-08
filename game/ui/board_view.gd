@@ -33,6 +33,7 @@ var players_data: Array = []
 var current_player_index := 0
 var selected_index := -1
 var route_options: Array = []
+var roadblocks_data: Dictionary = {}
 var map_definition: Dictionary = {}
 var preview_mode := false
 var map_zoom := 1.0
@@ -54,11 +55,12 @@ func _ready() -> void:
 	set_process_input(true)
 	queue_redraw()
 
-func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = []) -> void:
+func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = [], next_roadblocks: Dictionary = {}) -> void:
 	board_data = next_board.duplicate(true)
 	players_data = next_players.duplicate(true)
 	current_player_index = current_index
 	route_options = next_route_options.duplicate(true)
+	roadblocks_data = next_roadblocks.duplicate(true)
 	if not definition.is_empty():
 		_reset_for_geometry_change(definition)
 		map_definition = definition.duplicate(true)
@@ -116,6 +118,7 @@ func set_map_definition(definition: Dictionary, is_preview := true) -> void:
 	if is_preview:
 		players_data = []
 		route_options = []
+		roadblocks_data = {}
 	if selected_index >= _geometry_board().size():
 		selected_index = -1
 	_layout_size = Vector2.ZERO
@@ -127,6 +130,7 @@ func set_preview_definition(definition: Dictionary) -> void:
 func clear_map_definition() -> void:
 	reset_view()
 	map_definition = {}
+	roadblocks_data = {}
 	_focused_player_position = Vector2i(-1, -1)
 	preview_mode = false
 	_layout_size = Vector2.ZERO
@@ -155,6 +159,17 @@ func get_screen_position_for_index(index: int) -> Vector2:
 
 func get_zoom() -> float:
 	return map_zoom
+
+func visible_node_indices() -> Array:
+	var visible: Array = []
+	if not is_original_map() or size.x < 40 or size.y < 40:
+		return visible
+	_layout_map()
+	var viewport := Rect2(Vector2(8, 8), size - Vector2(16, 16))
+	for index in range(_node_positions.size()):
+		if viewport.has_point(_node_positions[index]):
+			visible.append(index)
+	return visible
 
 func set_zoom(value: float, focus := Vector2.ZERO) -> void:
 	if not is_original_map():
@@ -309,6 +324,21 @@ func _draw_original_board() -> void:
 	if _background != null:
 		for index in range(geometry.size()):
 			_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
+	_draw_roadblocks()
+
+func _draw_roadblocks() -> void:
+	for key in roadblocks_data:
+		if not str(key).is_valid_int():
+			continue
+		var index := int(key)
+		if index < 0 or index >= _node_positions.size():
+			continue
+		var center: Vector2 = _node_positions[index]
+		draw_line(center + Vector2(-9, 0), center + Vector2(-9, 11), Color.WHITE, 3)
+		draw_line(center + Vector2(9, 0), center + Vector2(9, 11), Color.WHITE, 3)
+		draw_rect(Rect2(center + Vector2(-15, -6), Vector2(30, 12)), Color("#ffc65a"))
+		for offset in [-10, -2, 6]:
+			draw_line(center + Vector2(offset, -5), center + Vector2(offset + 5, 5), Color("#172433"), 4)
 
 func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
 	if _background != null:

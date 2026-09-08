@@ -48,7 +48,7 @@ func _set_date(ui: Control, year: int, month: int, day: int) -> void:
 	ui.start_day_input.value = day
 
 func _test_default_setup_and_four_players(ui: Control) -> void:
-	_expect(int(ui.state.get("version", 0)) == 3, "startup uses setup save version")
+	_expect(int(ui.state.get("version", 0)) == 4, "startup uses inventory setup save version")
 	_expect(int(ui.state.get("initial_fund", 0)) == 200000, "startup uses the default initial fund")
 	_expect(int(ui.state.get("day_limit", -1)) == 0, "startup has no day limit")
 	_expect(int(ui.state.get("wealth_multiplier", -1)) == 0, "startup has no wealth target")
@@ -81,7 +81,7 @@ func _test_actual_setup(ui: Control) -> void:
 	await process_frame
 	var snapshot: Dictionary = ui.state
 	_expect(int(snapshot.get("seed", 0)) == 101, "setup keeps the requested seed")
-	_expect(int(snapshot.get("version", 0)) == 3, "confirmed setup uses save version three")
+	_expect(int(snapshot.get("version", 0)) == 4, "confirmed setup uses inventory save version four")
 	_expect(int(snapshot.get("initial_fund", 0)) == 100000, "confirmed setup stores initial fund")
 	_expect(int(snapshot.get("day_limit", 0)) == 365, "confirmed setup stores day limit")
 	_expect(int(snapshot.get("wealth_multiplier", 0)) == 3, "confirmed setup stores wealth multiplier")
@@ -131,5 +131,5 @@ func _test_missing_system_date() -> void:
 	var options: Dictionary = ui._default_setup_options(4)
 	_expect(options.get("start_date", {}) == {"year": 1998, "month": 1, "day": 1}, "missing system date uses supported fallback")
 	var game: Object = GameState.new_game(42, 4, options)
-	_expect(game != null and int(game.state.get("version", 0)) == 3, "missing clock retains setup mode")
+	_expect(game != null and int(game.state.get("version", 0)) == 4, "missing clock retains inventory setup mode")
 	ui.free()

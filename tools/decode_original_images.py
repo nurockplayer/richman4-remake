@@ -958,6 +958,8 @@ def assert_private_output(output: Path) -> None:
     root = _git_worktree_root(output)
     if root is None:
         return
+    # Staging and preserved rollback backups also contain private source data.
+    _git_check_ignored(root, output)
     _git_check_ignored(root, output / "images")
     _git_check_ignored(root, output / "manifest.json")
     tracked = _git_tracked_managed_paths(root, output)

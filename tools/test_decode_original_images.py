@@ -250,6 +250,15 @@ class DecodeOriginalImagesTests(unittest.TestCase):
 
             self.assertFalse(output.exists())
 
+    def test_ignored_children_do_not_protect_transient_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            init_git_repo(repository, "review-output-check/images\nreview-output-check/manifest.json\n")
+            output = repository / "review-output-check"
+            with self.assertRaisesRegex(InputError, "ignored"):
+                assert_private_output(output)
+            self.assertFalse(output.exists())
+
     def test_ignored_custom_git_output_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary) / "repository"

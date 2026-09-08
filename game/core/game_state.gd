@@ -927,7 +927,10 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 	var tools: Dictionary = player.get("tools", {}).duplicate(true)
 	var old_tool_id: String = _inventory_vehicle_tool_id(current_vehicle)
 	if not old_tool_id.is_empty():
-		if int(tools.get(old_tool_id, 0)) >= OriginalInventory.TOOL_CAPACITY_PER_TYPE:
+		# Returning an equipped vehicle follows the original cleanup path and may
+		# leave ten copies in the backpack.  Refuse only a value that would grow
+		# that storage beyond ten, keeping malformed future state fail-closed.
+		if int(tools.get(old_tool_id, 0)) >= OriginalInventory.VEHICLE_STORAGE_CAPACITY:
 			return _error("道具數量超出上限")
 	var new_tool_id: String = _inventory_vehicle_tool_id(vehicle)
 	if not new_tool_id.is_empty() and int(tools.get(new_tool_id, 0)) < 1:
@@ -1517,8 +1520,7 @@ func _trade_item(player_id: int, action: String, params: Dictionary) -> Dictiona
 			return _error("點數不足")
 		if item_kind == "card" and player.get("cards", []).size() >= OriginalInventory.CARD_CAPACITY:
 			return _error("卡片背包已滿")
-		var equipped: int = _shop_item_equipped(player, item_kind, item_id)
-		if item_kind == "tool" and owned + equipped + quantity > OriginalInventory.TOOL_CAPACITY_PER_TYPE:
+		if item_kind == "tool" and owned + quantity > OriginalInventory.TOOL_CAPACITY_PER_TYPE:
 			return _error("道具數量超出上限")
 		var grant_result: Dictionary
 		if item_kind == "card":
@@ -3554,7 +3556,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 							errors.append("player %d tool unknown" % index)
 							continue
 						var tool_quantity: Variant = tools[tool_id]
-						if not _valid_int(tool_quantity, 0, OriginalInventory.TOOL_CAPACITY_PER_TYPE):
+						var tool_capacity: int = OriginalInventory.VEHICLE_STORAGE_CAPACITY if OriginalInventory.VEHICLE_TOOL_IDS.has(str(tool_id)) else OriginalInventory.TOOL_CAPACITY_PER_TYPE
+						if not _valid_int(tool_quantity, 0, tool_capacity):
 							errors.append("player %d tool quantity invalid" % index)
 							continue
 						held_inventory_tools[str(tool_id)] = int(held_inventory_tools.get(str(tool_id), 0)) + int(tool_quantity)
@@ -3564,7 +3567,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					held_inventory_tools[active_tool_id] = int(held_inventory_tools.get(active_tool_id, 0)) + 1
 					player_tool_totals[active_tool_id] = int(player_tool_totals.get(active_tool_id, 0)) + 1
 				for total_tool_id in player_tool_totals:
-					if int(player_tool_totals[total_tool_id]) > OriginalInventory.TOOL_CAPACITY_PER_TYPE:
+					var total_capacity: int = OriginalInventory.VEHICLE_STORAGE_CAPACITY if OriginalInventory.VEHICLE_TOOL_IDS.has(str(total_tool_id)) else OriginalInventory.TOOL_CAPACITY_PER_TYPE
+					if int(player_tool_totals[total_tool_id]) > total_capacity:
 						errors.append("player %d tool total exceeds capacity %s" % [index, total_tool_id])
 			var vehicles: Variant = player.get("vehicles", null)
 			if typeof(vehicles) != TYPE_DICTIONARY:

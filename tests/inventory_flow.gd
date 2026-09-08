@@ -142,6 +142,19 @@ func _test_tool_capacity_does_not_lose_pool() -> void:
 	_expect_equal(int(supply["tools"]["機器娃娃"]), 10, "finite tool consume restores the pool")
 	_expect(tools.is_empty(), "consuming all finite tools removes the sparse entry")
 
+	var vehicle_supply: Dictionary = Inventory.new_supply()
+	vehicle_supply["tools"]["汽車"] = 0
+	var vehicle_tools: Dictionary = {"汽車": 10}
+	var other_vehicle_grant := Inventory.grant_tool(vehicle_supply, vehicle_tools, "機車", 1)
+	_expect(bool(other_vehicle_grant.get("ok", false)), "a vehicle grant accepts a container with another vehicle stored at ten")
+	_expect_equal(int(vehicle_tools["汽車"]), 10, "granting another vehicle preserves the ten-unit stored vehicle")
+	_expect_equal(int(vehicle_tools.get("機車", 0)), 1, "granting another vehicle enters its backpack")
+
+	var vehicle_consume := Inventory.consume_tool(vehicle_supply, vehicle_tools, "汽車", 9)
+	_expect(bool(vehicle_consume.get("ok", false)), "vehicle consume works from a ten-unit stored backpack")
+	_expect_equal(int(vehicle_tools["汽車"]), 1, "consuming nine stored vehicles leaves the last one")
+	_expect_equal(int(vehicle_supply["tools"]["汽車"]), 9, "consuming stored vehicles returns them to finite supply")
+
 
 func _test_invalid_quantities_are_atomic() -> void:
 	var supply: Dictionary = Inventory.new_supply()

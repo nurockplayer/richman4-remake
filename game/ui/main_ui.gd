@@ -2165,7 +2165,7 @@ func _update_shop_popup() -> void:
 			var price: int = InventoryRules.quote_buy(kind, item_id, count)
 			buy.text = "買入 %d 點" % price
 			sell.text = "出售 %d 點" % InventoryRules.quote_sale(kind, item_id, count)
-			buy.disabled = not _is_human_turn() or int(_current_player().get("points", 0)) < price or int(item.get("stock", 0)) < count or (kind == "tool" and int(item.get("owned", 0)) + int(item.get("equipped", 0)) + count > 9) or (kind == "card" and _as_array(_current_player().get("cards", [])).size() >= 15)
+			buy.disabled = not _is_human_turn() or int(_current_player().get("points", 0)) < price or int(item.get("stock", 0)) < count or (kind == "tool" and int(item.get("owned", 0)) + count > 9) or (kind == "card" and _as_array(_current_player().get("cards", [])).size() >= 15)
 			sell.disabled = not _is_human_turn() or int(item.get("owned", 0)) < count
 		quantity.value_changed.connect(update_quote)
 		update_quote.call()
@@ -2211,7 +2211,7 @@ func _append_tool_inventory() -> void:
 		walk.disabled = dice_option.disabled
 		vehicle_row.add_child(walk)
 	cards_popup_list.add_child(vehicle_row)
-	cards_popup_list.add_child(_make_label("道具（每種最多 9 個）", 15, TEXT_GOLD))
+	cards_popup_list.add_child(_make_label("道具（取得上限每類 9 個）", 15, TEXT_GOLD))
 	var tools: Dictionary = _current_player().get("tools", {})
 	var has_tools := false
 	for record in InventoryCatalogue.tools():

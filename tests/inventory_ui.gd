@@ -163,11 +163,26 @@ func run() -> void:
 	if buy_car != null and sell_car != null:
 		var count: SpinBox = buy_car.get_parent().get_child(1)
 		count.value = 9
-		expect(buy_car.disabled, "equipped car prevents buying nine more cars")
+		expect(not buy_car.disabled, "original bag-only ceiling permits nine cars while one is equipped")
 		count.value = 8
 		expect(not buy_car.disabled, "equipped car permits eight additional cars")
 		count.value = 1
 		expect(sell_car.disabled, "equipped car cannot be sold as a backpack unit")
+		count.value = 9
+		buy_car.pressed.emit()
+		await process_frame
+		await process_frame
+		expect(int(ui.state.players[0].tools.get("汽車", 0)) == 9 and ui.state.players[0].vehicle == "car", "shop preserves original nine-in-bag plus one-equipped state")
+		ui.game_state.state.phase = "await_roll"
+		ui.game_state._set_action_options(0)
+		ui._refresh_from_state()
+		ui._on_cards_pressed()
+		var return_vehicle: Button = ui.cards_popup.find_child("UnequipVehicle", true, false)
+		expect(return_vehicle != null and not return_vehicle.disabled, "nine-in-bag vehicle can still be returned")
+		if return_vehicle != null:
+			return_vehicle.pressed.emit()
+			await process_frame
+			expect(ui.state.players[0].vehicle == "walking" and int(ui.state.players[0].tools.get("汽車", 0)) == 10, "return button preserves original ten stored vehicles")
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	print("Inventory UI checks: %d, failures: %d" % [checks, failures])

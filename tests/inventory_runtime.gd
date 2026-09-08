@@ -224,27 +224,93 @@ func _test_equipped_vehicle_tool_capacity() -> void:
 	game.state["phase"] = "await_action"
 	game._set_action_options(0)
 	var buy_nine: Dictionary = game.choose_action("buy_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 9})
-	_expect(not bool(buy_nine.get("ok", false)), "equipped car rejects nine additional tools")
-	_expect_equal(int(player["tools"].get("汽車", 0)), 0, "rejected equipped-cap purchase leaves backpack unchanged")
-	game._set_action_options(0)
-	var buy_eight: Dictionary = game.choose_action("buy_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 8})
-	_expect(bool(buy_eight.get("ok", false)), "equipped car permits eight additional tools")
-	_expect_equal(int(player["tools"].get("汽車", 0)), 8, "eight purchased tools enter the backpack")
-	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "equipped car plus eight tools remains save-valid")
+	_expect(bool(buy_nine.get("ok", false)), "equipped car permits nine tools in the backpack")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 9, "nine purchased tools enter the backpack beside the equipped car")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "active car plus nine backpack tools remains save-valid")
+
+	var acquire_supply: Dictionary = Inventory.new_supply()
+	var acquire_tools: Dictionary = Inventory.empty_tools()
+	_expect(bool(Inventory.grant_tool(acquire_supply, acquire_tools, "汽車", 9).get("ok", false)), "vehicle bag acquisition reaches the nine-unit limit")
+	var acquire_supply_before: Dictionary = acquire_supply.duplicate(true)
+	var acquire_tools_before: Dictionary = acquire_tools.duplicate(true)
+	var tenth_bag: Dictionary = Inventory.grant_tool(acquire_supply, acquire_tools, "汽車", 1)
+	_expect(not bool(tenth_bag.get("ok", false)), "new vehicle acquisition beyond nine backpack units is rejected")
+	_expect_equal(acquire_supply, acquire_supply_before, "rejected tenth vehicle acquisition leaves supply unchanged")
+	_expect_equal(acquire_tools, acquire_tools_before, "rejected tenth vehicle acquisition leaves backpack unchanged")
 
 	game.state["phase"] = "await_roll"
 	game._set_action_options(0)
 	var unequip: Dictionary = game.set_vehicle("walking")
-	_expect(bool(unequip.get("ok", false)), "equipped car can be unequipped at the nine-tool boundary")
-	_expect_equal(int(player["tools"].get("汽車", 0)), 9, "unequipping returns the car to a backpack of nine")
-	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "unequipped nine-tool backpack remains save-valid")
+	_expect(bool(unequip.get("ok", false)), "equipped car can be returned at the nine-tool boundary")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 10, "returning the car preserves ten stored vehicles")
+	var returned_save: Dictionary = game.to_dict()
+	_expect(bool(GameState.validate_save(returned_save).get("ok", false)), "returned ten-unit vehicle backpack remains save-valid")
+	var returned_restored: Object = GameState.from_dict(JSON.parse_string(game.to_json()))
+	_expect(returned_restored != null, "returned ten-unit vehicle backpack round trips through JSON")
+	if returned_restored != null:
+		_expect_equal(int(returned_restored.state["players"][0]["tools"].get("汽車", 0)), 10, "JSON round trip preserves ten stored vehicles")
+		returned_restored.state["phase"] = "await_roll"
+		returned_restored._set_action_options(0)
+		var restored_re_equip: Dictionary = returned_restored.set_vehicle("car")
+		_expect(bool(restored_re_equip.get("ok", false)), "JSON-restored ten-unit vehicle can continue by re-equipping")
+		_expect_equal(int(returned_restored.state["players"][0]["tools"].get("汽車", 0)), 9, "continued JSON-restored game returns to nine backpack vehicles")
+		_expect(bool(GameState.validate_save(returned_restored.to_dict()).get("ok", false)), "continued JSON-restored vehicle state remains save-valid")
+
+	game.state["phase"] = "await_roll"
+	game._set_action_options(0)
+	var re_equip: Dictionary = game.set_vehicle("car")
+	_expect(bool(re_equip.get("ok", false)), "ten stored vehicles can be re-equipped")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 9, "re-equipping returns to nine backpack vehicles plus one active")
+	_expect_equal(player.get("vehicle", ""), "car", "re-equipping selects the car")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "re-equipped car plus nine backpack tools remains save-valid")
+
+	game.state["phase"] = "await_roll"
+	game._set_action_options(0)
+	var return_for_sale: Dictionary = game.set_vehicle("walking")
+	_expect(bool(return_for_sale.get("ok", false)), "equipped car can return before a bag sale")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 10, "sale fixture restores ten stored vehicles")
+	game.state["phase"] = "await_action"
+	game._set_action_options(0)
+	var sell_nine: Dictionary = game.choose_action("sell_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 9})
+	_expect(bool(sell_nine.get("ok", false)), "nine vehicles can be sold from a ten-unit stored backpack")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 1, "selling nine stored vehicles leaves the last one in the backpack")
+	_expect_equal(int(game.state["inventory_supply"]["tools"]["汽車"]), 9, "selling nine stored vehicles returns nine units to finite supply")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "post-sale vehicle inventory remains save-valid")
+
+	game.state["phase"] = "await_roll"
+	game._set_action_options(0)
+	var re_equip_after_sale: Dictionary = game.set_vehicle("car")
+	_expect(bool(re_equip_after_sale.get("ok", false)), "last stored vehicle can be re-equipped after sale")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 0, "re-equipping consumes the last stored vehicle")
+	game.state["phase"] = "await_action"
+	game._set_action_options(0)
+	var refill_after_sale: Dictionary = game.choose_action("buy_item", {"item_kind": "tool", "item_id": "汽車", "quantity": 9})
+	_expect(bool(refill_after_sale.get("ok", false)), "bag-only acquisition can refill nine vehicles beside an active car")
+	_expect_equal(int(player["tools"].get("汽車", 0)), 9, "refilled bag reaches nine beside the active car")
+	_expect(bool(GameState.validate_save(game.to_dict()).get("ok", false)), "refilled active car plus nine backpack tools remains save-valid")
 
 	var malformed: Dictionary = game.to_dict()
 	malformed["players"][0]["vehicle"] = "car"
 	malformed["players"][0]["vehicles"]["car"] = true
-	malformed["players"][0]["tools"]["汽車"] = 9
+	malformed["players"][0]["tools"]["汽車"] = 10
 	malformed["inventory_supply"]["tools"]["汽車"] = 0
-	_expect(not bool(GameState.validate_save(malformed).get("ok", false)), "active car plus nine backpack tools is rejected by save validation")
+	var malformed_result: Dictionary = GameState.validate_save(malformed)
+	_expect(not bool(malformed_result.get("ok", false)), "active car plus ten backpack tools is rejected by save validation")
+	_expect(malformed_result.get("errors", []).has("player 0 tool total exceeds capacity 汽車"), "active car plus ten backpack tools reports the same-vehicle capacity error")
+
+	var malformed_vehicle_storage: Dictionary = returned_save.duplicate(true)
+	malformed_vehicle_storage["players"][0]["tools"]["汽車"] = 11
+	var malformed_vehicle_storage_result: Dictionary = GameState.validate_save(malformed_vehicle_storage)
+	_expect(not bool(malformed_vehicle_storage_result.get("ok", false)), "walking player with eleven stored vehicles is rejected by save validation")
+	_expect(malformed_vehicle_storage_result.get("errors", []).has("player 0 tool quantity invalid"), "walking player with eleven stored vehicles reports the ten-unit storage limit")
+
+	var malformed_nonvehicle: Dictionary = returned_save.duplicate(true)
+	malformed_nonvehicle["players"][0]["tools"]["路障"] = 10
+	malformed_nonvehicle["players"][1]["tools"]["路障"] = 0
+	malformed_nonvehicle["inventory_supply"]["tools"]["路障"] = 0
+	var malformed_nonvehicle_result: Dictionary = GameState.validate_save(malformed_nonvehicle)
+	_expect(not bool(malformed_nonvehicle_result.get("ok", false)), "non-vehicle ten-unit backpack is rejected by save validation")
+	_expect(malformed_nonvehicle_result.get("errors", []).has("player 0 tool quantity invalid"), "non-vehicle ten-unit backpack reports the ordinary nine-unit capacity error")
 
 
 func _test_inventory_card_lifecycle() -> void:

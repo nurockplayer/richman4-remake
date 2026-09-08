@@ -14,6 +14,8 @@ const Catalogue = preload("res://game/content/original_inventory.gd")
 
 const CARD_CAPACITY: int = Catalogue.CARD_CAPACITY
 const TOOL_CAPACITY_PER_TYPE: int = Catalogue.TOOL_CAPACITY_PER_TYPE
+const VEHICLE_STORAGE_CAPACITY: int = TOOL_CAPACITY_PER_TYPE + 1
+const VEHICLE_TOOL_IDS: Array = ["機車", "汽車"]
 const SHOP_SALE_RATE: float = 0.9
 const FINITE_TOOL_SOURCE_ID_MAX: int = 8
 const INITIAL_TOOL_SOURCE_IDS: Array = [1, 2, 3, 4, 8, 9]
@@ -200,6 +202,9 @@ static func grant_tool(supply: Dictionary, player_tools: Dictionary, identifier:
 	var tool_id: String = str(record["id"])
 	var requested: int = int(quantity)
 	var owned: int = int(player_tools.get(tool_id, 0))
+	# Acquisitions are still limited to nine backpack units.  A vehicle may
+	# temporarily be stored at ten only after an equipped vehicle is returned;
+	# that extra stored unit cannot be acquired through the normal grant path.
 	if owned + requested > TOOL_CAPACITY_PER_TYPE:
 		return _failure("道具數量超出上限。")
 
@@ -356,7 +361,8 @@ static func _valid_tools(tools: Dictionary) -> bool:
 		var record: Dictionary = _record_for(TOOL_KIND, identifier)
 		if record.is_empty() or not _valid_nonnegative_int(tools[identifier]):
 			return false
-		if int(tools[identifier]) > TOOL_CAPACITY_PER_TYPE:
+		var capacity: int = VEHICLE_STORAGE_CAPACITY if VEHICLE_TOOL_IDS.has(str(identifier)) else TOOL_CAPACITY_PER_TYPE
+		if int(tools[identifier]) > capacity:
 			return false
 	return true
 

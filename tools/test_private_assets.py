@@ -124,6 +124,35 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertIn("Worktree private asset link", result.stdout)
             self.assertEqual((expected / "source/dfw4cskzl_136622/Game/map.mkf").read_bytes(), b"fixture original asset\n")
 
+    def test_default_cache_adopts_verified_legacy_worktree_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, revision = self._make_fixture(temporary)
+            worktree_path = Path(temporary) / "worktree" / ".local" / "private-assets"
+            worktree_path.parent.mkdir(parents=True)
+            run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(worktree_path),
+            ], cwd=ROOT, env=bootstrap_env())
+            self.assertTrue(worktree_path.is_dir())
+
+            cache_root = Path(temporary) / "cache"
+            result = run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--cache-root", str(cache_root),
+                "--link", str(worktree_path),
+            ], cwd=ROOT, env=bootstrap_env())
+            expected = cache_root / "private-assets" / revision
+            self.assertIn("Adopted verified worktree-local private assets", result.stdout)
+            self.assertTrue(worktree_path.is_symlink())
+            self.assertEqual(worktree_path.resolve(), expected.resolve())
+            self.assertEqual((expected / "source/dfw4cskzl_136622/Game/map.mkf").read_bytes(), b"fixture original asset\n")
+
     def test_bootstrap_rejects_invalid_existing_destination_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, config, revision = self._make_fixture(temporary)

@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""Regression tests for the bounded original-image decoder."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import struct
+import sys
+import tempfile
+import unittest
+import zlib
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from decode_original_images import (  # noqa: E402
+    CodecError,
+    FormatError,
+    ImageError,
+    MkfEntry,
+    decode_source,
+    decompress_private,
+    parse_mkf,
+    parse_visual_resource,
+    write_png,
+)
+
+
+def make_mkf(resources: list[tuple[bytes, int, int, int]]) -> bytes:
+    """Build an MKF fixture from (payload, decoded size, image offset, size)."""
+
+    body = bytearray(struct.pack("<I", 0))
+    starts: list[int] = []
+    for payload, decoded_size, image_offset, image_size in resources:
+        starts.append(len(body))
+        body.extend(
+            struct.pack("<4I", decoded_size, len(payload), image_offset, image_size)
+        )
+        body.extend(payload)
+    table_offset = len(body)
+    body[0:4] = struct.pack("<I", table_offset)
+    body.extend(struct.pack(f"<{len(starts)}I", *starts))
+    return bytes(body)
+
+
+def make_spr() -> bytes:
+    start_offset = 12 + 12
+    chunks = struct.pack("<hhhhI", 2, 1, 3, 4, 2)
+    palette = bytearray(512)
+    struct.pack_into("<H", palette, 2, 0x7C00)  # red in RGB555
+    return (
+        b"SPR\0"
+        + struct.pack("<II", 1, start_offset)
+        + chunks
+        + bytes(palette)
+        + bytes((0, 1))
+    )
+
+
+def make_smp() -> bytes:
+    start_offset = 12 + 12
+    chunks = struct.pack("<hhhhI", 1, 1, -2, 5, 2)
+    return (
+        b"SMP\0"
+        + struct.pack("<II", 1, start_offset)
+        + chunks
+        + struct.pack("<H", 0x03E0)  # green in RGB555
+    )
+
+
+def initial_code(symbol: int) -> tuple[int, int]:
+    """Find one symbol's initial-tree code as (LSB-first value, bit count)."""
+
+    from decode_original_images import _initial_huffman_tables
+
+    _weights, tab2, _tree = _initial_huffman_tables()
+
+    def search(node: int, code: int, width: int) -> tuple[int, int] | None:
+        child = tab2[node] // 2
+        if child >= 641:
+            return (code, width) if child - 641 == symbol else None
+        found = search(child, code, width + 1)
+        if found is not None:
+            return found
+        return search(child + 1, code | (1 << width), width + 1)
+
+    result = search(640, 0, 0)
+    if result is None:
+        raise AssertionError(f"symbol {symbol} is absent from initial tree")
+    return result
+
+
+def pack_bits(*codes: tuple[int, int]) -> bytes:
+    bits: list[int] = []
+    for value, width in codes:
+        bits.extend((value >> shift) & 1 for shift in range(width))
+    result = bytearray((len(bits) + 7) // 8)
+    for index, bit in enumerate(bits):
+        result[index // 8] |= bit << (index % 8)
+    return bytes(result)
+
+
+def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise AssertionError("fixture is not a PNG")
+    offset = 8
+    width = height = None
+    compressed = bytearray()
+    while offset < len(data):
+        size = struct.unpack_from(">I", data, offset)[0]
+        kind = data[offset + 4 : offset + 8]
+        payload = data[offset + 8 : offset + 8 + size]
+        offset += 12 + size
+        if kind == b"IHDR":
+            width, height, depth, color_type, *_ = struct.unpack(">IIBBBBB", payload)
+            if (depth, color_type) != (8, 6):
+                raise AssertionError("fixture is not RGBA8")
+        elif kind == b"IDAT":
+            compressed.extend(payload)
+        elif kind == b"IEND":
+            break
+    if width is None or height is None:
+        raise AssertionError("PNG has no IHDR")
+    filtered = zlib.decompress(bytes(compressed))
+    rows = bytearray()
+    stride = width * 4
+    for row in range(height):
+        filter_type = filtered[row * (stride + 1)]
+        if filter_type != 0:
+            raise AssertionError("fixture used an unexpected PNG filter")
+        start = row * (stride + 1) + 1
+        rows.extend(filtered[start : start + stride])
+    return width, height, bytes(rows)
+
+
+class DecodeOriginalImagesTests(unittest.TestCase):
+    def test_failed_rerun_does_not_keep_manifest_for_replaced_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            output = Path(temporary) / "output"
+            spr = make_spr()
+            (root / "a.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"data", 4, 0, 0)]))
+            manifest = decode_source(root, output)
+            image_path = output / manifest["visual_resources"][0]["images"][0]["path"]
+            previous_image = image_path.read_bytes()
+            changed = bytearray(spr)
+            struct.pack_into("<H", changed, 26, 0x03E0)
+            (root / "a.mkf").write_bytes(make_mkf([(bytes(changed), len(changed), 24, 512)]))
+            (root / "map.mkf").write_bytes(b"truncated")
+            with self.assertRaises(FormatError):
+                decode_source(root, output)
+            self.assertNotEqual(image_path.read_bytes(), previous_image)
+            self.assertFalse((output / "manifest.json").exists())
+
+    def test_private_codec_decodes_initial_tree_literal_and_rejects_truncation(
+        self,
+    ) -> None:
+        literal = pack_bits(initial_code(ord("A")))
+        self.assertEqual(decompress_private(literal, 1), b"A")
+        with self.assertRaises(CodecError):
+            decompress_private(literal, 2)
+
+    def test_mkf_rejects_resource_span_and_size_limit_violations(self) -> None:
+        data = bytearray(make_mkf([(b"abc", 3, 0, 0)]))
+        struct.pack_into("<I", data, 8, 4)
+        with self.assertRaises(FormatError):
+            parse_mkf(Path("bad.mkf"), bytes(data))
+        with self.assertRaises(FormatError):
+            parse_mkf(
+                Path("large.mkf"), make_mkf([(b"abc", 3, 0, 0)]), max_resource_bytes=2
+            )
+
+    def test_visual_resource_bounds_and_graph_sizes(self) -> None:
+        spr = make_spr()
+        entry = MkfEntry(0, 4, len(spr), len(spr), 24, 512, 20, 20 + len(spr))
+        parsed = parse_visual_resource(spr, entry)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.signature, "SPR")
+        self.assertEqual(parsed.chunks[0].pixels, b"\0\1")
+
+        malformed = bytearray(spr)
+        struct.pack_into("<I", malformed, 12 + 8, 3)
+        with self.assertRaises(ImageError):
+            parse_visual_resource(bytes(malformed), entry)
+        with self.assertRaises(ImageError):
+            parse_visual_resource(spr, entry, max_dimension=1)
+        overlapping = bytearray(spr)
+        struct.pack_into("<I", overlapping, 8, 12)
+        with self.assertRaises(ImageError):
+            parse_visual_resource(bytes(overlapping), entry)
+        with self.assertRaises(ImageError):
+            parse_visual_resource(b"SPR\0\0\0\0\0", entry)
+
+    def test_png_conversion_preserves_indexed_pixels_and_transparency(self) -> None:
+        spr = make_spr()
+        entry = MkfEntry(0, 4, len(spr), len(spr), 24, 512, 20, 20 + len(spr))
+        resource = parse_visual_resource(spr, entry)
+        assert resource is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "chunk.png"
+            write_png(path, resource.chunks[0], resource, pixel_format="rgb555")
+            width, height, rgba = read_png_rgba(path.read_bytes())
+        self.assertEqual((width, height), (2, 1))
+        self.assertEqual(rgba, bytes((0, 0, 0, 0, 255, 0, 0, 255)))
+
+    def test_decode_source_writes_manifest_and_bounded_visuals(self) -> None:
+        spr = make_spr()
+        smp = make_smp()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "installation"
+            edition = root / "Game"
+            edition.mkdir(parents=True)
+            (edition / "Panel.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (edition / "map.mkf").write_bytes(
+                make_mkf(
+                    [
+                        (smp, len(smp), 24, 2),
+                        (b"plain", 5, 0, 0),
+                    ]
+                )
+            )
+            output = Path(temporary) / "decoded"
+            manifest = decode_source(root, output)
+            self.assertEqual(len(manifest["visual_resources"]), 2)
+            self.assertEqual(
+                {item["archive"] for item in manifest["visual_resources"]},
+                {"Game/Panel.mkf", "Game/map.mkf"},
+            )
+            self.assertTrue(manifest["gnd_resources_skipped"])
+            self.assertEqual(
+                json.loads((output / "manifest.json").read_text())["version"], 1
+            )
+            images = sorted((output / "images").rglob("*.png"))
+            self.assertEqual(len(images), 2)
+            self.assertTrue(
+                (output / "images/Game/Panel/resource-0000/chunk-0000.png").is_file()
+            )
+            self.assertTrue(all(path.stat().st_size > 64 for path in images))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -9,6 +9,9 @@ class TracedBoard extends "res://game/ui/board_view.gd":
 	func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
 		paint_order.append("overlay")
 		super._draw_original_node(index, tile, center, radius)
+	func _draw_scene_fallback(job: Dictionary) -> void:
+		paint_order.append("fallback:" + str(job.get("fallback", "")))
+		super._draw_scene_fallback(job)
 	func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bool:
 		paint_order.append("sprite")
 		return super._draw_sprite(frame, center, scale_factor)
@@ -144,6 +147,25 @@ func run() -> void:
 	await process_frame
 	expect(board._graph_fallback_edges, "missing road icon keeps graph edges visible")
 	expect(board.select_at_position(board.get_screen_position_for_index(1)) == 1, "missing road icon keeps route hitbox")
+	visuals.manifest.characters = {}
+	visuals.manifest.maps[0].house_sprites = []
+	board.set_game_data(definition.board, [{"position": 0, "character_id": 0}], 0, definition)
+	await process_frame
+	await process_frame
+	var fallback_player := -1
+	var fallback_house := -1
+	var final_road := -1
+	for index in range(board._scene_draws.size()):
+		var job: Dictionary = board._scene_draws[index]
+		if job.get("kind") == "road_icon":
+			final_road = index
+		if job.get("fallback") == "player":
+			fallback_player = index
+		if job.get("fallback") == "house":
+			fallback_house = index
+	expect(fallback_player > final_road, "missing character is queued visibly above opaque road icons")
+	expect(fallback_house > final_road, "missing house retains a level marker above opaque road icons")
+	expect(board.paint_order.has("fallback:player") and board.paint_order.has("fallback:house"), "missing sprite fallback markers are actually painted")
 	board.set_game_data(definition.board, [], 0, wrong)
 	await process_frame
 	await process_frame

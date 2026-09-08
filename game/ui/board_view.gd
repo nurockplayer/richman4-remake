@@ -299,8 +299,10 @@ func _draw_original_board() -> void:
 		return a.get("center", Vector2.ZERO).y < b.get("center", Vector2.ZERO).y
 	)
 	for job in _scene_draws:
-		_draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
-		if job.has("color"):
+		var painted := _draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
+		if not painted:
+			_draw_scene_fallback(job)
+		if painted and job.has("color"):
 			draw_arc(job.center, 8.0, 0.0, TAU, 24, job.color, 2.0)
 	if _background != null:
 		for index in range(geometry.size()):
@@ -360,12 +362,26 @@ func _draw_original_players() -> void:
 			if visuals.texture(frame) != null:
 				_scene_draws.append({"kind": "player", "layer": 2, "frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
 				continue
-			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
-			var active := player_index == current_player_index
-			draw_circle(center + Vector2(0.0, 2.0), 9.0 if active else 7.0, Color(0.0, 0.0, 0.0, 0.38))
-			draw_circle(center, 9.0 if active else 7.0, player_color)
-			draw_arc(center, 9.0 if active else 7.0, 0.0, TAU, 20, Color("#f7f3df"), 1.4 if active else 0.8)
-			_draw_text(str(player_index + 1), center + Vector2(-5.0, 4.0), 10.0, 9, Color("#173047"), HORIZONTAL_ALIGNMENT_CENTER)
+			_scene_draws.append({"kind": "player", "layer": 2, "frame": {}, "center": center,
+				"fallback": "player", "player_index": player_index})
+
+func _draw_scene_fallback(job: Dictionary) -> void:
+	var center: Vector2 = job.center
+	if job.get("fallback", "") == "player":
+		var player_index := int(job.player_index)
+		var active := player_index == current_player_index
+		var marker_radius := 9.0 if active else 7.0
+		draw_circle(center + Vector2(0.0, 2.0), marker_radius, Color(0.0, 0.0, 0.0, 0.38))
+		draw_circle(center, marker_radius, PLAYER_COLORS[player_index % PLAYER_COLORS.size()])
+		draw_arc(center, marker_radius, 0.0, TAU, 20, Color("#f7f3df"), 1.4 if active else 0.8)
+		_draw_text(str(player_index + 1), center + Vector2(-5.0, 4.0), 10.0, 9, Color("#173047"), HORIZONTAL_ALIGNMENT_CENTER)
+	elif job.get("fallback", "") == "house":
+		var owner := int(job.get("owner", -1))
+		var border: Color = PLAYER_COLORS[owner % PLAYER_COLORS.size()] if owner >= 0 else Color("#b6d3c5")
+		var marker := Rect2(center + Vector2(-10.0, -18.0), Vector2(20.0, 18.0))
+		draw_rect(marker, Color("#21354a"))
+		draw_rect(marker, border, false, 2.0)
+		_draw_text(str(job.get("level", 0)), center + Vector2(-8.0, -4.0), 16.0, 10, Color("#edf3f0"), HORIZONTAL_ALIGNMENT_CENTER)
 
 func _draw_tile(cell_rect: Rect2, index: int, tile: Dictionary) -> void:
 	var kind := String(tile.get("kind", "property"))
@@ -688,6 +704,10 @@ func _draw_original_houses() -> void:
 		var tile: Dictionary = properties[int(land.id)]
 		var level := int(tile.get("building_level", 0))
 		if level > 0:
-			_scene_draws.append({"kind": "house", "layer": 1, "frame": visuals.house(_scene, level, int(land.get("direction", 0))), "center": _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0))))})
+			var frame: Dictionary = visuals.house(_scene, level, int(land.get("direction", 0)))
+			var job := {"kind": "house", "layer": 1, "frame": frame, "center": _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0)))), "level": level, "owner": int(tile.get("owner", -1))}
+			if visuals.texture(frame) == null:
+				job["fallback"] = "house"
+			_scene_draws.append(job)
 	for item in _scene.get("scenery", []):
 		_scene_draws.append({"kind": "scenery", "layer": 1, "frame": visuals.scenery(_scene, int(item.get("sprite_id", 0)), int(item.direction)), "center": _map_to_screen(Vector2(float(item.x), float(item.y)))})

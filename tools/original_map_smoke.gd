@@ -12,9 +12,18 @@ func _initialize() -> void:
 		quit(1)
 		return
 	var playable := 0
+	var browse_only := 0
+	var banks := 0
 	for definition in result.maps:
+		for tile in definition.board:
+			if tile.event_code == 14:
+				banks += 1
+				if tile.kind != "bank":
+					push_error("Source bank event lost service classification")
+					failures += 1
 		var game = GameState.new_game_on_board(42, 4, definition)
 		if not definition.supports_new_game:
+			browse_only += 1
 			if game != null:
 				push_error("Unsupported economy was incorrectly admitted")
 				failures += 1
@@ -46,5 +55,11 @@ func _initialize() -> void:
 			push_error("Original-map match did not finish: %s (%s)" % [definition.id, match_result.get("message", "")])
 			failures += 1
 		print("Original map ", definition.id, " nodes=", definition.board.size(), " winner=", match_result.get("winner", -1), " turns=", match_result.get("completed_turns", 0))
+	if playable != 11 or browse_only != 1:
+		push_error("Expected 11 housing maps and one commercial-only map")
+		failures += 1
+	if banks != 15:
+		push_error("Expected 15 source bank nodes across the owner catalog")
+		failures += 1
 	print("Original map acceptance: ", playable, " playable maps, ", failures, " failures")
 	quit(1 if failures else 0)

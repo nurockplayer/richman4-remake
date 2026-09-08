@@ -12,6 +12,7 @@ static func make() -> Dictionary:
 	nodes[3].type_and_idx = 2002
 	nodes[4].event_code = 13
 	nodes[5].event_code = 14
+	nodes[5].type_and_idx = 6003
 	var lands: Array = []
 	for id in [1, 2]:
 		lands.append({"id": id, "display_name": "測試路", "name_bytes_hex": "74657374000000000000000000000000",

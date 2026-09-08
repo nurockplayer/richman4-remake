@@ -15,6 +15,8 @@
 
 Runtime loader 另外核對雙向鄰接、住宅參照唯一性與住宅從起點的可達性。超時空之旅第 5 張地圖有 20 個無鄰接的非住宅節點，匯入時保留它們，不補造道路；所有住宅均可到達。第 8 張只有商業設施而沒有住宅，商業系統完成前不開放對局。第 6 張有一筆名稱全零的住宅，以「未命名住宅 48」呈現，不虛構來源名稱。
 
+12 張來源地圖共有 15 個 `event_code == 14` 銀行服務節點，均同時具有企業物件編號。銀行服務優先於尚未實作的企業分類，以保留原作經過 ATM／停留銀行的 dispatch；這不代表已實作該企業的經營權。
+
 節點輸出保留原始 `status_bits` 與 `field_0x22`，另提供 `event_code = status_bits & 0xff` 與 `visual_index = field_0x22`。原版落地 dispatch 的 jump table 將 1–16 對應到事件／UI；`field_0x22` 在繪圖路徑中作資源索引，因此兩者在重製 runtime 中必須分開。這些欄位對應由 `.local/research-rich4/asm/rich4_player_core_actions.asm` 的 `rich4_handle_player_land_on_node` 與相關繪圖反組譯核對，並以 `catalog.json` 的原始節點值交叉檢查。
 
 價格欄位也已依反組譯與本機 fixture 核對：housing land 結構的 `+0x1c` 是 `land_price`，`+0x1e` 是 `house_price`；`+0x20..+0x2b` 是六個 rent `u16`，輸出為 `rent_by_level`。購買成本使用 `(land_price + level * house_price) * price_index`；`price_per_level` 僅保留為等於 `house_price` 的舊欄位別名。facility 結構的 `+0x22`／`+0x24` 則分別是 `land_price`／`house_price`。原版來源證據位於 `.local/research-rich4/csrc/land.h` 與 `.local/research-rich4/asm/rich4_player_core_actions.asm`；目前未宣稱所有事件高位旗標或完整 UI 行為已核對。
@@ -52,6 +54,6 @@ Godot 桌面版本已具備 2–4 人新局、固定 seed、擲骰／買地／�
 
 原版 catalog 已接入選圖、座標路網、分岔選路與地圖身分存檔；沒有本機 catalog 時顯示明確標示的 40 格測試棋盤。住宅採來源地價、建屋成本及六級租金表；路口允許玩家選方向，AI 只走原始鄰接邊。經過卡片／點數／銀行格有對應處理，其他尚未還原的特殊格顯示「待還原」。
 
-本機驗證以 seed 42、四位 AI 跑完 11 張有住宅地圖，每局在 95–268 個後續回合內結束；JSON 存讀檔後續玩一致。第 8 張超時空地圖拒絕開局。這是目前重製規則的完整對局與重播證據，並非原版執行軌跡對照。
+本機驗證以 seed 42、四位 AI 跑完 11 張有住宅地圖，每局在 95–947 個後續回合內結束；JSON 存讀檔後續玩一致。第 8 張超時空地圖拒絕開局。這是目前重製規則的完整對局與重播證據，並非原版執行軌跡對照。
 
 起始金額、部分經濟參數、簡化日曆及破產資產分配仍屬暫定。完整 30 種卡片、13 種道具、神明、特殊人物、企業、商業設施、拍賣互動、小遊戲、原作角色圖像與動畫仍有缺口。#1 保持未完成並持續推進。

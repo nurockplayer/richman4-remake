@@ -125,12 +125,14 @@ static func normalize_map(raw: Variant) -> Dictionary:
 				"cost": int(land.land_price), "land_price": int(land.land_price), "house_price": int(land.house_price),
 				"upgrade_cost": int(land.house_price), "base_rent": int(land.rent_by_level[0]), "rent": int(land.rent_by_level[0]),
 				"rent_by_level": land.rent_by_level.duplicate(), "group": str(land.get("name_bytes_hex", "land:%d" % land_id))}, true)
+		elif event_code == 14:
+			# Bank service is an event on company nodes in the original maps.
+			# Company ownership remains separate from passing/landing service.
+			tile.kind = "bank"
 		elif object_type >= 4000:
 			tile.kind = "unsupported"
 			tile.name = "醫院" if object_type == 8001 else ("監獄" if object_type == 8002 else "特殊設施")
 			tile.name += "（待還原）"
-		elif event_code == 14:
-			tile.kind = "bank"
 		elif event_code == 13:
 			tile.kind = "card"
 		elif event_code in [10, 11, 12]:

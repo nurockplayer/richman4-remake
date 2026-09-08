@@ -1563,11 +1563,14 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		for numeric_key in ["building_level", "cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 			if not _valid_int(tile.get(numeric_key, null), 0, 1000000000):
 				errors.append("invalid graph tile value %d" % index)
-		if kind == "property":
+		if typeof(kind) == TYPE_STRING and kind == "property":
 			property_count += 1
-			if not _valid_int(tile.get("source_object_id", null), 1, 1999):
+			var source_object_id: Variant = tile.get("source_object_id", null)
+			if not _valid_int(source_object_id, 1, 1999):
 				errors.append("invalid graph property identity %d" % index)
-			if not _valid_int(tile.get("land_price", null), 0, 1000000) or not _valid_int(tile.get("house_price", null), 0, 1000000):
+			var land_price: Variant = tile.get("land_price", null)
+			var house_price: Variant = tile.get("house_price", null)
+			if not _valid_int(land_price, 0, 1000000) or not _valid_int(house_price, 0, 1000000):
 				errors.append("invalid graph property prices %d" % index)
 			var rents: Variant = tile.get("rent_by_level", null)
 			if typeof(rents) != TYPE_ARRAY or rents.size() != 6:
@@ -1576,10 +1579,16 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 				for rent in rents:
 					if not _valid_int(rent, 0, 1000000):
 						errors.append("invalid graph rent value %d" % index)
-				if rents.size() > 0 and int(tile.get("base_rent", -1)) != int(rents[0]) or rents.size() > 0 and int(tile.get("rent", -1)) != int(rents[0]):
+				var base_rent: Variant = tile.get("base_rent", null)
+				var rent: Variant = tile.get("rent", null)
+				if _valid_int(base_rent, 0, 1000000000) and _valid_int(rents[0], 0, 1000000) and int(base_rent) != int(rents[0]):
 					errors.append("graph base rent mismatch %d" % index)
+				if _valid_int(rent, 0, 1000000000) and _valid_int(rents[0], 0, 1000000) and int(rent) != int(rents[0]):
+					errors.append("graph rent mismatch %d" % index)
 		else:
-			if int(tile.get("owner", -1)) != -1 or int(tile.get("building_level", 0)) != 0:
+			var owner: Variant = tile.get("owner", null)
+			var building_level: Variant = tile.get("building_level", null)
+			if _valid_int(owner, -1, -1) and _valid_int(building_level, 0, MAX_PROPERTY_LEVEL) and (int(owner) != -1 or int(building_level) != 0):
 				errors.append("non-property graph tile state %d" % index)
 		var type_value: Variant = tile.get("type_and_idx", null)
 		var event_value: Variant = tile.get("event_code", null)
@@ -1835,14 +1844,18 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				property_owners[index] = int(owner_value)
 
 	if graph_save:
-		if data.get("board_mode", null) != GRAPH_BOARD_MODE:
+		var board_mode_value: Variant = data.get("board_mode", null)
+		if typeof(board_mode_value) != TYPE_STRING or board_mode_value != GRAPH_BOARD_MODE:
 			errors.append("invalid graph board mode")
-		if not _valid_string(data.get("map_id", null)) or str(data.get("map_id", "")).is_empty():
+		var map_id_value: Variant = data.get("map_id", null)
+		if not _valid_string(map_id_value) or str(map_id_value).is_empty():
 			errors.append("invalid graph map id")
-		var graph_map_id: String = str(data.get("map_id", ""))
-		if not _valid_string(data.get("map_name", null)) or str(data.get("map_name", "")).is_empty():
+		var graph_map_id: String = str(map_id_value) if _valid_string(map_id_value) else ""
+		var map_name_value: Variant = data.get("map_name", null)
+		if not _valid_string(map_name_value) or str(map_name_value).is_empty():
 			errors.append("invalid graph map name")
-		if data.get("map_schema", null) != RUNTIME_MAP_SCHEMA or not _valid_int(data.get("map_version", null), 1, 1):
+		var map_schema_value: Variant = data.get("map_schema", null)
+		if typeof(map_schema_value) != TYPE_STRING or map_schema_value != RUNTIME_MAP_SCHEMA or not _valid_int(data.get("map_version", null), 1, 1):
 			errors.append("invalid graph map schema")
 		errors.append_array(_validate_graph_source(data.get("map_source", null), graph_map_id))
 		var graph_start: Variant = data.get("start_position", null)
@@ -1862,6 +1875,48 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("graph source node mismatch %d" % index)
 				if not _valid_int(tile.get("type_and_idx", null), 0, 65535) or not _valid_int(tile.get("event_code", null), 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
+				var tile_kind: Variant = tile.get("kind", null)
+				if typeof(tile_kind) == TYPE_STRING and tile_kind == "property":
+					var source_object_id: Variant = tile.get("source_object_id", null)
+					var source_object_valid: bool = _valid_int(source_object_id, 1, 1999)
+					if not source_object_valid:
+						errors.append("invalid graph property identity %d" % index)
+					var land_price: Variant = tile.get("land_price", null)
+					var house_price: Variant = tile.get("house_price", null)
+					var land_price_valid: bool = _valid_int(land_price, 0, 1000000)
+					var house_price_valid: bool = _valid_int(house_price, 0, 1000000)
+					if not land_price_valid:
+						errors.append("invalid graph property land price %d" % index)
+					if not house_price_valid:
+						errors.append("invalid graph property house price %d" % index)
+					var rents: Variant = tile.get("rent_by_level", null)
+					var rents_valid: bool = typeof(rents) == TYPE_ARRAY and rents.size() == MAX_PROPERTY_LEVEL + 1
+					if not rents_valid:
+						errors.append("invalid graph property rent table %d" % index)
+					else:
+						for rent_value in rents:
+							if not _valid_int(rent_value, 0, 1000000):
+								errors.append("invalid graph property rent value %d" % index)
+						var base_rent: Variant = tile.get("base_rent", null)
+						var rent: Variant = tile.get("rent", null)
+						var level: Variant = tile.get("building_level", null)
+						var base_rent_valid: bool = _valid_int(base_rent, 0, 1000000000)
+						var rent_valid: bool = _valid_int(rent, 0, 1000000000)
+						var level_valid: bool = _valid_int(level, 0, MAX_PROPERTY_LEVEL)
+						if base_rent_valid and _valid_int(rents[0], 0, 1000000) and int(base_rent) != int(rents[0]):
+							errors.append("graph property base rent mismatch %d" % index)
+						if rent_valid and level_valid and _valid_int(rents[int(level)], 0, 1000000) and int(rent) != int(rents[int(level)]):
+							errors.append("graph property rent mismatch %d" % index)
+					if land_price_valid and _valid_int(tile.get("cost", null), 0, 1000000000) and int(tile["cost"]) != int(land_price):
+						errors.append("graph property cost mismatch %d" % index)
+					if house_price_valid and _valid_int(tile.get("upgrade_cost", null), 0, 1000000000) and int(tile["upgrade_cost"]) != int(house_price):
+						errors.append("graph property upgrade price mismatch %d" % index)
+					var type_value: Variant = tile.get("type_and_idx", null)
+					var property_type_valid: bool = _valid_int(type_value, 2001, 3999)
+					if not property_type_valid:
+						errors.append("invalid graph property source type %d" % index)
+					elif source_object_valid and int(type_value) - 2000 != int(source_object_id):
+						errors.append("graph property source mismatch %d" % index)
 				var adjacent: Variant = tile.get("adjacent", null)
 				if typeof(adjacent) != TYPE_ARRAY or adjacent.size() > 4:
 					continue
@@ -1888,10 +1943,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					var node: int = int(queue.pop_front())
 					if typeof(board[node]) != TYPE_DICTIONARY:
 						continue
-					for neighbor in board[node].get("adjacent", []):
-						var next_node: int = int(neighbor)
-						if next_node < 0 or next_node >= board.size():
+					var reachable_adjacent: Variant = board[node].get("adjacent", [])
+					if typeof(reachable_adjacent) != TYPE_ARRAY:
+						continue
+					for neighbor in reachable_adjacent:
+						if not _valid_int(neighbor, 0, max(0, board.size() - 1)):
 							continue
+						var next_node: int = int(neighbor)
 						if not reachable.has(next_node):
 							reachable[next_node] = true
 							queue.append(next_node)
@@ -2027,22 +2085,39 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			if pending.is_empty():
 				errors.append("route phase missing pending movement")
 			else:
-				if not _valid_int(pending.get("player_id", null), 0, max(0, player_count - 1)) or int(pending.get("player_id", -1)) != current_player:
+				var pending_player_id: Variant = pending.get("player_id", null)
+				var pending_current_node: Variant = pending.get("current_node", null)
+				var pending_previous_node: Variant = pending.get("previous_node", null)
+				var pending_player_valid: bool = _valid_int(pending_player_id, 0, max(0, player_count - 1))
+				var pending_current_valid: bool = _valid_int(pending_current_node, 0, max(0, graph_board_size - 1))
+				var pending_previous_valid: bool = _valid_int(pending_previous_node, -1, max(-1, graph_board_size - 1))
+				if not pending_player_valid or int(pending_player_id) != current_player:
 					errors.append("pending route player mismatch")
-				if not _valid_int(pending.get("current_node", null), 0, max(0, graph_board_size - 1)) or not _valid_int(pending.get("previous_node", null), -1, max(-1, graph_board_size - 1)):
+				if not pending_current_valid or not pending_previous_valid:
 					errors.append("pending route node invalid")
-				if typeof(players) == TYPE_ARRAY and current_player >= 0 and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+				if typeof(players) == TYPE_ARRAY and current_player >= 0 and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY and pending_current_valid and pending_previous_valid:
 					var route_player: Dictionary = players[current_player]
-					if int(route_player.get("position", -1)) != int(pending.get("current_node", -2)) or int(route_player.get("previous_position", -2)) != int(pending.get("previous_node", -3)):
+					var route_position: Variant = route_player.get("position", null)
+					var route_previous_position: Variant = route_player.get("previous_position", null)
+					if not _valid_int(route_position, 0, max(0, graph_board_size - 1)) or not _valid_int(route_previous_position, -1, max(-1, graph_board_size - 1)) or int(route_position) != int(pending_current_node) or int(route_previous_position) != int(pending_previous_node):
 						errors.append("pending route position mismatch")
-				if _valid_int(pending.get("current_node", null), 0, max(0, graph_board_size - 1)) and _valid_int(pending.get("previous_node", null), -1, max(-1, graph_board_size - 1)):
+				if pending_current_valid and pending_previous_valid:
 					var legal_routes: Array = []
-					var pending_tile: Dictionary = board[int(pending["current_node"])] if typeof(board[int(pending["current_node"])] ) == TYPE_DICTIONARY else {}
-					for neighbor in pending_tile.get("adjacent", []):
-						if int(neighbor) != int(pending["previous_node"]):
-							legal_routes.append(int(neighbor))
-					if legal_routes.is_empty() and int(pending["previous_node"]) >= 0:
-						legal_routes.append(int(pending["previous_node"]))
+					var pending_tile: Dictionary = {}
+					if typeof(board) == TYPE_ARRAY:
+						var pending_tile_value: Variant = board[int(pending_current_node)]
+						if typeof(pending_tile_value) == TYPE_DICTIONARY:
+							pending_tile = pending_tile_value
+					var pending_adjacent: Variant = pending_tile.get("adjacent", [])
+					if typeof(pending_adjacent) == TYPE_ARRAY:
+						for neighbor in pending_adjacent:
+							if not _valid_int(neighbor, 0, max(0, graph_board_size - 1)):
+								continue
+							var neighbor_id: int = int(neighbor)
+							if neighbor_id != int(pending_previous_node):
+								legal_routes.append(neighbor_id)
+					if legal_routes.is_empty() and int(pending_previous_node) >= 0:
+						legal_routes.append(int(pending_previous_node))
 					legal_routes.sort()
 					var canonical_route_options: Array = []
 					if typeof(route_options) == TYPE_ARRAY:

@@ -8,6 +8,7 @@ extends Control
 
 const SAVE_PATH := "user://richman4_save.json"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
+const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
 const MIN_SEED := -2147483648
@@ -416,6 +417,7 @@ func _build_event_log() -> Control:
 
 func _build_popups() -> void:
 	new_game_popup = _make_popup(Vector2i(760, 680))
+	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
 	new_game_box.add_child(_make_label("建立新局", 19, TEXT_MAIN))
 	var new_game_description := _make_label("選擇地圖、玩家數與可重現的 seed；seed 留白會自動產生。", 11, TEXT_MUTED)
@@ -444,7 +446,7 @@ func _build_popups() -> void:
 	else:
 		map_preview_view = _make_label("地圖預覽載入中…", 14, TEXT_MUTED)
 	map_preview_view.custom_minimum_size = Vector2(0.0, 248.0)
-	map_preview_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_preview_view.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	map_preview_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	new_game_box.add_child(map_preview_view)
 	map_preview_status_label = _make_label("", 11, TEXT_MUTED)
@@ -617,7 +619,19 @@ func _load_map_catalog(path: String = "") -> void:
 	_update_map_selector()
 
 func _make_fallback_map_definition() -> Dictionary:
-	var side := 10
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	if state_script != null and state_script.has_method("new_game"):
+		var candidate: Variant = state_script.new_game(DEFAULT_SEED, PLAYER_COUNT)
+		if candidate != null and candidate.has_method("get_snapshot"):
+			var snapshot: Variant = candidate.get_snapshot()
+			if snapshot is Dictionary:
+				var candidate_board: Variant = snapshot.get("board", [])
+				if candidate_board is Array and not candidate_board.is_empty():
+					return {"schema": "richman4.runtime-map/v1", "version": 1, "id": FALLBACK_MAP_ID,
+						"name": "測試棋盤（%d 格）" % candidate_board.size(),
+						"source": {"edition": "Test", "map_number": 0}, "board": candidate_board.duplicate(true),
+						"start_position": 0, "supports_new_game": true, "unsupported_reason": ""}
+	var side := 11
 	var cells: Array[Vector2i] = []
 	for x in range(side):
 		cells.append(Vector2i(x, 0))
@@ -640,8 +654,8 @@ func _make_fallback_map_definition() -> Dictionary:
 			"owner": -1, "building_level": 0, "cost": 1000 + index * 100 if kind == "property" else 0,
 			"upgrade_cost": 300 if kind == "property" else 0, "base_rent": 100 if kind == "property" else 0,
 			"rent": 100 if kind == "property" else 0, "group": "test", "tax_amount": 0})
-	return {"schema": "richman4.runtime-map/v1", "version": 1, "id": "test:classic40",
-		"name": "測試棋盤（40 格）", "source": {"edition": "Test", "map_number": 0}, "board": board,
+	return {"schema": "richman4.runtime-map/v1", "version": 1, "id": FALLBACK_MAP_ID,
+		"name": "測試棋盤（%d 格）" % board.size(), "source": {"edition": "Test", "map_number": 0}, "board": board,
 		"start_position": 0, "supports_new_game": true, "unsupported_reason": ""}
 
 func _update_map_selector() -> void:
@@ -682,42 +696,77 @@ func _on_map_catalog_file_selected(path: String) -> void:
 	_append_local_log("已讀取本機地圖目錄。") if _map_catalog_ok else _append_local_log("地圖目錄讀取失敗，已回到測試棋盤。")
 	_refresh_log_only()
 
-func _map_identity_payload(definition: Dictionary) -> Dictionary:
-	if definition.is_empty():
-		var current: Variant = state.get("map_identity", state.get("map", {}))
-		return current.duplicate(true) if current is Dictionary else {}
-	var source: Variant = definition.get("source", {})
-	return {"schema": "richman4.runtime-map/v1", "id": str(definition.get("id", "")),
-		"name": str(definition.get("name", "")), "source": source.duplicate(true) if source is Dictionary else {},
-		"supports_new_game": bool(definition.get("supports_new_game", false))}
-
 func _extract_map_identity(snapshot: Dictionary) -> Variant:
-	for key in ["map_identity", "map_definition", "map"]:
-		if snapshot.has(key):
-			return snapshot[key]
 	if snapshot.has("map_id"):
 		return {"id": str(snapshot.get("map_id", "")), "name": str(snapshot.get("map_name", "")),
 			"schema": str(snapshot.get("map_schema", "richman4.runtime-map/v1")),
 			"version": int(snapshot.get("map_version", 1)), "source": snapshot.get("map_source", {})}
+	for key in ["map_identity", "map_definition", "map"]:
+		if snapshot.has(key) and snapshot[key] is Dictionary:
+			var identity: Dictionary = snapshot[key].duplicate(true)
+			identity.erase("board")
+			return identity
 	return null
+
+func _snapshot_graph_definition(snapshot: Dictionary) -> Dictionary:
+	if snapshot.get("board_mode", "") != "graph" or not snapshot.has("map_id") or not snapshot.has("board"):
+		return {}
+	var board: Variant = snapshot.get("board", [])
+	var source: Variant = snapshot.get("map_source", {})
+	if not board is Array or not source is Dictionary:
+		return {}
+	var map_id := str(snapshot.get("map_id", ""))
+	if map_id.is_empty():
+		return {}
+	return {"schema": str(snapshot.get("map_schema", "richman4.runtime-map/v1")),
+		"version": int(snapshot.get("map_version", 1)), "id": map_id,
+		"name": str(snapshot.get("map_name", "")), "source": source.duplicate(true),
+		"board": board.duplicate(true), "start_position": int(snapshot.get("start_position", 0)),
+		"supports_new_game": true, "unsupported_reason": ""}
+
+func _map_source_matches(left: Variant, right: Variant) -> bool:
+	if not left is Dictionary or not right is Dictionary:
+		return false
+	for key in ["edition", "map_number", "archive", "entry_index", "payload_sha256", "source_file_sha256"]:
+		if str(left.get(key, "")) != str(right.get(key, "")):
+			return false
+	return true
 
 func _resolve_map_identity(identity: Variant) -> Dictionary:
 	var identity_id := ""
+	var identity_source: Variant = null
 	if identity is Dictionary:
 		identity_id = str(identity.get("id", ""))
-		if identity.has("board") and identity.get("board") is Array:
-			return identity.duplicate(true)
+		identity_source = identity.get("source", null)
 	elif identity is String:
 		identity_id = identity
 	if not identity_id.is_empty():
 		for definition_value in _map_catalog:
-			if definition_value is Dictionary and str(definition_value.get("id", "")) == identity_id:
+			if definition_value is Dictionary and str(definition_value.get("id", "")) == identity_id and (identity_source == null or _map_source_matches(identity_source, definition_value.get("source", {}))):
 				return definition_value.duplicate(true)
 	if identity is Dictionary:
-		return identity.duplicate(true)
+		var resolved_identity: Dictionary = identity.duplicate(true)
+		resolved_identity.erase("board")
+		return resolved_identity
 	return {}
 
 func _adopt_map_from_snapshot(snapshot: Dictionary) -> void:
+	var graph_definition := _snapshot_graph_definition(snapshot)
+	if not graph_definition.is_empty():
+		_active_map_definition = graph_definition
+		var graph_id := str(graph_definition.get("id", ""))
+		var graph_source: Variant = graph_definition.get("source", {})
+		for index in range(_map_catalog.size()):
+			var catalog_definition: Variant = _map_catalog[index]
+			if catalog_definition is Dictionary and str(catalog_definition.get("id", "")) == graph_id and _map_source_matches(graph_source, catalog_definition.get("source", {})):
+				_selected_map_definition = catalog_definition.duplicate(true)
+				if map_selector != null:
+					map_selector.select(index)
+				break
+		return
+	if int(snapshot.get("version", -1)) == 1:
+		_active_map_definition = _make_fallback_map_definition()
+		return
 	var raw_identity: Variant = _extract_map_identity(snapshot)
 	if raw_identity == null:
 		return
@@ -754,6 +803,9 @@ func _update_map_preview() -> void:
 func _map_is_playable(definition: Dictionary) -> bool:
 	return not definition.is_empty() and bool(definition.get("supports_new_game", false))
 
+func _is_fallback_definition(definition: Dictionary) -> bool:
+	return str(definition.get("id", "")) == FALLBACK_MAP_ID
+
 func _on_new_game_pressed() -> void:
 	if new_game_popup == null:
 		_new_game()
@@ -761,7 +813,8 @@ func _on_new_game_pressed() -> void:
 	seed_input.text = ""
 	player_count_option.select(2)
 	_update_map_selector()
-	new_game_popup.popup_centered()
+	new_game_popup.popup_centered(Vector2i(760, 680))
+	new_game_popup.set_size(Vector2i(760, 680))
 	seed_input.grab_focus()
 
 func _on_new_game_confirm() -> void:
@@ -792,21 +845,28 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		resolved_seed = int(seed_value)
 	var resolved_players: int = clampi(player_count, 2, 4)
 	var selected_definition := map_definition.duplicate(true) if not map_definition.is_empty() else _selected_map_definition.duplicate(true)
-	_active_map_definition = selected_definition
+	if not _map_is_playable(selected_definition):
+		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+		_refresh_log_only()
+		return
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
-		if _map_is_playable(selected_definition) and state_script.has_method("new_game_on_board"):
+		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
 			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
-		if candidate == null and state_script.has_method("new_game"):
+		if candidate == null and _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
 			candidate = state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:
-		game_state = null
-		state = _unavailable_state(resolved_seed)
-		_local_log.clear()
-		_append_local_log("模擬核心未載入；遊戲操作已停用。")
+		if game_state == null and state.is_empty():
+			state = _unavailable_state(resolved_seed)
+			_append_local_log("模擬核心未載入；遊戲操作已停用。")
+		else:
+			_append_local_log("新局建立失敗；目前棋局保持不變。")
+		_refresh_log_only()
+		return
 	else:
 		game_state = candidate
+		_active_map_definition = selected_definition
 		_local_log.clear()
 		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
 	_refresh_from_state()
@@ -883,9 +943,6 @@ func _save_game() -> void:
 		_refresh_log_only()
 		return
 	var payload: Dictionary = serialized
-	var map_identity := _map_identity_payload(_active_map_definition)
-	if not map_identity.is_empty() and not payload.has("map_identity"):
-		payload["map_identity"] = map_identity
 	var json_text := JSON.stringify(payload)
 	var parsed: Variant = JSON.parse_string(json_text)
 	var state_script: Variant = load("res://game/core/game_state.gd")

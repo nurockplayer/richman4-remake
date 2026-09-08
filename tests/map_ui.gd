@@ -56,6 +56,7 @@ func _run() -> void:
 	if ui.audio_controller != null:
 		ui.audio_controller.call("stop")
 	ui.set_process(false)
+	await _test_new_game_popup_layout(ui)
 	_test_catalog_fallback(ui)
 	_test_catalog_selection_and_map8(ui, Fixture.make())
 	_test_route_controls_and_ai_guard(ui, definition)
@@ -65,6 +66,33 @@ func _run() -> void:
 	await create_timer(0.15).timeout
 	print("map UI checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
+
+func _rect_is_inside(outer: Rect2, inner: Rect2) -> bool:
+	var inner_end := inner.position + inner.size
+	var outer_end := outer.position + outer.size
+	return inner.position.x >= outer.position.x and inner.position.y >= outer.position.y and inner_end.x <= outer_end.x and inner_end.y <= outer_end.y
+
+func _popup_child_screen_rect(popup: PopupPanel, child: Control) -> Rect2:
+	var child_rect: Rect2 = child.get_global_rect()
+	return Rect2(Vector2(popup.position) + child_rect.position, child_rect.size)
+
+func _test_new_game_popup_layout(ui: Control) -> void:
+	ui._on_new_game_pressed()
+	for _frame in range(8):
+		await process_frame
+	var popup: PopupPanel = ui.new_game_popup
+	var viewport_rect := ui.get_viewport().get_visible_rect()
+	var popup_rect := Rect2(Vector2(popup.position), Vector2(popup.size))
+	var preview_rect := _popup_child_screen_rect(popup, ui.map_preview_view)
+	var seed_rect := _popup_child_screen_rect(popup, ui.seed_input)
+	var confirm_rect := _popup_child_screen_rect(popup, ui.new_game_confirm_button)
+	_expect(popup.visible, "new game popup is visible after opening")
+	_expect(_rect_is_inside(viewport_rect, popup_rect), "new game popup stays inside the 1280x800 viewport")
+	_expect(_rect_is_inside(popup_rect, preview_rect), "map preview stays inside the popup")
+	_expect(_rect_is_inside(popup_rect, seed_rect), "seed input stays inside the popup")
+	_expect(_rect_is_inside(popup_rect, confirm_rect), "new game confirm stays inside the popup")
+	_expect(_rect_is_inside(viewport_rect, seed_rect) and _rect_is_inside(viewport_rect, confirm_rect), "new game inputs stay inside the viewport")
+	ui.new_game_popup.hide()
 
 func _test_original_graph_view(definition: Dictionary) -> void:
 	var view = BoardView.new()
@@ -112,6 +140,12 @@ func _test_catalog_fallback(ui: Control) -> void:
 	_expect(ui._map_catalog.size() == 1, "missing catalog exposes one test board")
 	_expect(str(ui.map_selector.get_item_text(0)).contains("測試棋盤"), "fallback selector names test board")
 	_expect(str(ui.map_catalog_status_label.text).contains("測試棋盤"), "fallback status is visible")
+	ui._new_game(19, 2, ui._selected_map_definition)
+	var fallback_board: Array = ui._selected_map_definition.get("board", [])
+	var state_board: Array = ui.state.get("board", [])
+	_expect(fallback_board.size() == 40 and state_board.size() == 40, "missing catalog fallback starts the canonical 40 tile board")
+	if fallback_board.size() > 25 and state_board.size() > 25:
+		_expect(fallback_board[1].get("name", "") == state_board[1].get("name", "") and int(fallback_board[1].get("cost", 0)) == int(state_board[1].get("cost", 0)) and fallback_board[25].get("name", "") == state_board[25].get("name", "") and int(fallback_board[25].get("cost", 0)) == int(state_board[25].get("cost", 0)), "fallback names and prices match the legacy state board")
 
 func _test_catalog_selection_and_map8(ui: Control, raw_fixture: Dictionary) -> void:
 	var map_one := raw_fixture.duplicate(true)
@@ -149,6 +183,18 @@ func _test_catalog_selection_and_map8(ui: Control, raw_fixture: Dictionary) -> v
 	_expect(not bool(ui._selected_map_definition.get("supports_new_game", true)), "map eight without housing is preview only")
 	_expect(ui.new_game_confirm_button.disabled, "map without housing disables new game")
 	_expect(str(ui.map_preview_status_label.text).contains("僅供預覽"), "unsupported map preview explains restriction")
+	ui._new_game(23, 2, ui._map_catalog[0])
+	var before_state: Dictionary = ui.state.duplicate(true)
+	var before_active: Dictionary = ui._active_map_definition.duplicate(true)
+	ui._new_game()
+	_expect(ui.state == before_state and ui._active_map_definition == before_active, "direct new game keeps the current game when the selected map is preview only")
+	ui._on_end_restart_pressed()
+	_expect(ui.state == before_state and ui._active_map_definition == before_active, "restart keeps the current game when the selected map is preview only")
+	var broken_definition: Dictionary = ui._map_catalog[0].duplicate(true)
+	broken_definition["id"] = "test:broken"
+	broken_definition["board"] = []
+	ui._new_game(29, 2, broken_definition)
+	_expect(ui.state == before_state and ui._active_map_definition == before_active, "failed graph constructor does not fall back to a legacy game")
 	ui._on_map_selected(0)
 	_expect(not ui.new_game_confirm_button.disabled, "playable map enables new game")
 	DirAccess.remove_absolute(path)
@@ -183,12 +229,18 @@ func _test_route_controls_and_ai_guard(ui: Control, definition: Dictionary) -> v
 	_expect(ai_stub.route_calls.is_empty(), "human route input cannot operate AI turn")
 
 func _test_saved_map_identity(ui: Control, definition: Dictionary) -> void:
-	ui._active_map_definition = definition
-	var identity: Dictionary = ui._map_identity_payload(definition)
-	_expect(identity.get("id", "") == definition.get("id", ""), "saved payload carries map identity")
+	ui._new_game(31, 2, definition)
+	var validated_snapshot: Dictionary = ui.game_state.get_snapshot()
+	var tampered_snapshot: Dictionary = validated_snapshot.duplicate(true)
+	var tampered_identity: Dictionary = {"id": validated_snapshot.get("map_id", ""), "name": "偽造地圖", "source": validated_snapshot.get("map_source", {}), "board": [{"x": 999999, "y": 999999, "name": "偽造格位"}]}
+	tampered_snapshot["map_identity"] = tampered_identity
 	ui._active_map_definition = {}
-	ui._adopt_map_from_snapshot({"map_id": definition.get("id", ""), "map_name": definition.get("name", "")})
-	_expect(str(ui._active_map_definition.get("id", "")) == str(definition.get("id", "")), "loaded map identity resolves to catalog definition")
+	ui._adopt_map_from_snapshot(tampered_snapshot)
+	var active_board: Array = ui._active_map_definition.get("board", [])
+	var saved_board: Array = validated_snapshot.get("board", [])
+	_expect(str(ui._active_map_definition.get("id", "")) == str(validated_snapshot.get("map_id", "")), "loaded map identity uses the validated core map id")
+	_expect(str(ui._active_map_definition.get("name", "")) == str(validated_snapshot.get("map_name", "")), "tampered map identity cannot replace the validated core map name")
+	_expect(active_board == saved_board, "tampered map identity cannot replace the validated core geometry")
 
 func _test_invalid_seed_preserves_game(ui: Control) -> void:
 	ui._new_game(17, 2, ui._selected_map_definition)

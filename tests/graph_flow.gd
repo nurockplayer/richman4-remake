@@ -20,7 +20,6 @@ func _initialize() -> void:
 	_test_fixed_property_economics()
 	_test_pending_route_save_load_and_validation()
 	_test_ai_completes_pending_routes_deterministically()
-	_test_catalog_graph_acceptance()
 	print("Graph flow checks: %d, failures: %d" % [_checks, _failures])
 	quit(1 if _failures else 0)
 
@@ -252,6 +251,49 @@ func _test_pending_route_save_load_and_validation() -> void:
 	bad_phase["phase"] = "await_route"
 	bad_phase["route_options"] = []
 	_expect(not bool(GameState.validate_save(bad_phase).get("ok", false)), "route phase without choices is rejected")
+	var bad_board_mode: Dictionary = saved.duplicate(true)
+	bad_board_mode["board_mode"] = {}
+	_expect(not bool(GameState.validate_save(bad_board_mode).get("ok", false)), "malformed graph board mode is rejected")
+	var bad_map_schema: Dictionary = saved.duplicate(true)
+	bad_map_schema["map_schema"] = []
+	_expect(not bool(GameState.validate_save(bad_map_schema).get("ok", false)), "malformed graph map schema is rejected")
+	var bad_pending_shape: Dictionary = saved.duplicate(true)
+	bad_pending_shape["pending_movement"]["current_node"] = {}
+	_expect(not bool(GameState.validate_save(bad_pending_shape).get("ok", false)), "malformed pending route node is rejected")
+	var bad_adjacency_shape: Dictionary = saved.duplicate(true)
+	bad_adjacency_shape["board"][1]["adjacent"] = {}
+	_expect(not bool(GameState.validate_save(bad_adjacency_shape).get("ok", false)), "malformed graph adjacency is rejected")
+	var property_index: int = -1
+	for index in range(saved["board"].size()):
+		if typeof(saved["board"][index]) == TYPE_DICTIONARY and saved["board"][index].get("kind", "") == "property":
+			property_index = index
+			break
+	_expect(property_index >= 0, "graph save fixture includes a property tile")
+	if property_index >= 0:
+		var bad_source_object: Dictionary = saved.duplicate(true)
+		bad_source_object["board"][property_index]["source_object_id"] = 0
+		_expect(not bool(GameState.validate_save(bad_source_object).get("ok", false)), "invalid graph source object is rejected")
+		var bad_land_price: Dictionary = saved.duplicate(true)
+		bad_land_price["board"][property_index]["land_price"] = -1
+		_expect(not bool(GameState.validate_save(bad_land_price).get("ok", false)), "negative graph land price is rejected")
+		var bad_house_price: Dictionary = saved.duplicate(true)
+		bad_house_price["board"][property_index]["house_price"] = -1
+		_expect(not bool(GameState.validate_save(bad_house_price).get("ok", false)), "negative graph house price is rejected")
+		var bad_rent_table: Dictionary = saved.duplicate(true)
+		bad_rent_table["board"][property_index]["rent_by_level"] = [-1, -1, -1, -1, -1, -1]
+		_expect(not bool(GameState.validate_save(bad_rent_table).get("ok", false)), "negative graph rent table value is rejected")
+		var bad_property_cost: Dictionary = saved.duplicate(true)
+		bad_property_cost["board"][property_index]["cost"] += 1
+		_expect(not bool(GameState.validate_save(bad_property_cost).get("ok", false)), "graph land price and board cost must match")
+		var bad_upgrade_price: Dictionary = saved.duplicate(true)
+		bad_upgrade_price["board"][property_index]["upgrade_cost"] += 1
+		_expect(not bool(GameState.validate_save(bad_upgrade_price).get("ok", false)), "graph house price and upgrade cost must match")
+		var bad_base_rent: Dictionary = saved.duplicate(true)
+		bad_base_rent["board"][property_index]["base_rent"] += 1
+		_expect(not bool(GameState.validate_save(bad_base_rent).get("ok", false)), "graph base rent must match rent table")
+		var bad_current_rent: Dictionary = saved.duplicate(true)
+		bad_current_rent["board"][property_index]["rent"] += 1
+		_expect(not bool(GameState.validate_save(bad_current_rent).get("ok", false)), "graph current rent must match building level")
 
 
 func _test_ai_completes_pending_routes_deterministically() -> void:
@@ -270,22 +312,3 @@ func _test_ai_completes_pending_routes_deterministically() -> void:
 	_expect(second.state.get("phase", "") != "await_route", "second AI does not stop at pending route")
 	_expect_equal(first.state.get("route_options", []), [], "AI clears route options")
 	_expect_equal(first.to_json(), second.to_json(), "AI graph route choice is deterministic")
-
-
-func _test_catalog_graph_acceptance() -> void:
-	var loaded: Dictionary = Maps.load_catalog("res://.local/runtime-original/maps/catalog.json")
-	_expect(bool(loaded.get("ok", false)), "original map catalog remains readable")
-	if not bool(loaded.get("ok", false)):
-		return
-	var playable := 0
-	var browse_only := 0
-	for definition in loaded["maps"]:
-		if bool(definition.get("supports_new_game", false)):
-			playable += 1
-			var game: Object = _new_game_from_definition(definition)
-			_expect(game != null, "catalog map %s creates a graph game" % definition.get("id", ""))
-		else:
-			browse_only += 1
-			_expect(_new_game_from_definition(definition) == null, "catalog browse-only map %s is rejected for play" % definition.get("id", ""))
-	_expect_equal(playable, 11, "eleven catalog maps expose playable housing")
-	_expect_equal(browse_only, 1, "one catalog map remains browse-only")

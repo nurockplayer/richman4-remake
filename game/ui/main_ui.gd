@@ -588,6 +588,7 @@ func _build_popups() -> void:
 	bank_box.add_child(bank_close)
 
 	cards_popup = _make_popup(Vector2i(640, 500))
+	cards_popup.min_size = Vector2i(640, 500)
 	var cards_box := _popup_box(cards_popup)
 	cards_box.add_child(_make_label("背包", 19, TEXT_MAIN))
 	inventory_balance_label = _make_label("", 13, TEXT_GOLD)
@@ -607,6 +608,7 @@ func _build_popups() -> void:
 	cards_box.add_child(_make_button("關閉", cards_popup.hide))
 
 	shop_popup = _make_popup(Vector2i(700, 530))
+	shop_popup.min_size = Vector2i(700, 530)
 	var shop_box := _popup_box(shop_popup)
 	shop_box.add_child(_make_label("點券商店", 19, TEXT_MAIN))
 	shop_balance_label = _make_label("", 13, TEXT_GOLD)
@@ -1411,7 +1413,16 @@ func _on_cards_pressed() -> void:
 	if not _is_human_turn():
 		return
 	_update_cards_popup()
-	cards_popup.popup_centered()
+	cards_popup.popup_centered(Vector2i(640, 540))
+	_settle_inventory_popup(cards_popup, Vector2i(640, 540))
+
+func _settle_inventory_popup(popup: PopupPanel, desired_size: Vector2i) -> void:
+	# Newly rebuilt rows need a layout frame before their wrapped minimum height
+	# is valid. Refit after that frame so the close button remains on screen.
+	await get_tree().process_frame
+	if is_instance_valid(popup) and popup.visible:
+		popup.size = desired_size
+		popup.move_to_center()
 
 func _on_stocks_pressed() -> void:
 	if not _is_human_turn():
@@ -2096,7 +2107,8 @@ func _on_shop_pressed() -> void:
 	if not _is_human_turn() or not _shop_available():
 		return
 	_update_shop_popup()
-	shop_popup.popup_centered()
+	shop_popup.popup_centered(Vector2i(700, 560))
+	_settle_inventory_popup(shop_popup, Vector2i(700, 560))
 
 func _update_shop_popup() -> void:
 	for child in shop_popup_list.get_children():

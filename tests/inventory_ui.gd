@@ -21,6 +21,10 @@ func run() -> void:
 	expect(int(ui.state.get("version", 0)) == 4, "UI new game opts into original inventory")
 	ui._on_cards_pressed()
 	expect(ui.cards_popup.visible, "backpack opens before rolling")
+	await process_frame
+	await process_frame
+	expect(ui.cards_popup.size.y <= 800, "backpack and close button fit the default viewport")
+	expect(ui.cards_popup.size.x >= 600, "backpack keeps room for target controls")
 	expect(ui.inventory_balance_label.text.contains("點券 0"), "backpack displays starting points")
 	expect(ui.cards_popup_list.get_child_count() >= 8, "backpack displays all six opening tools")
 	ui.cards_popup.hide()
@@ -39,6 +43,10 @@ func run() -> void:
 	expect(ui.shop_button.visible and not ui.shop_button.disabled, "landing exposes the point shop button")
 	ui.shop_button.pressed.emit()
 	expect(ui.shop_popup.visible, "point shop opens from its button")
+	await process_frame
+	await process_frame
+	expect(ui.shop_popup.size.y <= 800, "shop and close button fit the default viewport")
+	expect(ui.shop_popup.size.x >= 700, "shop keeps room for transaction controls")
 	var buy: Button = ui.shop_popup.find_child("Buy_路障", true, false)
 	expect(buy != null, "shop exposes roadblock purchase")
 	if buy != null:

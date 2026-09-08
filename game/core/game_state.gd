@@ -1948,6 +1948,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
+			if graph_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
+				errors.append("unowned graph property has improvements %d" % index)
 			if owner_valid and tile.get("kind", "") != "property" and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
 			if owner_valid and tile.get("kind", "") == "property" and int(owner_value) >= 0:

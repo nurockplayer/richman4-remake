@@ -119,6 +119,25 @@ func _test_original_graph_view(definition: Dictionary) -> void:
 	view.pan_by(Vector2(32.0, 18.0))
 	var panned_position: Vector2 = view.get_screen_position_for_index(2)
 	_expect(panned_position.distance_to(zoomed_position + Vector2(32.0, 18.0)) < 1.0, "map pan moves node coordinates")
+	var retained_pan: Vector2 = view.map_pan
+	view.set_map_definition(definition)
+	_expect(view.map_pan == retained_pan and view.map_zoom == 1.8, "ordinary preview refresh keeps viewport")
+	var replacement := definition.duplicate(true)
+	replacement.id = "replacement"
+	view.set_map_definition(replacement)
+	_expect(view.map_pan == Vector2.ZERO and view.map_zoom == 1.0, "preview map replacement resets viewport")
+	view.set_game_data(replacement.board, [], 0, replacement)
+	view.pan_by(Vector2(10000, -5000))
+	view.set_zoom(2.0)
+	view.set_game_data(replacement.board, [], 0, replacement)
+	_expect(view.map_pan != Vector2.ZERO and view.map_zoom == 2.0, "ordinary active refresh keeps viewport")
+	view.set_game_data(definition.board, [], 0, definition)
+	_expect(view.map_pan == Vector2.ZERO and view.map_zoom == 1.0, "active map replacement resets viewport")
+	view.pan_by(Vector2(10000, -5000))
+	var changed_geometry := definition.duplicate(true)
+	changed_geometry.board[0].x += 500
+	view.set_game_data(changed_geometry.board, [], 0, changed_geometry)
+	_expect(view.map_pan == Vector2.ZERO, "same identity with replaced coordinates resets viewport")
 	view.queue_free()
 
 func _test_legacy_perimeter() -> void:

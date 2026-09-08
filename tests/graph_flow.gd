@@ -19,6 +19,7 @@ func _initialize() -> void:
 	_test_card_points_and_unsupported_tiles()
 	_test_graph_source_classification_and_points()
 	_test_fixed_property_economics()
+	_test_unowned_improvements_rejected()
 	_test_pending_route_save_load_and_validation()
 	_test_graph_remaining_step_bounds()
 	_test_graph_save_degree_limit()
@@ -584,3 +585,14 @@ func _test_graph_save_positions() -> void:
 		var result: Dictionary = GameState.validate_save(empty)
 		_expect(result.has("ok") and result.has("errors"), "empty graph validation returns a result in " + phase)
 		_expect(not bool(result.get("ok", true)), "empty graph is rejected in " + phase)
+
+func _test_unowned_improvements_rejected() -> void:
+	var game = _new_graph(42)
+	var snapshot: Dictionary = game.to_dict()
+	for tile in snapshot.board:
+		if tile.kind == "property":
+			tile.building_level = 3
+			tile.rent = tile.rent_by_level[3]
+			break
+	_expect(not GameState.validate_save(snapshot).ok, "unowned graph property cannot contain improvements")
+	_expect(GameState.from_dict(snapshot) == null, "unowned improvement save cannot load")

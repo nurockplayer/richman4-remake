@@ -141,6 +141,20 @@ def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
 
 
 class DecodeOriginalImagesTests(unittest.TestCase):
+    def test_each_requested_edition_must_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            game = source / "Game"
+            game.mkdir(parents=True)
+            spr = make_spr()
+            (game / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = Path(temporary) / "output"
+            with self.assertRaisesRegex(InputError, "multiversejoruney"):
+                decode_source(source, output, editions={"Game", "MultiverseJoruney"})
+            self.assertFalse(output.exists())
+            manifest = decode_source(source, output, editions={"game"})
+            self.assertEqual(len(manifest["visual_resources"]), 1)
+
     def test_case_alias_output_cannot_replace_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             actual_output = Path(temporary) / "Output"

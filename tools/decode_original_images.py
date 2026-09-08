@@ -937,11 +937,12 @@ def decode_source(
     discovered = discover_editions(source)
     if editions:
         wanted = {value.casefold() for value in editions}
+        missing = wanted - {name.casefold() for name, _ in discovered}
+        if missing:
+            raise InputError("requested editions were not found: " + ", ".join(sorted(missing)))
         discovered = [
             (name, path) for name, path in discovered if name.casefold() in wanted
         ]
-        if not discovered:
-            raise InputError("requested edition was not found")
 
     _preflight_output_keys(discovered, source)
     try:

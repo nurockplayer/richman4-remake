@@ -19,3 +19,14 @@ static func definition() -> Dictionary:
 	result.board[5].source_company_id=1
 	result.board[5].company_node_index=5
 	return result
+
+static func construction_definition() -> Dictionary:
+	var result := definition()
+	result.companies[0].company_type=11
+	for index in [1,4]:
+		var tile: Dictionary = result.board[index]
+		tile.erase("points")
+		tile.source_status_bits=0
+		tile.merge({"kind":"facility","name":"測試設施","type_and_idx":4001,"source_object_id":1,"event_code":0,"cost":1000,"land_price":1000,"upgrade_cost":300,"base_rent":0,"rent":0,"group":"facility:1","facility_type":0,"facility_state":0,"fee_by_level":[300,100,200,300,400,500],"facility_node_index":1},true)
+	result.source.facilities=[{"id":1,"land_price":1000,"upgrade_cost":300,"reserved_hex":"6400c8002c019001f401"}]
+	return result

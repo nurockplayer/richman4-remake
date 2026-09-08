@@ -5,6 +5,33 @@ const COUNT := 12
 const TOTAL_SHARES := 10000
 const HISTORY_LIMIT := 144
 
+static func source_float(value: float) -> float:
+	return float(PackedFloat32Array([value])[0])
+
+static func normalize_numbers(market: Dictionary) -> void:
+	for stock_symbol in symbols():
+		var row: Dictionary = market.rows[stock_symbol]
+		for field in ["volatility", "momentum", "shock"]:
+			if _number(row.get(field), -10000.0, 10000.0): row[field] = source_float(float(row[field]))
+		for field in ["base_price", "previous_price", "price"]:
+			if _number(row.get(field), 1.0, 9999.0): row[field] = snappedf(float(row[field]), 0.01)
+		market.prices[stock_symbol] = float(row.price)
+		var history: Array = market.history[stock_symbol]
+		for index in range(history.size()): history[index] = snappedf(float(history[index]), 0.01)
+
+static func normalize_price_events(value: Variant) -> void:
+	if typeof(value) == TYPE_ARRAY:
+		for item in value: normalize_price_events(item)
+	elif typeof(value) == TYPE_DICTIONARY:
+		for key in value:
+			if key == "price" and typeof(value[key]) in [TYPE_INT, TYPE_FLOAT]:
+				value[key] = snappedf(float(value[key]), 0.01)
+			elif key == "prices" and typeof(value[key]) == TYPE_DICTIONARY:
+				for stock_symbol in value[key]:
+					if typeof(value[key][stock_symbol]) in [TYPE_INT, TYPE_FLOAT]:
+						value[key][stock_symbol] = snappedf(float(value[key][stock_symbol]), 0.01)
+			else: normalize_price_events(value[key])
+
 static func symbol(index: int) -> String:
 	return "s%02d" % (index + 1)
 
@@ -52,7 +79,29 @@ static func create(rows: Array) -> Dictionary:
 		market.history[stock_symbol] = [float(row.price)]
 		total += float(row.price)
 	market.index = int(total * 10.0)
+	normalize_numbers(market)
 	return market
+
+static func decrement_status(market: Dictionary) -> void:
+	var closure := int(market.closed_days)
+	market.closed_days = 0 if closure == 128 else 128 if closure == 1 else maxi(0, closure - 1)
+	for row in market.rows.values():
+		row.suspension = maxi(0, int(row.suspension)-1)
+		var high := int(row.event) & 0xf0
+		var low := int(row.event) & 0x0f
+		row.event = maxi(0, high-0x10) | maxi(0, low-1)
+
+static func apply_card(market: Dictionary, stock_symbol: String, rising: bool) -> void:
+	var row: Dictionary = market.rows[stock_symbol]
+	row.event = 0x20 if rising else 2
+	row.momentum = 10.0 if rising else -10.0
+	row.price = next_price(float(row.previous_price), float(row.momentum))
+	market.prices[stock_symbol] = float(row.price)
+	var history: Array = market.history[stock_symbol]
+	history[history.size()-1] = float(row.price)
+	var total := 0.0
+	for price in market.prices.values(): total += float(price)
+	market.index = int(total*10.0)
 
 static func tick(market: Dictionary, company_prices: Dictionary, rng: RandomNumberGenerator) -> void:
 	if not bool(market.open):
@@ -69,10 +118,10 @@ static func tick(market: Dictionary, company_prices: Dictionary, rng: RandomNumb
 		elif int(row.event) != 0:
 			rate = 10.0 if (int(row.event) & 0xf0) != 0 else -10.0
 		else:
-			row.shock = float(rng.randi_range(0, 32767) - 16384) / 1171.0
+			row.shock = source_float(float(rng.randi_range(0, 32767) - 16384) / 1171.0)
 			rate = float(row.momentum) + global_shock + float(row.shock) * float(row.volatility)
 			rate = adjusted_rate(previous, float(row.base_price), float(company_prices.get(int(row.company_id), 0.0)), rate)
-		row.momentum = clampf(rate, -10.0, 10.0)
+		row.momentum = source_float(clampf(rate, -10.0, 10.0))
 		row.price = next_price(previous, float(row.momentum))
 		market.prices[stock_symbol] = float(row.price)
 		var history: Array = market.history[stock_symbol]
@@ -97,6 +146,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		if typeof(market.get(key))!=TYPE_DICTIONARY:
 			errors.append("invalid company market %s" % key)
 	if not errors.is_empty(): return errors
+	if not market.trends.is_empty(): errors.append("company market uses packed source events")
 	if typeof(market.get("open"))!=TYPE_BOOL or not _integer(market.get("closed_days"),0,255):
 		errors.append("invalid company market status")
 	if not _integer(market.get("history_index"),0,HISTORY_LIMIT-1) or not _integer(market.get("index"),0,COUNT*99990):
@@ -112,6 +162,11 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 			continue
 		if companies_by_id.has(int(company.id)): errors.append("duplicate company id")
 		companies_by_id[int(company.id)]=company
+	for company in companies:
+		if typeof(company) != TYPE_DICTIONARY or not _integer(company.get("stock_index"),0,COUNT-1) or not _integer(company.get("id"),1,1999): continue
+		var linked_row: Variant = market.rows.get(symbol(int(company.stock_index)))
+		if typeof(linked_row) != TYPE_DICTIONARY or not _integer(linked_row.get("company_id"), int(company.id), int(company.id)):
+			errors.append("company reverse stock link mismatch")
 	var total := 0.0
 	for stock_index in range(COUNT):
 		var stock_symbol := symbol(stock_index)
@@ -131,7 +186,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		var turn_valid := _integer(row.get("turn_supply"),0,TOTAL_SHARES)
 		if not supply_valid or not turn_valid or (supply_valid and turn_valid and int(row.turn_supply)>int(row.market_supply)):
 			errors.append("invalid company stock supply")
-		if not _number(market.prices.get(stock_symbol),1.0,9999.0) or market.prices.get(stock_symbol)!=row.get("price"):
+		if not _number(row.get("price"),1.0,9999.0) or not _number(market.prices.get(stock_symbol),1.0,9999.0) or float(market.prices[stock_symbol])!=float(row.price):
 			errors.append("company stock price mismatch")
 		if _number(row.get("price"),1.0,9999.0): total+=float(row.price)
 		var history: Variant = market.history.get(stock_symbol)
@@ -140,7 +195,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		else:
 			for price in history:
 				if not _number(price,1.0,9999.0): errors.append("invalid company stock history price")
-			if history.back()!=row.get("price"): errors.append("company stock history tail mismatch")
+			if not _number(history.back(),1.0,9999.0) or not _number(row.get("price"),1.0,9999.0) or float(history.back())!=float(row.price): errors.append("company stock history tail mismatch")
 		var treasury := 0
 		if not _integer(row.get("company_id"),0,1999):
 			errors.append("invalid stock company link")

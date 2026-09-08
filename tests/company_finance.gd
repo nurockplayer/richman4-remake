@@ -95,5 +95,43 @@ func _initialize() -> void:
 	game.state.players[1].dice_count=1
 	game.state.players[1].vehicles.car=false
 	valid(game,"company services")
+	game=make_game()
+	for player_id in range(4):
+		shares(game,player_id,1)
+		game.state.players[player_id].cash=0
+		game.state.players[player_id].deposit=0
+	game.state.bank.deposits=0
+	game.state.companies[0].monthly_profit=-4
+	game.state.current_player=3
+	game.state.phase="await_action"
+	game.state.day_of_month=15
+	game._settle_company_dividends()
+	expect(game.state.phase=="game_over" and game.state.winner==-1,"simultaneous shareholder losses settle before choosing winner")
+	valid(game,"all shareholders bankrupt")
+	game=make_game()
+	shares(game,3,1)
+	game.state.players[3].cash=0
+	game.state.players[3].deposit=0
+	game.state.bank.deposits=0
+	for player_id in range(3): game.state.bank.deposits+=int(game.state.players[player_id].deposit)
+	game.state.companies[0].monthly_profit=-1
+	game.state.day=14
+	game.state.current_player=3
+	game.state.phase="await_action"
+	game._sync_state()
+	game._set_action_options(3)
+	expect(game.end_turn().get("ok",false),"fourteenth day ends into dividend date")
+	expect(game.state.day==15 and not game.state.players[3].alive and game.state.current_player==0,"dividend bankruptcy advances date exactly once")
+	valid(game,"daily dividend bankruptcy")
+	game=make_game()
+	shares(game,0,1)
+	for player in game.state.players: player.deposit=0
+	game.state.players[0].deposit=1000000000000
+	game.state.bank.deposits=1000000000000
+	game.state.companies[0].monthly_profit=1
+	game.state.day_of_month=15
+	game._settle_company_dividends()
+	expect(game.state.players[0].deposit==1000000000000 and game.state.companies[0].monthly_profit==1,"unrepresentable dividend preserves funds and company pool")
+	valid(game,"dividend balance boundary")
 	print("Company finance checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

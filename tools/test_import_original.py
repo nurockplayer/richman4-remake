@@ -77,7 +77,7 @@ def make_map_payload() -> bytes:
     struct.pack_into("<hh", payload, node, -3, 7)
     struct.pack_into("<4H", payload, node + 24, 1, 0, 0, 0)
     struct.pack_into("<2H", payload, node + 32, 2001, 9)
-    struct.pack_into("<I", payload, node + 36, 0x80000000)
+    struct.pack_into("<I", payload, node + 36, 0x8000000B)
     land = offsets["lands"] + 52
     payload[land : land + 4] = struct.pack("<HH", 100, 200)
     payload[land + 4 : land + 10] = "台北市".encode("cp950")
@@ -85,7 +85,8 @@ def make_map_payload() -> bytes:
     payload[land + 24] = 1
     payload[land + 25] = 0
     payload[land + 26] = 3
-    struct.pack_into("<HH", payload, land + 28, 2500, 500)
+    struct.pack_into("<HH", payload, land + 28, 500, 2500)
+    struct.pack_into("<6H", payload, land + 32, 500, 1200, 3000, 7500, 16000, 30000)
     facility = offsets["facilities"] + 56
     payload[facility : facility + 4] = struct.pack("<HH", 300, 400)
     payload[facility + 4 : facility + 8] = b"BANK"
@@ -129,9 +130,22 @@ class ImportOriginalTests(unittest.TestCase):
         })
         self.assertEqual(parsed["nodes"][0]["adjacent"], [1])
         self.assertEqual(parsed["nodes"][0]["category"], "land")
+        self.assertEqual(parsed["nodes"][0]["field_0x22"], 9)
+        self.assertEqual(parsed["nodes"][0]["visual_index"], 9)
+        self.assertEqual(parsed["nodes"][0]["status_bits"], 0x8000000B)
+        self.assertEqual(parsed["nodes"][0]["event_code"], 11)
         self.assertEqual(parsed["lands"][0]["display_name"], "台北市")
         self.assertEqual(parsed["lands"][0]["display_name_encoding"], "cp950")
+        self.assertEqual(parsed["lands"][0]["land_price"], 500)
+        self.assertEqual(parsed["lands"][0]["house_price"], 2500)
+        self.assertEqual(parsed["lands"][0]["price_per_level"], 2500)
+        self.assertEqual(
+            parsed["lands"][0]["rent_by_level"], [500, 1200, 3000, 7500, 16000, 30000]
+        )
         self.assertEqual(parsed["facilities"][0]["facility_type"], 4)
+        self.assertEqual(parsed["facilities"][0]["land_price"], 800)
+        self.assertEqual(parsed["facilities"][0]["house_price"], 100)
+        self.assertEqual(parsed["facilities"][0]["price_per_level"], 100)
         self.assertEqual(parsed["companies"][0]["commerce_type"], 11)
         self.assertEqual(parsed["landscapes"][0]["display_name"], "CITY")
         self.assertEqual(parsed["trailing_bytes"], 0)

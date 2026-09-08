@@ -323,7 +323,9 @@ def _parse_map_nodes(
             "type_and_idx": type_and_idx,
             "category": category,
             "field_0x22": field,
+            "visual_index": field,
             "status_bits": status,
+            "event_code": status & 0xFF,
             "reserved_hex": payload[start + 4 : start + 24].hex(),
         }
         if category != "other":
@@ -347,8 +349,14 @@ def _parse_map_lands(payload: bytes, offset: int, count: int) -> list[dict[str, 
                 "owner": payload[start + 25],
                 "level": payload[start + 26],
                 "field_0x1b": payload[start + 27],
-                "price_per_level": struct.unpack_from("<H", payload, start + 28)[0],
-                "land_price": struct.unpack_from("<H", payload, start + 30)[0],
+                # The on-disk housing_land layout is land_price at +0x1c
+                # followed by house_price at +0x1e.  Keep the historical
+                # price_per_level key as an alias for house_price for callers
+                # of schema v1.
+                "land_price": struct.unpack_from("<H", payload, start + 28)[0],
+                "house_price": struct.unpack_from("<H", payload, start + 30)[0],
+                "price_per_level": struct.unpack_from("<H", payload, start + 30)[0],
+                "rent_by_level": list(struct.unpack_from("<6H", payload, start + 32)),
                 "reserved_hex": payload[start + 32 : start + 44].hex(),
                 "field_0x2c": struct.unpack_from("<I", payload, start + 44)[0],
                 "expired_date": struct.unpack_from("<I", payload, start + 48)[0],
@@ -374,6 +382,7 @@ def _parse_map_facilities(payload: bytes, offset: int, count: int) -> list[dict[
                 "field_0x1b": payload[start + 27],
                 "tmp_state": payload[start + 28],
                 "land_price": struct.unpack_from("<H", payload, start + 34)[0],
+                "house_price": struct.unpack_from("<H", payload, start + 36)[0],
                 "price_per_level": struct.unpack_from("<H", payload, start + 36)[0],
                 "reserved_hex": payload[start + 38 : start + 48].hex(),
                 "field_0x30": struct.unpack_from("<I", payload, start + 48)[0],

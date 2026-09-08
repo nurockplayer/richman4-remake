@@ -20,6 +20,8 @@ run_checked() {
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
+run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --quit-after 5
 python3 -m unittest discover -s tools -p 'test_*.py'

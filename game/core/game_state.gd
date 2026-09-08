@@ -23,6 +23,8 @@ const LOAN_TERM_DAYS = 90
 const INITIAL_BANK_CASH = 1000000
 const INT64_MIN = -9223372036854775808
 const INT64_MAX = 9223372036854775807
+const MIN_SEED = -2147483648
+const MAX_SEED = 2147483647
 
 const VEHICLE_DICE = {
 	"walking": 1,
@@ -87,6 +89,8 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 
 static func new_game(seed_value: int, player_count: int = 4) -> Richman4GameState:
+	if seed_value < MIN_SEED or seed_value > MAX_SEED:
+		return null
 	if player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		return null
 	var game = new()
@@ -100,6 +104,7 @@ func _initialize(seed_value: int, player_count: int) -> void:
 		"version": SAVE_VERSION,
 		"ruleset": RULESET_ID,
 		"seed": seed_value,
+		"seed_text": str(seed_value),
 		"rng_state": int(_rng.state),
 		"phase": "await_roll",
 		"turn": 1,
@@ -299,13 +304,25 @@ func _require_phase(expected: String) -> bool:
 
 
 func _set_action_options(player_id: int) -> void:
-	var options: Array = ["end_turn"]
+	var phase: String = str(state.get("phase", ""))
+	if phase == "game_over":
+		state["action_options"] = []
+		return
+	var options: Array = []
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["action_options"] = options
 		return
-	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	var bank_open: bool = not _is_sunday()
+	if bank_open:
+		options.push_front("sell_stock")
+		if int(player.get("cash", 0)) >= 10:
+			options.push_front("buy_stock")
+	if phase != "await_action":
+		state["action_options"] = options
+		return
+	options.push_back("end_turn")
+	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property" and not bool(state.get("property_action_used", false)):
 		var owner: int = int(tile.get("owner", -1))
 		if owner == -1 and bank_open and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
@@ -424,15 +441,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 		_record_event("stay_resolved", {"player_id": player_id, "tile": int(player.get("position", 0))})
 	else:
 		_move_player(player_id, total)
-	var doubled: bool = not turtle_step and count == 2 and dice[0] == dice[1]
-	if doubled:
-		state["doubles_count"] = int(state.get("doubles_count", 0)) + 1
-		state["extra_roll"] = int(state["doubles_count"]) < 3
-		if not bool(state["extra_roll"]):
-			player["skip_turns"] = max(1, int(player.get("skip_turns", 0)))
-	else:
-		state["doubles_count"] = 0
-		state["extra_roll"] = false
+	# The reference movement is one chosen roll per turn. Doubles do not grant
+	# Monopoly-style bonus turns or automatic penalties.
+	state["doubles_count"] = 0
+	state["extra_roll"] = false
 	_record_event("roll", {"player_id": player_id, "dice": dice, "total": total, "vehicle": player.get("vehicle", "walking")})
 	_resolve_landing(player_id)
 	return _result(true, "擲骰完成", {"dice": dice, "total": total})
@@ -552,6 +564,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
+	var was_current_roll: bool = int(state.get("current_player", -1)) == debtor_id and state.get("phase", "") == "await_roll"
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
 	debtor["cash"] = 0
 	debtor["deposit"] = 0
@@ -564,6 +577,12 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	state["bankruptcy_auctions"] = auctions
 	_record_event("bankruptcy", {"player_id": debtor_id, "creditor_id": creditor_id, "debt": debt, "reason": reason, "auction_id": auction["auction_id"]})
 	_check_game_over()
+	# A landing charge happens while the phase is still await_roll. Advance
+	# immediately so a non-final bankruptcy can never leave a dead player as the
+	# current actor for a renderer or an AI scheduler. Loan-debt bankruptcy from
+	# end_turn is advanced by that caller after its final bookkeeping instead.
+	if was_current_roll and state.get("phase", "") != "game_over":
+		_advance_to_next_alive(debtor_id)
 
 
 func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
@@ -623,8 +642,12 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法行動")
-	if _is_sunday() and ["buy", "upgrade", "deposit", "withdraw", "take_loan"].has(normalized):
+	if _is_sunday() and ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
 		return _error("週日銀行休息")
+	_set_action_options(player_id)
+	var allowed_options: Array = state.get("action_options", [])
+	if not allowed_options.has(normalized):
+		return _error("目前位置不能執行此行動")
 	match normalized:
 		"buy":
 			return _buy_property(player_id)
@@ -647,6 +670,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 func _buy_property(player_id: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
+	if bool(state.get("property_action_used", false)):
+		return _error("本次造訪已完成土地行動")
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != -1:
 		return _error("目前位置沒有可購買的土地")
 	var price: int = int(tile.get("cost", 0))
@@ -668,6 +693,8 @@ func _buy_property(player_id: int) -> Dictionary:
 func _upgrade_property(player_id: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
+	if bool(state.get("property_action_used", false)):
+		return _error("本次造訪已完成土地行動")
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != player_id:
 		return _error("目前位置不是自己的土地")
 	var level: int = int(tile.get("building_level", 0))
@@ -812,7 +839,9 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "") -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var cards: Array = player.get("cards", [])
-	var index: int = cards.find(card_id) if card_id != "" else 0
+	if card_id.is_empty():
+		return _error("卡片代號無效")
+	var index: int = cards.find(card_id)
 	if index < 0 or index >= cards.size():
 		return _error("沒有這張卡片")
 	if target_id < 0:
@@ -906,12 +935,6 @@ func end_turn() -> Dictionary:
 	if not _require_phase("await_action"):
 		return _error("目前不是結束回合階段")
 	var player_id: int = int(state.get("current_player", -1))
-	if bool(state.get("extra_roll", false)) and _valid_player(player_id, true):
-		state["extra_roll"] = false
-		state["phase"] = "await_roll"
-		state["action_options"] = []
-		_record_event("extra_roll", {"player_id": player_id})
-		return _result(true, "同一玩家獲得額外回合")
 	var player: Dictionary = _player(player_id)
 	if bool(player.get("alive", false)):
 		player["turns_taken"] = int(player.get("turns_taken", 0)) + 1
@@ -984,7 +1007,7 @@ func _apply_month_boundary() -> void:
 		bank["cash"] = int(bank.get("cash", 0)) - interest
 		state["bank"] = bank
 		_record_event("monthly_interest", {"player_id": int(player["id"]), "amount": interest})
-	_record_event("month_started", {"month": int(state.get("month", 1)) + 1})
+	_record_event("month_end_settlement", {"month": int(state.get("month", 1))})
 
 
 func _repay_due_loan(player_id: int) -> void:
@@ -1127,7 +1150,13 @@ func _ai_action(player_id: int) -> void:
 			choose_action("buy_stock", {"symbol": symbol, "quantity": 1})
 			return
 	if player.get("cards", []).size() > 0:
-		choose_action("use_card", {"card_id": player["cards"][0]})
+		var card_id: String = str(player["cards"][0])
+		var card_params: Dictionary = {"card_id": card_id}
+		if card_id == "停留" or card_id == "烏龜":
+			card_params["target_id"] = player_id
+		elif card_id == "紅" or card_id == "黑":
+			card_params["symbol"] = STOCK_SYMBOLS[player_id % STOCK_SYMBOLS.size()]
+		choose_action("use_card", card_params)
 		return
 	end_turn()
 
@@ -1150,111 +1179,306 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 	return _result(true, "AI 對局完成", {"completed_turns": completed, "winner": int(state.get("winner", -1))})
 
 
+static func _valid_int(value: Variant, minimum: int = INT64_MIN, maximum: int = INT64_MAX) -> bool:
+	if typeof(value) == TYPE_INT:
+		return value >= minimum and value <= maximum
+	if typeof(value) == TYPE_FLOAT:
+		var real: float = value
+		return is_finite(real) and floor(real) == real and real >= float(minimum) and real <= float(maximum)
+	return false
+
+
+static func _valid_bool(value: Variant) -> bool:
+	return typeof(value) == TYPE_BOOL
+
+
+static func _valid_string(value: Variant) -> bool:
+	return typeof(value) == TYPE_STRING
+
+
 static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
-	if int(data.get("version", -1)) != SAVE_VERSION:
+	var required_top: Array = [
+		"version", "ruleset", "seed", "seed_text", "rng_state", "rng_state_text",
+		"phase", "turn", "round", "day", "month", "day_of_month", "weekday",
+		"current_player", "winner", "last_roll", "last_total", "last_event",
+		"event_log", "action_options", "extra_roll", "doubles_count",
+		"property_action_used", "bank_access", "bank_landing", "bank", "market",
+		"board", "players", "bankruptcy_auctions",
+	]
+	for key in required_top:
+		if not data.has(key):
+			errors.append("missing %s" % key)
+
+	if not _valid_int(data.get("version", null), SAVE_VERSION, SAVE_VERSION):
 		errors.append("unsupported save version")
-	if str(data.get("ruleset", "")) != RULESET_ID:
+	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
+	var seed_value: Variant = data.get("seed", null)
+	var seed_valid: bool = _valid_int(seed_value, MIN_SEED, MAX_SEED)
+	if not seed_valid:
+		errors.append("invalid seed")
+	var seed_text: Variant = data.get("seed_text", null)
+	var seed_text_valid: bool = false
+	if typeof(seed_text) == TYPE_STRING and seed_text.is_valid_int():
+		var parsed_seed: int = int(seed_text)
+		seed_text_valid = seed_valid and parsed_seed >= MIN_SEED and parsed_seed <= MAX_SEED and str(parsed_seed) == seed_text and parsed_seed == int(seed_value)
+	if not seed_text_valid:
+		errors.append("invalid seed text")
+	var rng_value: Variant = data.get("rng_state", null)
+	if typeof(rng_value) not in [TYPE_INT, TYPE_FLOAT]:
+		errors.append("missing rng state")
+	var rng_text: Variant = data.get("rng_state_text", null)
+	if typeof(rng_text) != TYPE_STRING or not rng_text.is_valid_int():
+		errors.append("invalid rng state")
+	else:
+		var parsed_rng: int = int(rng_text)
+		if parsed_rng < INT64_MIN or parsed_rng > INT64_MAX or str(parsed_rng) != rng_text:
+			errors.append("invalid rng state")
+
+	var phase: Variant = data.get("phase", null)
+	if typeof(phase) != TYPE_STRING or not ["await_roll", "await_action", "game_over"].has(phase):
+		errors.append("invalid phase")
+	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	for key in ["turn", "round", "day", "month"]:
+		if not _valid_int(data.get(key, null), 1, 1000000000):
+			errors.append("invalid %s" % key)
+	if not _valid_int(data.get("day_of_month", null), 1, DAYS_PER_MONTH):
+		errors.append("invalid day_of_month")
+	if not _valid_int(data.get("weekday", null), 1, 7):
+		errors.append("invalid weekday")
+	var day_value: Variant = data.get("day", null)
+	var day_of_month_value: Variant = data.get("day_of_month", null)
+	var month_value: Variant = data.get("month", null)
+	var weekday_value: Variant = data.get("weekday", null)
+	if _valid_int(day_value, 1, 1000000000):
+		var day_int: int = day_value
+		if not _valid_int(day_of_month_value, 1, DAYS_PER_MONTH) or int(day_of_month_value) != ((day_int - 1) % DAYS_PER_MONTH) + 1:
+			errors.append("day_of_month mismatch")
+		if not _valid_int(month_value, 1, 1000000000) or int(month_value) != ((day_int - 1) / DAYS_PER_MONTH) + 1:
+			errors.append("month mismatch")
+		if not _valid_int(weekday_value, 1, 7) or int(weekday_value) != ((day_int - 1) % 7) + 1:
+			errors.append("weekday mismatch")
+
 	var players: Variant = data.get("players", null)
-	if typeof(players) != TYPE_ARRAY or players.size() < MIN_PLAYERS or players.size() > MAX_PLAYERS:
+	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
+	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
 	var board: Variant = data.get("board", null)
 	if typeof(board) != TYPE_ARRAY or board.size() != BOARD_SIZE:
 		errors.append("invalid board")
-	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
-	var phase: String = str(data.get("phase", ""))
-	if not ["await_roll", "await_action", "game_over"].has(phase):
-		errors.append("invalid phase")
-	var current_player: int = int(data.get("current_player", -1))
-	if typeof(players) == TYPE_ARRAY and (current_player < 0 or current_player >= players.size()):
+	var current_value: Variant = data.get("current_player", null)
+	if not _valid_int(current_value, 0, max(0, player_count - 1)):
 		errors.append("invalid current player")
-	var rng_text: String = ""
-	if data.has("rng_state_text"):
-		if typeof(data.get("rng_state_text")) != TYPE_STRING:
-			errors.append("invalid rng state")
-		else:
-			rng_text = data.get("rng_state_text")
-			var parsed_rng: int = int(rng_text)
-			if not rng_text.is_valid_int() or parsed_rng < INT64_MIN or parsed_rng > INT64_MAX or str(parsed_rng) != rng_text:
-				errors.append("invalid rng state")
-	elif typeof(data.get("rng_state", null)) not in [TYPE_INT, TYPE_FLOAT]:
-		errors.append("missing rng state")
+	var current_player: int = current_value if _valid_int(current_value) else -1
+	var winner_value: Variant = data.get("winner", null)
+	if not _valid_int(winner_value, -1, max(-1, player_count - 1)):
+		errors.append("invalid winner")
+	var winner: int = winner_value if _valid_int(winner_value) else -1
+
+	for key in ["extra_roll", "property_action_used", "bank_access", "bank_landing"]:
+		if not _valid_bool(data.get(key, null)):
+			errors.append("invalid %s" % key)
+	var doubles_count_value: Variant = data.get("doubles_count", null)
+	var doubles_count_valid: bool = _valid_int(doubles_count_value, 0, 3)
+	if not doubles_count_valid:
+		errors.append("invalid doubles_count")
+	var extra_roll_value: Variant = data.get("extra_roll", null)
+	if (_valid_bool(extra_roll_value) and bool(extra_roll_value)) or (doubles_count_valid and int(doubles_count_value) != 0):
+		errors.append("unsupported doubles state")
+
+	var last_roll: Variant = data.get("last_roll", null)
+	if typeof(last_roll) != TYPE_ARRAY or last_roll.size() > 3:
+		errors.append("invalid last_roll")
+	else:
+		for face in last_roll:
+			if not _valid_int(face, 1, 6):
+				errors.append("invalid die face")
+	if not _valid_int(data.get("last_total", null), 0, 18):
+		errors.append("invalid last_total")
+	if typeof(data.get("last_event", null)) != TYPE_DICTIONARY:
+		errors.append("invalid last_event")
+	var event_log: Variant = data.get("event_log", null)
+	if typeof(event_log) != TYPE_ARRAY or event_log.size() > 200:
+		errors.append("invalid event_log")
+	else:
+		for event in event_log:
+			if typeof(event) != TYPE_DICTIONARY:
+				errors.append("invalid event entry")
+	var action_options: Variant = data.get("action_options", null)
+	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
+	if typeof(action_options) != TYPE_ARRAY:
+		errors.append("invalid action_options")
+	else:
+		for option in action_options:
+			if typeof(option) != TYPE_STRING or not known_actions.has(option):
+				errors.append("invalid action option")
+		if phase_name == "await_action" and not action_options.has("end_turn"):
+			errors.append("await_action missing end_turn")
+		if phase_name == "await_roll":
+			for option in action_options:
+				if not ["buy_stock", "sell_stock"].has(option):
+					errors.append("await_roll has non-stock action")
+		elif phase_name != "await_action" and not action_options.is_empty():
+			errors.append("non-action phase has action options")
+
 	var bank: Variant = data.get("bank", null)
 	if typeof(bank) != TYPE_DICTIONARY:
 		errors.append("missing bank")
 	else:
 		for bank_key in ["cash", "deposits", "loans"]:
-			if typeof(bank.get(bank_key, null)) not in [TYPE_INT, TYPE_FLOAT]:
-				errors.append("missing bank %s" % bank_key)
-			elif int(bank.get(bank_key, 0)) < 0:
-				errors.append("negative bank %s" % bank_key)
+			if not _valid_int(bank.get(bank_key, null), 0, 1000000000000):
+				errors.append("invalid bank %s" % bank_key)
+
 	var market: Variant = data.get("market", null)
 	if typeof(market) != TYPE_DICTIONARY:
 		errors.append("missing market")
 	else:
+		if not _valid_bool(market.get("open", null)):
+			errors.append("invalid market open")
 		var prices: Variant = market.get("prices", null)
 		if typeof(prices) != TYPE_DICTIONARY:
 			errors.append("missing market prices")
 		else:
 			for symbol in STOCK_SYMBOLS:
-				if typeof(prices.get(symbol, null)) not in [TYPE_INT, TYPE_FLOAT] or int(prices.get(symbol, 0)) <= 0:
+				if not _valid_int(prices.get(symbol, null), 1, 1000000000):
 					errors.append("invalid market price %s" % symbol)
+		var trends: Variant = market.get("trends", null)
+		if typeof(trends) != TYPE_DICTIONARY:
+			errors.append("missing market trends")
+		else:
+			for symbol in trends.keys():
+				if not STOCK_SYMBOLS.has(symbol) or typeof(trends[symbol]) != TYPE_DICTIONARY:
+					errors.append("invalid market trend")
+					continue
+				var trend: Dictionary = trends[symbol]
+				if not ["up", "down"].has(str(trend.get("direction", ""))) or not _valid_int(trend.get("days", null), 1, 3):
+					errors.append("invalid market trend values")
+				var rate_type: int = typeof(trend.get("rate", null))
+				if rate_type not in [TYPE_INT, TYPE_FLOAT] or float(trend.get("rate", 0.0)) <= 0.0 or float(trend.get("rate", 0.0)) > 1.0:
+					errors.append("invalid market trend rate")
+
+	var property_owners: Dictionary = {}
 	if typeof(board) == TYPE_ARRAY:
 		for index in range(board.size()):
 			if typeof(board[index]) != TYPE_DICTIONARY:
 				errors.append("invalid board tile %d" % index)
 				continue
 			var tile: Dictionary = board[index]
-			if int(tile.get("index", -1)) != index:
+			if not _valid_int(tile.get("index", null), index, index):
 				errors.append("board index mismatch %d" % index)
-			if not ["start", "property", "event", "tax", "bank", "stock", "rest"].has(str(tile.get("kind", ""))):
+			if not _valid_string(tile.get("kind", null)) or not ["start", "property", "event", "tax", "bank", "stock", "rest"].has(tile.get("kind", "")):
 				errors.append("invalid board kind %d" % index)
-			if int(tile.get("owner", -1)) < -1 or int(tile.get("owner", -1)) >= player_count:
+			if not _valid_string(tile.get("name", null)) or not _valid_string(tile.get("group", null)):
+				errors.append("invalid board text %d" % index)
+			var owner_value: Variant = tile.get("owner", null)
+			var owner_valid: bool = _valid_int(owner_value, -1, max(-1, player_count - 1))
+			if not owner_valid:
 				errors.append("invalid board owner %d" % index)
-			if int(tile.get("building_level", 0)) < 0 or int(tile.get("building_level", 0)) > MAX_PROPERTY_LEVEL:
+			if not _valid_int(tile.get("building_level", null), 0, MAX_PROPERTY_LEVEL):
 				errors.append("invalid board level %d" % index)
-			for money_key in ["cost", "upgrade_cost", "base_rent", "rent"]:
-				if typeof(tile.get(money_key, null)) not in [TYPE_INT, TYPE_FLOAT] or int(tile.get(money_key, 0)) < 0:
+			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
+				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
+			if owner_valid and tile.get("kind", "") != "property" and int(owner_value) != -1:
+				errors.append("non-property has owner %d" % index)
+			if owner_valid and tile.get("kind", "") == "property" and int(owner_value) >= 0:
+				property_owners[index] = int(owner_value)
+
 	if typeof(players) == TYPE_ARRAY:
 		for index in range(players.size()):
 			if typeof(players[index]) != TYPE_DICTIONARY:
 				errors.append("invalid player %d" % index)
 				continue
 			var player: Dictionary = players[index]
-			for required_key in ["id", "cash", "deposit", "position", "properties", "stocks", "cards", "alive"]:
+			var required_player: Array = ["id", "name", "is_human", "is_ai", "alive", "bankrupt", "cash", "deposit", "position", "properties", "property_values", "stocks", "cards", "vehicle", "dice_count", "vehicles", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan", "loan_due_day", "turns_taken"]
+			for required_key in required_player:
 				if not player.has(required_key):
 					errors.append("player %d missing %s" % [index, required_key])
-			if int(player.get("id", -1)) != index:
-				errors.append("player %d id mismatch" % index)
-			if int(player.get("cash", 0)) < 0 or int(player.get("deposit", 0)) < 0:
-				errors.append("player %d has negative balance" % index)
-			if int(player.get("position", -1)) < 0 or int(player.get("position", -1)) >= BOARD_SIZE:
-				errors.append("player %d has invalid position" % index)
-			if typeof(player.get("properties", null)) != TYPE_ARRAY:
-				errors.append("player %d has invalid properties" % index)
+			if not _valid_int(player.get("id", null), index, index) or not _valid_string(player.get("name", null)):
+				errors.append("player %d identity invalid" % index)
+			for bool_key in ["is_human", "is_ai", "alive", "bankrupt"]:
+				if not _valid_bool(player.get(bool_key, null)):
+					errors.append("player %d %s invalid" % [index, bool_key])
+			if _valid_bool(player.get("is_human", null)) and _valid_bool(player.get("is_ai", null)) and bool(player["is_human"]) == bool(player["is_ai"]):
+				errors.append("player %d control flags invalid" % index)
+			if _valid_bool(player.get("alive", null)) and _valid_bool(player.get("bankrupt", null)) and bool(player["alive"]) == bool(player["bankrupt"]):
+				errors.append("player %d alive state invalid" % index)
+			for money_key in ["cash", "deposit", "property_values", "loan"]:
+				if not _valid_int(player.get(money_key, null), 0, 1000000000000):
+					errors.append("player %d %s invalid" % [index, money_key])
+			for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
+				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
+					errors.append("player %d %s invalid" % [index, counter_key])
+			var dice_count_value: Variant = player.get("dice_count", null)
+			var dice_count_valid: bool = _valid_int(dice_count_value, 1, 3)
+			if not dice_count_valid:
+				errors.append("player %d dice_count invalid" % index)
+			if _valid_int(player.get("position", null)) and int(player["position"]) >= BOARD_SIZE:
+				errors.append("player %d position out of range" % index)
+			var vehicle_value: Variant = player.get("vehicle", null)
+			var vehicle_valid: bool = _valid_string(vehicle_value) and VEHICLE_DICE.has(vehicle_value)
+			if dice_count_valid and vehicle_valid and int(dice_count_value) > int(VEHICLE_DICE[vehicle_value]):
+				errors.append("player %d dice count exceeds vehicle" % index)
+			if not vehicle_valid:
+				errors.append("player %d vehicle invalid" % index)
+			var properties: Variant = player.get("properties", null)
+			if typeof(properties) != TYPE_ARRAY:
+				errors.append("player %d properties invalid" % index)
 			else:
-				for property_id in player.get("properties", []):
-					if typeof(property_id) not in [TYPE_INT, TYPE_FLOAT] or int(property_id) < 0 or int(property_id) >= BOARD_SIZE:
-						errors.append("player %d has invalid property" % index)
-			if typeof(player.get("stocks", null)) != TYPE_DICTIONARY:
-				errors.append("player %d has invalid stocks" % index)
+				for property_id in properties:
+					if not _valid_int(property_id, 0, BOARD_SIZE - 1):
+						errors.append("player %d property invalid" % index)
+					elif property_owners.has(int(property_id)):
+						if int(property_owners[int(property_id)]) != index:
+							errors.append("player %d property owner mismatch" % index)
+						property_owners.erase(int(property_id))
+			var stocks: Variant = player.get("stocks", null)
+			if typeof(stocks) != TYPE_DICTIONARY:
+				errors.append("player %d stocks invalid" % index)
 			else:
 				for symbol in STOCK_SYMBOLS:
-					if typeof(player["stocks"].get(symbol, null)) not in [TYPE_INT, TYPE_FLOAT] or int(player["stocks"].get(symbol, 0)) < 0:
-						errors.append("player %d has invalid stock %s" % [index, symbol])
-			if typeof(player.get("cards", null)) != TYPE_ARRAY or player.get("cards", []).size() > 15:
-				errors.append("player %d has invalid cards" % index)
-			if typeof(player.get("alive", null)) != TYPE_BOOL:
-				errors.append("player %d has invalid alive state" % index)
-	if phase == "game_over":
-		var winner: int = int(data.get("winner", -1))
-		if winner < -1 or (typeof(players) == TYPE_ARRAY and winner >= players.size()):
-			errors.append("invalid winner")
+					if not _valid_int(stocks.get(symbol, null), 0, 1000000000):
+						errors.append("player %d stock %s invalid" % [index, symbol])
+				for symbol in stocks.keys():
+					if not STOCK_SYMBOLS.has(symbol):
+						errors.append("player %d unknown stock" % index)
+			var cards: Variant = player.get("cards", null)
+			if typeof(cards) != TYPE_ARRAY or cards.size() > 15:
+				errors.append("player %d cards invalid" % index)
+			else:
+				for card_id in cards:
+					if not _valid_string(card_id):
+						errors.append("player %d card invalid" % index)
+			var vehicles: Variant = player.get("vehicles", null)
+			if typeof(vehicles) != TYPE_DICTIONARY:
+				errors.append("player %d vehicles invalid" % index)
+			else:
+				for vehicle in ["walking", "motorcycle", "car"]:
+					if not _valid_bool(vehicles.get(vehicle, null)):
+						errors.append("player %d vehicle ownership invalid" % index)
+				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
+					errors.append("player %d selected vehicle is not owned" % index)
+
+	if not property_owners.is_empty():
+		errors.append("board property missing player ownership")
+	if phase_name != "game_over" and current_player >= 0 and current_player < player_count and typeof(players[current_player]) == TYPE_DICTIONARY:
+		var current_actor: Dictionary = players[current_player]
+		if not _valid_bool(current_actor.get("alive", null)) or not bool(current_actor.get("alive", false)) or not _valid_bool(current_actor.get("bankrupt", null)) or bool(current_actor.get("bankrupt", false)):
+			errors.append("dead current player")
+	if phase_name == "game_over":
+		if winner < 0 or winner >= player_count or typeof(players[winner]) != TYPE_DICTIONARY or not bool(players[winner].get("alive", false)):
+			errors.append("invalid game over winner")
+	elif winner != -1:
+		errors.append("winner set before game over")
+
+	var auctions: Variant = data.get("bankruptcy_auctions", null)
+	if typeof(auctions) != TYPE_ARRAY:
+		errors.append("invalid bankruptcy auctions")
 	else:
-		if int(data.get("winner", -1)) != -1:
-			errors.append("winner set before game over")
+		for auction in auctions:
+			if typeof(auction) != TYPE_DICTIONARY:
+				errors.append("invalid bankruptcy auction entry")
 	return {"ok": errors.is_empty(), "errors": errors}
 
 
@@ -1280,6 +1504,10 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 	var rng_text: String = str(game.state.get("rng_state_text", ""))
 	game._rng.state = int(rng_text) if rng_text != "" else int(game.state.get("rng_state", 0))
 	game._sync_state()
+	if game.state.get("phase", "") in ["await_roll", "await_action"]:
+		game._set_action_options(int(game.state.get("current_player", -1)))
+	else:
+		game.state["action_options"] = []
 	return game
 
 

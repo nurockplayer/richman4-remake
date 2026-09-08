@@ -42,3 +42,9 @@ git status --short --ignored .local/imported-original
 ```
 
 `.local/` 已由 `.gitignore` 排除。請不要以 `git add -f` 強制加入原始檔或上述衍生資料。
+
+格式研究另參考 [mytbk/rich4](https://github.com/mytbk/rich4/tree/54ff26750e7e7f585da6fe68c4e8972cd22ed509) 的容器／地圖欄位記錄，再以本機資料的界線、欄位與 round-trip 結果核對。匯入器為 Python 獨立實作；該研究 repo 與解碼程式沒有納入此 repo 或遊戲包。
+
+地圖節點 JSON 同時保留原始 `status_bits` 與 `field_0x22`，並提供可供 runtime 使用的 `event_code`（`status_bits & 0xff`）與 `visual_index`（`field_0x22`）。事件碼的落地 dispatch 已由原版 `player_core_actions.asm` jump table 核對；`field_0x22` 是視覺／資源索引，不應用來判斷事件。
+
+土地與設施的價格欄位依原始結構解析。housing land 的 `+0x1c` 是 `land_price`、`+0x1e` 是 `house_price`；土地的 `+0x20..+0x2b` 是六個 little-endian `u16`，輸出為 `rent_by_level`。為維持既有 schema v1 呼叫端，`price_per_level` 仍輸出，但它是 `house_price` 的相容別名，不是另一個欄位。facility 的 `+0x22`／`+0x24` 分別是 `land_price`／`house_price`，同樣提供 `price_per_level` 相容別名。原始 12 個租金位元組仍保留在 `reserved_hex`。

@@ -58,6 +58,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _starts_with_lfs_pointer(path: Path) -> bool:
+    """Check only the bounded pointer prefix without reading a large bad file."""
+    try:
+        with path.open("rb") as stream:
+            return stream.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX
+    except OSError as exc:
+        raise VerificationError(f"cannot read asset file {path}: {exc}") from exc
+
+
 def _safe_relative(value: Any, *, field: str) -> PurePosixPath:
     if not isinstance(value, str) or not value or "\\" in value:
         raise VerificationError(f"{field} must be a relative POSIX path")
@@ -251,7 +260,7 @@ def _validate_manifest(
         except OSError as exc:
             raise VerificationError(f"cannot stat asset file {relative}: {exc}") from exc
         if actual_size != size:
-            if path.read_bytes().startswith(LFS_POINTER_PREFIX):
+            if _starts_with_lfs_pointer(path):
                 raise VerificationError(f"Git LFS content was not downloaded: {relative}")
             raise VerificationError(f"size mismatch for asset file: {relative}")
         actual_digest = _sha256(path)

@@ -248,6 +248,37 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertEqual((destination / "marker").read_text(encoding="utf-8"), "race")
             self.assertFalse((destination / "repository").exists())
 
+    def test_verifier_rejects_untracked_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, _ = self._make_fixture(temporary)
+            extra = repository / "source/dfw4cskzl_136622/Game/extra.bin"
+            extra.write_bytes(b"not in manifest")
+            result = run([
+                "python3", str(VERIFY),
+                "--asset-root", str(repository),
+                "--config", str(config),
+            ], cwd=ROOT, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("working source files do not match manifest exactly", result.stderr)
+            self.assertIn("extra=Game/extra.bin", result.stderr)
+
+    def test_verifier_rejects_git_ignored_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, _ = self._make_fixture(temporary)
+            ignored_relative = "source/dfw4cskzl_136622/Game/ignored.tmp"
+            (repository / ".git/info/exclude").write_text(ignored_relative + "\n", encoding="utf-8")
+            ignored = repository / ignored_relative
+            ignored.write_bytes(b"ignored but still visible to consumers")
+            self.assertEqual(run(["git", "status", "--porcelain"], cwd=repository).stdout, "")
+            result = run([
+                "python3", str(VERIFY),
+                "--asset-root", str(repository),
+                "--config", str(config),
+            ], cwd=ROOT, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("working source files do not match manifest exactly", result.stderr)
+            self.assertIn("extra=Game/ignored.tmp", result.stderr)
+
     def test_verifier_rejects_manifest_path_case_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, config, _ = self._make_fixture(temporary)

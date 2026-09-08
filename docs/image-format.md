@@ -16,6 +16,14 @@ python3 tools/decode_original_images.py \
 `--source` 可以是同時包含 `Game/`、`MultiverseJourney/` 的安裝根目錄，
 也可以直接指定其中一個版本目錄。來源與輸出目錄不得相同，也不能互為祖先／
 子目錄；工具在建立輸出前會解析實際路徑並拒絕重疊，避免發布時搬移或刪除來源。
+
+若輸出目錄位於 Git worktree 內，工具會在建立輸出或 staging 目錄前以唯讀
+Git 命令確認工具管理的 `images/` 與 `manifest.json` 都被忽略，並拒絕其中
+已經存在於 index 的內容。預設的 `.local/original-images` 因 `.local/` 已被
+忽略而可使用；位於 worktree 內的自訂目錄必須先由專案既有忽略規則涵蓋。
+位於 Git worktree 外的自訂目錄可以使用。工具不會修改 `.gitignore` 或 Git
+index；若無法在已辨識的 worktree 中執行 Git，工具會清楚失敗並保留既有輸出。
+
 輸出包含：
 
 * `manifest.json`：來源檔案雜湊、MKF 索引、資源壓縮狀態、圖塊尺寸與 PNG

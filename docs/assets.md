@@ -1,6 +1,8 @@
-# 原版資產匯入
+# 原版資產來源與匯入
 
-原版檔案只從遊戲擁有者的本機安裝讀取。`tools/import_original.py` 會列出來源檔案與 SHA-256，驗證 MKF 索引表，並將可安全解析的地圖資料寫到 `.local/`。原始執行檔、MKF、音訊、影片與匯入快取都不進 Git。
+素材策略的目標不是「永遠留在某一台本機」，而是讓擁有者重新 clone 專案後，可以在具備授權憑證時重建完整開發素材。這個程式 repo 目前是公開的，因此沒有合法公開分發權的第三方原版檔案不直接提交到此 repo；但也不再使用「原版素材一律不得放進 GitHub」的 blanket rule。擁有者有權保存／使用的素材應集中到可版本化、需授權存取的私人 source of truth，例如 private Git LFS repository 或等價 authenticated store，並由本 repo 提供 manifest／bootstrap 流程。原版本機安裝仍可作為匯入來源與驗證來源，但不應長期成為唯一可取得完整素材的地方。
+
+在私人素材來源與 bootstrap 完成前，現有本機 importer 仍是相容路徑。`tools/import_original.py` 會列出來源檔案與 SHA-256，驗證 MKF 索引表，並將可安全解析的地圖資料寫到 `.local/`。
 
 先以 `--dry-run` 檢查來源，不會建立輸出檔：
 
@@ -35,13 +37,7 @@ MKF 是小端格式。檔案第一個 32 位元整數指向檔尾索引表；索
 
 地圖 JSON 永遠保留 `name_bytes_hex`。目前所有非空的土地、設施與景觀名稱都能以 CP950（Windows Big5 擴充）嚴格解碼後再編碼回相同位元組，因此工具另外提供 `display_name`、`display_name_encoding: "cp950"` 與 `display_name_confidence: "inferred-roundtrip"`；ASCII 名稱也保留 `name_ascii`。這是跨目前地圖 payload 的編碼證據，不等同於原版 UI 顯示驗證。節點、土地、設施、企業與景觀的未知欄位也保留為十六進位欄位，供之後對照原始執行時驗證。
 
-匯入完成後可檢查 Git 是否仍為乾淨的資產範圍：
-
-```sh
-git status --short --ignored .local/imported-original
-```
-
-`.local/` 已由 `.gitignore` 排除。請不要以 `git add -f` 強制加入原始檔或上述衍生資料。
+目前 `.local/` 仍是本機匯入／衍生 cache，已由 `.gitignore` 排除。不要用 `git add -f` 把未確認公開分發權的第三方素材塞進這個 public code repo。這項限制只針對公開程式 repo；它不禁止把擁有者有權遠端保存的素材放進指定的 private Git/LFS 或其他 authenticated asset store。待私人素材來源落地後，應能由乾淨 checkout 依 manifest/bootstrap 取得必要素材，而不必依賴原先那台電腦上的固定路徑。
 
 格式研究另參考 [mytbk/rich4](https://github.com/mytbk/rich4/tree/54ff26750e7e7f585da6fe68c4e8972cd22ed509) 的容器／地圖欄位記錄，再以本機資料的界線、欄位與 round-trip 結果核對。匯入器為 Python 獨立實作；該研究 repo 與解碼程式沒有納入此 repo 或遊戲包。
 

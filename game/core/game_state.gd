@@ -9,7 +9,10 @@ extends RefCounted
 ## can be made without coupling the renderer to the simulation.
 
 const SAVE_VERSION = 1
+const GRAPH_SAVE_VERSION = 2
 const RULESET_ID = "richman4_provisional_v1"
+const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
+const GRAPH_BOARD_MODE = "graph"
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -98,6 +101,19 @@ static func new_game(seed_value: int, player_count: int = 4) -> Richman4GameStat
 	return game
 
 
+static func new_game_on_board(seed_value: int, player_count: int, definition: Dictionary) -> Richman4GameState:
+	if seed_value < MIN_SEED or seed_value > MAX_SEED:
+		return null
+	if player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
+		return null
+	var validation: Dictionary = validate_board_definition(definition)
+	if not bool(validation.get("ok", false)):
+		return null
+	var game := new()
+	game._initialize_graph(seed_value, player_count, validation["definition"])
+	return game
+
+
 func _initialize(seed_value: int, player_count: int) -> void:
 	_rng.seed = seed_value
 	state = {
@@ -144,10 +160,71 @@ func _initialize(seed_value: int, player_count: int) -> void:
 	_record_event("new_game", {"seed": seed_value, "player_count": player_count})
 
 
-func _build_players(player_count: int) -> Array:
+func _initialize_graph(seed_value: int, player_count: int, definition: Dictionary) -> void:
+	_rng.seed = seed_value
+	var start_position: int = int(definition.get("start_position", 0))
+	var board_value: Variant = _canonicalize_json_numbers(definition.get("board", []).duplicate(true))
+	var board: Array = board_value
+	var map_source_value: Variant = _canonicalize_json_numbers(definition.get("source", {}).duplicate(true))
+	var map_source: Dictionary = map_source_value
+	state = {
+		"version": GRAPH_SAVE_VERSION,
+		"ruleset": RULESET_ID,
+		"seed": seed_value,
+		"seed_text": str(seed_value),
+		"rng_state": int(_rng.state),
+		"phase": "await_roll",
+		"turn": 1,
+		"round": 1,
+		"day": 1,
+		"month": 1,
+		"day_of_month": 1,
+		"weekday": 1,
+		"current_player": 0,
+		"winner": -1,
+		"last_roll": [],
+		"last_total": 0,
+		"last_event": {},
+		"event_log": [],
+		"action_options": [],
+		"extra_roll": false,
+		"doubles_count": 0,
+		"property_action_used": false,
+		"bank_access": false,
+		"bank_landing": false,
+		"bank": {
+			"cash": INITIAL_BANK_CASH,
+			"deposits": 0,
+			"loans": 0,
+		},
+		"market": {
+			"prices": STOCK_BASE_PRICES.duplicate(true),
+			"open": true,
+			"trends": {},
+		},
+		"board_mode": GRAPH_BOARD_MODE,
+		"map_id": str(definition.get("id", "")),
+		"map_name": str(definition.get("name", "")),
+		"map_schema": str(definition.get("schema", RUNTIME_MAP_SCHEMA)),
+		"map_version": int(definition.get("version", 1)),
+		"map_source": map_source,
+		"start_position": start_position,
+		"board": board,
+		"players": _build_players(player_count, start_position, true),
+		"bankruptcy_auctions": [],
+		"route_options": [],
+		"remaining_steps": 0,
+		"pending_movement": {},
+	}
+	_sync_state()
+	_set_action_options(0)
+	_record_event("new_game", {"seed": seed_value, "player_count": player_count, "map_id": state["map_id"]})
+
+
+func _build_players(player_count: int, start_position: int = START_POSITION, graph_mode: bool = false) -> Array:
 	var players: Array = []
 	for player_id in range(player_count):
-		players.append({
+		var player: Dictionary = {
 			"id": player_id,
 			"name": "玩家 %d" % (player_id + 1),
 			"is_human": player_id == 0,
@@ -156,7 +233,7 @@ func _build_players(player_count: int) -> Array:
 			"bankrupt": false,
 			"cash": START_CASH,
 			"deposit": 0,
-			"position": START_POSITION,
+			"position": start_position,
 			"properties": [],
 			"property_values": 0,
 			"stocks": {"tech": 0, "transport": 0, "energy": 0},
@@ -171,7 +248,11 @@ func _build_players(player_count: int) -> Array:
 			"loan": 0,
 			"loan_due_day": 0,
 			"turns_taken": 0,
-		})
+		}
+		if graph_mode:
+			player["previous_position"] = -1
+			player["points"] = 0
+		players.append(player)
 	return players
 
 
@@ -360,7 +441,25 @@ func _tile_at(index: int) -> Dictionary:
 	return board[index]
 
 
+func _is_graph() -> bool:
+	return state.get("board_mode", "") == GRAPH_BOARD_MODE
+
+
+func _array_contains_int(values: Variant, target: int) -> bool:
+	if typeof(values) != TYPE_ARRAY:
+		return false
+	for value in values:
+		if _valid_int(value) and int(value) == target:
+			return true
+	return false
+
+
 func _upgrade_price(tile: Dictionary) -> int:
+	if _is_graph():
+		# The original housing record stores one house price.  Each level uses
+		# that same price; the rent table, rather than a guessed multiplier,
+		# determines the resulting rent.
+		return int(tile.get("house_price", tile.get("upgrade_cost", 0)))
 	return int(tile.get("upgrade_cost", 0)) * (int(tile.get("building_level", 0)) + 1)
 
 
@@ -436,9 +535,12 @@ func roll(dice_count: int = -1) -> Dictionary:
 	state["last_roll"] = dice
 	state["last_total"] = total
 	state["property_action_used"] = false
+	var graph_should_move: bool = false
 	if int(player.get("stay_next", 0)) > 0:
 		player["stay_next"] = int(player.get("stay_next", 0)) - 1
 		_record_event("stay_resolved", {"player_id": player_id, "tile": int(player.get("position", 0))})
+	elif _is_graph():
+		graph_should_move = true
 	else:
 		_move_player(player_id, total)
 	# The reference movement is one chosen roll per turn. Doubles do not grant
@@ -446,8 +548,167 @@ func roll(dice_count: int = -1) -> Dictionary:
 	state["doubles_count"] = 0
 	state["extra_roll"] = false
 	_record_event("roll", {"player_id": player_id, "dice": dice, "total": total, "vehicle": player.get("vehicle", "walking")})
-	_resolve_landing(player_id)
+	if graph_should_move:
+		_graph_begin_movement(player_id, total)
+	if not _is_graph() or state.get("phase", "") != "await_route":
+		_resolve_landing(player_id)
 	return _result(true, "擲骰完成", {"dice": dice, "total": total})
+
+
+func _graph_candidates(current_node: int, previous_node: int) -> Array:
+	var tile: Dictionary = _tile_at(current_node)
+	if tile.is_empty():
+		return []
+	var adjacent: Array = tile.get("adjacent", [])
+	var candidates: Array = []
+	for neighbor in adjacent:
+		var neighbor_id: int = int(neighbor)
+		if neighbor_id < 0 or neighbor_id >= state.get("board", []).size():
+			continue
+		if neighbor_id != previous_node and not candidates.has(neighbor_id):
+			candidates.append(neighbor_id)
+	if candidates.is_empty() and previous_node >= 0 and _array_contains_int(adjacent, previous_node):
+		candidates.append(previous_node)
+	candidates.sort()
+	return candidates
+
+
+func _graph_begin_movement(player_id: int, steps: int) -> void:
+	var player: Dictionary = _player(player_id)
+	var current_node: int = int(player.get("position", -1))
+	var previous_node: int = int(player.get("previous_position", -1))
+	state["bank_access"] = false
+	state["bank_landing"] = false
+	state["remaining_steps"] = max(0, steps)
+	state["pending_movement"] = {
+		"player_id": player_id,
+		"current_node": current_node,
+		"previous_node": previous_node,
+	}
+	state["route_options"] = []
+	_graph_continue_movement(player_id)
+
+
+func _graph_continue_movement(player_id: int) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return
+	while int(state.get("remaining_steps", 0)) > 0:
+		var current_node: int = int(player.get("position", -1))
+		var previous_node: int = int(player.get("previous_position", -1))
+		var candidates: Array = _graph_candidates(current_node, previous_node)
+		if candidates.size() > 1:
+			state["phase"] = "await_route"
+			state["route_options"] = candidates
+			state["pending_movement"] = {
+				"player_id": player_id,
+				"current_node": current_node,
+				"previous_node": previous_node,
+			}
+			_set_action_options(player_id)
+			return
+		if candidates.is_empty():
+			# A valid map can contain an isolated non-housing node. Preserve the
+			# explicit stop instead of inventing a connection to another node.
+			state["remaining_steps"] = 0
+			_record_event("movement_blocked", {"player_id": player_id, "node": current_node})
+			break
+		var next_node: int = int(candidates[0])
+		var old_node: int = current_node
+		player["previous_position"] = old_node
+		player["position"] = next_node
+		state["remaining_steps"] = int(state.get("remaining_steps", 0)) - 1
+		state["pending_movement"] = {
+			"player_id": player_id,
+			"current_node": next_node,
+			"previous_node": old_node,
+		}
+		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
+		if int(state.get("remaining_steps", 0)) > 0:
+			_graph_visit_tile(player_id, _tile_at(next_node), false)
+			if not bool(player.get("alive", false)):
+				state["remaining_steps"] = 0
+				break
+	state["route_options"] = []
+	state["pending_movement"] = {}
+	state["remaining_steps"] = 0
+	state["phase"] = "await_roll"
+
+
+func choose_route(route: int) -> Dictionary:
+	if not _require_phase("await_route"):
+		return _error("目前沒有待選路線")
+	var player_id: int = int(state.get("current_player", -1))
+	var pending: Dictionary = state.get("pending_movement", {})
+	if pending.is_empty() or int(pending.get("player_id", -1)) != player_id:
+		return _error("待選路線的玩家無效")
+	var options: Array = state.get("route_options", [])
+	if not _array_contains_int(options, route):
+		return _error("選擇的路線無效")
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or int(player.get("position", -1)) != int(pending.get("current_node", -2)):
+		return _error("待選路線與玩家位置不一致")
+	var current_node: int = int(player.get("position", -1))
+	var previous_node: int = int(player.get("previous_position", -1))
+	var legal_options: Array = _graph_candidates(current_node, previous_node)
+	if not _array_contains_int(legal_options, route):
+		return _error("選擇的路線已失效")
+	player["previous_position"] = current_node
+	player["position"] = route
+	state["remaining_steps"] = int(state.get("remaining_steps", 0)) - 1
+	state["pending_movement"] = {
+		"player_id": player_id,
+		"current_node": route,
+		"previous_node": current_node,
+	}
+	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
+	if int(state.get("remaining_steps", 0)) > 0:
+		_graph_visit_tile(player_id, _tile_at(route), false)
+	_graph_continue_movement(player_id)
+	if int(state.get("remaining_steps", 0)) == 0 and state.get("phase", "") != "game_over":
+		_resolve_landing(player_id)
+	return _result(true, "已選擇路線", {"route": route})
+
+
+func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) -> void:
+	if tile.is_empty():
+		return
+	var tile_index: int = int(tile.get("index", -1))
+	match str(tile.get("kind", "rest")):
+		"property":
+			if final_landing:
+				var owner: int = int(tile.get("owner", -1))
+				if owner >= 0 and owner != player_id:
+					_charge_rent(player_id, owner, _calculate_rent(tile, owner))
+		"tax":
+			if final_landing:
+				_charge_amount(player_id, int(tile.get("tax_amount", 0)), -1, "tax")
+		"stock":
+			if final_landing:
+				_record_event("stock_landed", {"player_id": player_id, "tile": tile_index})
+		"event":
+			if final_landing:
+				_draw_event_card(player_id)
+		"points":
+			var player: Dictionary = _player(player_id)
+			var points: int = int(tile.get("points", 0))
+			player["points"] = int(player.get("points", 0)) + points
+			_record_event("points_landed" if final_landing else "points_passed", {"player_id": player_id, "tile": tile_index, "points": points})
+		"card":
+			if final_landing:
+				_draw_event_card(player_id)
+			else:
+				_grant_random_card(player_id, "card_passed")
+		"bank":
+			if not _is_sunday():
+				state["bank_access"] = true
+				if final_landing:
+					state["bank_landing"] = true
+					_record_event("bank_landed", {"player_id": player_id, "tile": tile_index})
+				else:
+					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
+		"unsupported":
+			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
 
 
 func _move_player(player_id: int, steps: int) -> void:
@@ -476,6 +737,13 @@ func _resolve_landing(player_id: int) -> void:
 	if tile.is_empty():
 		state["phase"] = "await_action"
 		_set_action_options(player_id)
+		return
+	if _is_graph():
+		_graph_visit_tile(player_id, tile, true)
+		if bool(player.get("alive", false)) and state.get("phase", "") != "game_over":
+			state["phase"] = "await_action"
+			_set_action_options(player_id)
+		_check_game_over()
 		return
 	match str(tile.get("kind", "rest")):
 		"property":
@@ -1066,6 +1334,12 @@ func _tick_market() -> void:
 
 
 func _update_tile_rent(tile: Dictionary) -> void:
+	if _is_graph() and tile.has("rent_by_level") and tile.get("rent_by_level") is Array:
+		var rents: Array = tile.get("rent_by_level", [])
+		var graph_level: int = clampi(int(tile.get("building_level", 0)), 0, max(0, rents.size() - 1))
+		if not rents.is_empty():
+			tile["rent"] = int(rents[graph_level])
+			return
 	var base: int = int(tile.get("base_rent", 0))
 	var level: int = int(tile.get("building_level", 0))
 	tile["rent"] = base * (1 + level * 2)
@@ -1132,6 +1406,11 @@ func run_ai_turn() -> Dictionary:
 		safety += 1
 		if state.get("phase", "") == "await_roll":
 			roll()
+		elif state.get("phase", "") == "await_route":
+			var options: Array = state.get("route_options", [])
+			if options.is_empty():
+				return _error("AI 找不到可用路線")
+			choose_route(int(options[0]))
 		elif state.get("phase", "") == "await_action":
 			if not bool(_player(player_id).get("alive", false)):
 				_advance_to_next_alive(player_id)
@@ -1195,6 +1474,142 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 	return _result(true, "AI 對局完成", {"completed_turns": completed, "winner": int(state.get("winner", -1))})
 
 
+static func _valid_sha256(value: Variant) -> bool:
+	if typeof(value) != TYPE_STRING or value.length() != 64:
+		return false
+	for character in value:
+		if not character in "0123456789abcdef":
+			return false
+	return true
+
+
+static func _validate_graph_source(source: Variant, expected_id: String = "") -> Array:
+	var errors: Array = []
+	if typeof(source) != TYPE_DICTIONARY:
+		return ["missing map source"]
+	var edition: Variant = source.get("edition", null)
+	var map_number: Variant = source.get("map_number", null)
+	if typeof(edition) != TYPE_STRING or not ["Game", "MultiverseJourney"].has(edition):
+		errors.append("invalid map source edition")
+	if not _valid_int(map_number, 1, 99):
+		errors.append("invalid map source number")
+	if typeof(edition) == TYPE_STRING and _valid_int(map_number, 1, 99):
+		var canonical_id := "%s:%d" % [edition, int(map_number)]
+		if not expected_id.is_empty() and expected_id != canonical_id:
+			errors.append("map identity mismatch")
+	var archive: Variant = source.get("archive", null)
+	if typeof(archive) != TYPE_STRING or (typeof(edition) == TYPE_STRING and archive != "%s/map.mkf" % edition):
+		errors.append("invalid map source archive")
+	if not _valid_int(source.get("entry_index", null), 0, 999):
+		errors.append("invalid map source entry")
+	for hash_key in ["payload_sha256", "source_file_sha256"]:
+		if not _valid_sha256(source.get(hash_key, null)):
+			errors.append("invalid map source hash")
+	return errors
+
+
+static func validate_board_definition(definition: Dictionary) -> Dictionary:
+	var errors: Array = []
+	if typeof(definition) != TYPE_DICTIONARY:
+		return {"ok": false, "errors": ["map definition must be a dictionary"]}
+	if definition.get("schema", "") != RUNTIME_MAP_SCHEMA:
+		errors.append("unsupported map schema")
+	if not _valid_int(definition.get("version", null), 1, 1):
+		errors.append("unsupported map version")
+	var map_id: Variant = definition.get("id", null)
+	if typeof(map_id) != TYPE_STRING or str(map_id).is_empty():
+		errors.append("invalid map id")
+	var map_name: Variant = definition.get("name", null)
+	if typeof(map_name) != TYPE_STRING or str(map_name).is_empty():
+		errors.append("invalid map name")
+	var source_errors: Array = _validate_graph_source(definition.get("source", null), str(map_id) if typeof(map_id) == TYPE_STRING else "")
+	errors.append_array(source_errors)
+	if typeof(definition.get("supports_new_game", null)) != TYPE_BOOL or not bool(definition.get("supports_new_game", false)):
+		errors.append("map does not support new games")
+	var board: Variant = definition.get("board", null)
+	if typeof(board) != TYPE_ARRAY or board.size() < 2 or board.size() > 4096:
+		errors.append("invalid graph board")
+	var board_array: Array = board if typeof(board) == TYPE_ARRAY else []
+	var property_count := 0
+	for index in range(board_array.size()):
+		var tile_value: Variant = board_array[index]
+		if typeof(tile_value) != TYPE_DICTIONARY:
+			errors.append("invalid graph tile %d" % index)
+			continue
+		var tile: Dictionary = tile_value
+		if not _valid_int(tile.get("index", null), index, index):
+			errors.append("graph tile index mismatch %d" % index)
+		for coordinate in ["x", "y"]:
+			if not _valid_int(tile.get(coordinate, null), -1000000, 1000000):
+				errors.append("invalid graph tile coordinate %d" % index)
+		var kind: Variant = tile.get("kind", null)
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event"]
+		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
+			errors.append("invalid graph tile kind %d" % index)
+		if not tile.get("adjacent") is Array or tile.adjacent.size() > 4:
+			errors.append("invalid graph adjacency %d" % index)
+		else:
+			var adjacent: Array = []
+			for neighbor in tile.adjacent:
+				if not _valid_int(neighbor, 0, max(0, board_array.size() - 1)) or int(neighbor) == index or adjacent.has(int(neighbor)):
+					errors.append("invalid graph edge %d" % index)
+				else:
+					adjacent.append(int(neighbor))
+		for text_key in ["name", "group"]:
+			if not _valid_string(tile.get(text_key, null)):
+				errors.append("invalid graph tile text %d" % index)
+		if not _valid_int(tile.get("owner", null), -1, -1):
+			errors.append("graph definition has owned tile %d" % index)
+		for numeric_key in ["building_level", "cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
+			if not _valid_int(tile.get(numeric_key, null), 0, 1000000000):
+				errors.append("invalid graph tile value %d" % index)
+		if kind == "property":
+			property_count += 1
+			if not _valid_int(tile.get("source_object_id", null), 1, 1999):
+				errors.append("invalid graph property identity %d" % index)
+			if not _valid_int(tile.get("land_price", null), 0, 1000000) or not _valid_int(tile.get("house_price", null), 0, 1000000):
+				errors.append("invalid graph property prices %d" % index)
+			var rents: Variant = tile.get("rent_by_level", null)
+			if typeof(rents) != TYPE_ARRAY or rents.size() != 6:
+				errors.append("invalid graph rent table %d" % index)
+			else:
+				for rent in rents:
+					if not _valid_int(rent, 0, 1000000):
+						errors.append("invalid graph rent value %d" % index)
+				if rents.size() > 0 and int(tile.get("base_rent", -1)) != int(rents[0]) or rents.size() > 0 and int(tile.get("rent", -1)) != int(rents[0]):
+					errors.append("graph base rent mismatch %d" % index)
+		else:
+			if int(tile.get("owner", -1)) != -1 or int(tile.get("building_level", 0)) != 0:
+				errors.append("non-property graph tile state %d" % index)
+		var type_value: Variant = tile.get("type_and_idx", null)
+		var event_value: Variant = tile.get("event_code", null)
+		if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
+			errors.append("invalid graph source tile status %d" % index)
+	var start_position: Variant = definition.get("start_position", null)
+	if not _valid_int(start_position, 0, max(0, board_array.size() - 1)):
+		errors.append("invalid graph start position")
+	else:
+		var start_tile: Dictionary = board_array[int(start_position)] if int(start_position) < board_array.size() and typeof(board_array[int(start_position)]) == TYPE_DICTIONARY else {}
+		if start_tile.is_empty() or not start_tile.get("adjacent", []) is Array or start_tile.adjacent.is_empty():
+			errors.append("graph start is not movable")
+	if property_count <= 0:
+		errors.append("graph map has no playable housing")
+	if errors.is_empty():
+		var visited: Dictionary = {int(start_position): true}
+		var queue: Array = [int(start_position)]
+		while not queue.is_empty():
+			var node: int = int(queue.pop_front())
+			for neighbor in board_array[node].adjacent:
+				var next: int = int(neighbor)
+				if not visited.has(next):
+					visited[next] = true
+					queue.append(next)
+		for index in range(board_array.size()):
+			if board_array[index].get("kind", "") == "property" and not visited.has(index):
+				errors.append("housing is unreachable from graph start")
+	return {"ok": errors.is_empty(), "errors": errors, "definition": definition.duplicate(true)}
+
+
 static func _valid_int(value: Variant, minimum: int = INT64_MIN, maximum: int = INT64_MAX) -> bool:
 	if typeof(value) == TYPE_INT:
 		return value >= minimum and value <= maximum
@@ -1214,6 +1629,9 @@ static func _valid_string(value: Variant) -> bool:
 
 static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
+	var board_mode_marker: Variant = data.get("board_mode", "")
+	var version_marker: Variant = data.get("version", null)
+	var graph_save: bool = (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
 	var required_top: Array = [
 		"version", "ruleset", "seed", "seed_text", "rng_state", "rng_state_text",
 		"phase", "turn", "round", "day", "month", "day_of_month", "weekday",
@@ -1222,11 +1640,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		"property_action_used", "bank_access", "bank_landing", "bank", "market",
 		"board", "players", "bankruptcy_auctions",
 	]
+	if graph_save:
+		required_top.append_array(["board_mode", "map_id", "map_name", "map_schema", "map_version", "map_source", "start_position", "route_options", "remaining_steps", "pending_movement"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	if not _valid_int(data.get("version", null), SAVE_VERSION, SAVE_VERSION):
+	var expected_save_version: int = GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
@@ -1253,7 +1674,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid rng state")
 
 	var phase: Variant = data.get("phase", null)
-	if typeof(phase) != TYPE_STRING or not ["await_roll", "await_action", "game_over"].has(phase):
+	var allowed_phases: Array = ["await_roll", "await_action", "game_over"]
+	if graph_save:
+		allowed_phases.append("await_route")
+	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
 	for key in ["turn", "round", "day", "month"]:
@@ -1281,7 +1705,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
 	var board: Variant = data.get("board", null)
-	if typeof(board) != TYPE_ARRAY or board.size() != BOARD_SIZE:
+	var board_valid: bool = typeof(board) == TYPE_ARRAY
+	if board_valid:
+		if graph_save:
+			board_valid = board.size() >= 2 and board.size() <= 4096
+		else:
+			board_valid = board.size() == BOARD_SIZE
+	if not board_valid:
 		errors.append("invalid board")
 	var current_value: Variant = data.get("current_player", null)
 	if not _valid_int(current_value, 0, max(0, player_count - 1)):
@@ -1331,7 +1761,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("invalid action option")
 		if phase_name == "await_action" and not action_options.has("end_turn"):
 			errors.append("await_action missing end_turn")
-		if phase_name == "await_roll":
+		if phase_name in ["await_roll", "await_route"]:
 			for option in action_options:
 				if not ["buy_stock", "sell_stock"].has(option):
 					errors.append("await_roll has non-stock action")
@@ -1383,7 +1813,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			var tile: Dictionary = board[index]
 			if not _valid_int(tile.get("index", null), index, index):
 				errors.append("board index mismatch %d" % index)
-			if not _valid_string(tile.get("kind", null)) or not ["start", "property", "event", "tax", "bank", "stock", "rest"].has(tile.get("kind", "")):
+			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
+			if graph_save:
+				allowed_board_kinds.append_array(["points", "card", "unsupported"])
+			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
 				errors.append("invalid board kind %d" % index)
 			if not _valid_string(tile.get("name", null)) or not _valid_string(tile.get("group", null)):
 				errors.append("invalid board text %d" % index)
@@ -1401,13 +1834,84 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			if owner_valid and tile.get("kind", "") == "property" and int(owner_value) >= 0:
 				property_owners[index] = int(owner_value)
 
+	if graph_save:
+		if data.get("board_mode", null) != GRAPH_BOARD_MODE:
+			errors.append("invalid graph board mode")
+		if not _valid_string(data.get("map_id", null)) or str(data.get("map_id", "")).is_empty():
+			errors.append("invalid graph map id")
+		var graph_map_id: String = str(data.get("map_id", ""))
+		if not _valid_string(data.get("map_name", null)) or str(data.get("map_name", "")).is_empty():
+			errors.append("invalid graph map name")
+		if data.get("map_schema", null) != RUNTIME_MAP_SCHEMA or not _valid_int(data.get("map_version", null), 1, 1):
+			errors.append("invalid graph map schema")
+		errors.append_array(_validate_graph_source(data.get("map_source", null), graph_map_id))
+		var graph_start: Variant = data.get("start_position", null)
+		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
+		if not _valid_int(graph_start, 0, max(0, graph_board_size - 1)):
+			errors.append("invalid graph start position")
+		if typeof(board) == TYPE_ARRAY:
+			for index in range(board.size()):
+				if typeof(board[index]) != TYPE_DICTIONARY:
+					continue
+				var tile: Dictionary = board[index]
+				for coordinate in ["x", "y"]:
+					if not _valid_int(tile.get(coordinate, null), -1000000, 1000000):
+						errors.append("invalid graph tile coordinate %d" % index)
+				var source_node_id: Variant = tile.get("source_node_id", null)
+				if not _valid_int(source_node_id, index + 1, index + 1):
+					errors.append("graph source node mismatch %d" % index)
+				if not _valid_int(tile.get("type_and_idx", null), 0, 65535) or not _valid_int(tile.get("event_code", null), 0, 255):
+					errors.append("invalid graph source tile status %d" % index)
+				var adjacent: Variant = tile.get("adjacent", null)
+				if typeof(adjacent) != TYPE_ARRAY or adjacent.size() > 4:
+					continue
+				var seen_neighbors: Dictionary = {}
+				for neighbor in adjacent:
+					if not _valid_int(neighbor, 0, max(0, board.size() - 1)) or int(neighbor) == index or seen_neighbors.has(int(neighbor)):
+						errors.append("invalid graph edge %d" % index)
+						continue
+					seen_neighbors[int(neighbor)] = true
+					if typeof(board[int(neighbor)]) == TYPE_DICTIONARY:
+						var reverse_adjacent: Variant = board[int(neighbor)].get("adjacent", [])
+						var reverse_has: bool = false
+						if typeof(reverse_adjacent) == TYPE_ARRAY:
+							for reverse_neighbor in reverse_adjacent:
+								if _valid_int(reverse_neighbor) and int(reverse_neighbor) == index:
+									reverse_has = true
+									break
+						if not reverse_has:
+							errors.append("asymmetric graph edge %d" % index)
+			if _valid_int(graph_start, 0, max(0, graph_board_size - 1)):
+				var reachable: Dictionary = {int(graph_start): true}
+				var queue: Array = [int(graph_start)]
+				while not queue.is_empty():
+					var node: int = int(queue.pop_front())
+					if typeof(board[node]) != TYPE_DICTIONARY:
+						continue
+					for neighbor in board[node].get("adjacent", []):
+						var next_node: int = int(neighbor)
+						if next_node < 0 or next_node >= board.size():
+							continue
+						if not reachable.has(next_node):
+							reachable[next_node] = true
+							queue.append(next_node)
+				for index in range(board.size()):
+					if typeof(board[index]) == TYPE_DICTIONARY and board[index].get("kind", "") == "property" and not reachable.has(index):
+						errors.append("graph property is unreachable %d" % index)
+		else:
+			for _unused in range(0):
+				pass
+
 	if typeof(players) == TYPE_ARRAY:
+		var position_limit: int = (board.size() - 1) if typeof(board) == TYPE_ARRAY else BOARD_SIZE - 1
 		for index in range(players.size()):
 			if typeof(players[index]) != TYPE_DICTIONARY:
 				errors.append("invalid player %d" % index)
 				continue
 			var player: Dictionary = players[index]
 			var required_player: Array = ["id", "name", "is_human", "is_ai", "alive", "bankrupt", "cash", "deposit", "position", "properties", "property_values", "stocks", "cards", "vehicle", "dice_count", "vehicles", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan", "loan_due_day", "turns_taken"]
+			if graph_save:
+				required_player.append_array(["previous_position", "points"])
 			for required_key in required_player:
 				if not player.has(required_key):
 					errors.append("player %d missing %s" % [index, required_key])
@@ -1426,11 +1930,16 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
 				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
 					errors.append("player %d %s invalid" % [index, counter_key])
+			if graph_save:
+				if not _valid_int(player.get("previous_position", null), -1, 1000000000):
+					errors.append("player %d previous_position invalid" % index)
+				if not _valid_int(player.get("points", null), 0, 1000000000000):
+					errors.append("player %d points invalid" % index)
 			var dice_count_value: Variant = player.get("dice_count", null)
 			var dice_count_valid: bool = _valid_int(dice_count_value, 1, 3)
 			if not dice_count_valid:
 				errors.append("player %d dice_count invalid" % index)
-			if _valid_int(player.get("position", null)) and int(player["position"]) >= BOARD_SIZE:
+			if _valid_int(player.get("position", null)) and int(player["position"]) > position_limit:
 				errors.append("player %d position out of range" % index)
 			var vehicle_value: Variant = player.get("vehicle", null)
 			var vehicle_valid: bool = _valid_string(vehicle_value) and VEHICLE_DICE.has(vehicle_value)
@@ -1443,7 +1952,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("player %d properties invalid" % index)
 			else:
 				for property_id in properties:
-					if not _valid_int(property_id, 0, BOARD_SIZE - 1):
+					if not _valid_int(property_id, 0, position_limit):
 						errors.append("player %d property invalid" % index)
 					elif property_owners.has(int(property_id)):
 						if int(property_owners[int(property_id)]) != index:
@@ -1475,6 +1984,80 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d vehicle ownership invalid" % index)
 				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
+
+	if graph_save:
+		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
+		if typeof(players) == TYPE_ARRAY and typeof(board) == TYPE_ARRAY:
+			for index in range(players.size()):
+				if typeof(players[index]) != TYPE_DICTIONARY:
+					continue
+				var graph_player: Dictionary = players[index]
+				var position: Variant = graph_player.get("position", null)
+				var previous_position: Variant = graph_player.get("previous_position", null)
+				if _valid_int(position, 0, max(0, graph_board_size - 1)) and _valid_int(previous_position, -1, max(-1, graph_board_size - 1)):
+					if int(previous_position) >= 0 and typeof(board[int(position)]) == TYPE_DICTIONARY:
+						var player_adjacent: Variant = board[int(position)].get("adjacent", [])
+						var player_previous_valid: bool = false
+						if typeof(player_adjacent) == TYPE_ARRAY:
+							for player_neighbor in player_adjacent:
+								if _valid_int(player_neighbor) and int(player_neighbor) == int(previous_position):
+									player_previous_valid = true
+									break
+						if not player_previous_valid:
+							errors.append("player %d previous node is not adjacent" % index)
+					if _valid_int(position, 0, max(0, graph_board_size - 1)) and _valid_int(data.get("start_position", null), 0, max(0, graph_board_size - 1)):
+						# Position reachability is checked from the map start below; this
+						# keeps isolated source nodes available for browsing only.
+						pass
+		var route_options: Variant = data.get("route_options", null)
+		var remaining_steps_value: Variant = data.get("remaining_steps", null)
+		if typeof(route_options) != TYPE_ARRAY:
+			errors.append("invalid graph route options")
+		if not _valid_int(remaining_steps_value, 0, 1000000000):
+			errors.append("invalid graph remaining steps")
+		var pending_value: Variant = data.get("pending_movement", null)
+		if typeof(pending_value) != TYPE_DICTIONARY:
+			errors.append("invalid graph pending movement")
+		var pending: Dictionary = pending_value if typeof(pending_value) == TYPE_DICTIONARY else {}
+		if phase_name == "await_route":
+			if typeof(route_options) != TYPE_ARRAY or route_options.is_empty():
+				errors.append("route phase missing route options")
+			if not _valid_int(remaining_steps_value, 1, 1000000000):
+				errors.append("route phase has no remaining steps")
+			if pending.is_empty():
+				errors.append("route phase missing pending movement")
+			else:
+				if not _valid_int(pending.get("player_id", null), 0, max(0, player_count - 1)) or int(pending.get("player_id", -1)) != current_player:
+					errors.append("pending route player mismatch")
+				if not _valid_int(pending.get("current_node", null), 0, max(0, graph_board_size - 1)) or not _valid_int(pending.get("previous_node", null), -1, max(-1, graph_board_size - 1)):
+					errors.append("pending route node invalid")
+				if typeof(players) == TYPE_ARRAY and current_player >= 0 and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+					var route_player: Dictionary = players[current_player]
+					if int(route_player.get("position", -1)) != int(pending.get("current_node", -2)) or int(route_player.get("previous_position", -2)) != int(pending.get("previous_node", -3)):
+						errors.append("pending route position mismatch")
+				if _valid_int(pending.get("current_node", null), 0, max(0, graph_board_size - 1)) and _valid_int(pending.get("previous_node", null), -1, max(-1, graph_board_size - 1)):
+					var legal_routes: Array = []
+					var pending_tile: Dictionary = board[int(pending["current_node"])] if typeof(board[int(pending["current_node"])] ) == TYPE_DICTIONARY else {}
+					for neighbor in pending_tile.get("adjacent", []):
+						if int(neighbor) != int(pending["previous_node"]):
+							legal_routes.append(int(neighbor))
+					if legal_routes.is_empty() and int(pending["previous_node"]) >= 0:
+						legal_routes.append(int(pending["previous_node"]))
+					legal_routes.sort()
+					var canonical_route_options: Array = []
+					if typeof(route_options) == TYPE_ARRAY:
+						for route_option in route_options:
+							if _valid_int(route_option):
+								canonical_route_options.append(int(route_option))
+					if canonical_route_options != legal_routes or canonical_route_options.size() != route_options.size():
+						errors.append("pending route options are not canonical")
+		else:
+			if typeof(route_options) == TYPE_ARRAY and not route_options.is_empty():
+				errors.append("non-route phase has route options")
+			if _valid_int(remaining_steps_value, 0, 1000000000) and int(remaining_steps_value) != 0:
+				errors.append("non-route phase has remaining steps")
+			if typeof(pending_value) == TYPE_DICTIONARY and not pending.is_empty():
+				errors.append("non-route phase has pending movement")
 
 	if not property_owners.is_empty():
 		errors.append("board property missing player ownership")
@@ -1509,12 +2092,29 @@ func to_json() -> String:
 	return JSON.stringify(to_dict())
 
 
+static func _canonicalize_json_numbers(value: Variant) -> Variant:
+	if typeof(value) == TYPE_FLOAT and is_finite(value) and floor(value) == value:
+		return int(value)
+	if typeof(value) == TYPE_ARRAY:
+		var array_value: Array = value.duplicate(true)
+		for index in range(array_value.size()):
+			array_value[index] = _canonicalize_json_numbers(array_value[index])
+		return array_value
+	if typeof(value) == TYPE_DICTIONARY:
+		var dictionary_value: Dictionary = value.duplicate(true)
+		for key in dictionary_value.keys():
+			dictionary_value[key] = _canonicalize_json_numbers(dictionary_value[key])
+		return dictionary_value
+	return value
+
 static func from_dict(data: Dictionary) -> Richman4GameState:
 	var validation: Dictionary = validate_save(data)
 	if not bool(validation.get("ok", false)):
 		return null
 	var game = new()
 	game.state = data.duplicate(true)
+	if game.state.get("board_mode", "") == GRAPH_BOARD_MODE:
+		game.state = _canonicalize_json_numbers(game.state)
 	game._rng = RandomNumberGenerator.new()
 	game._rng.seed = int(game.state.get("seed", 0))
 	var rng_text: String = str(game.state.get("rng_state_text", ""))

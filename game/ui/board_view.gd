@@ -1,16 +1,16 @@
 extends Control
 class_name RichmanBoardView
 
-## A clean, asset-free board renderer for the desktop build.
-##
-## The original game's packed visual assets remain local to the owner's
-## installation.  This view deliberately draws the board with Godot controls
-## and vector primitives so the game is usable on a clean checkout while the
-## content and rules are restored incrementally.
+## Draws the legacy forty tile perimeter or a local original map graph.
+## Geometry is read from board[].x/y/adjacent; mutable values come from the
+## current snapshot supplied by MainUI.
 
 signal tile_selected(index: int)
+signal route_selected(next_index: int)
 
 const BOARD_INSET := 24.0
+const MIN_ZOOM := 0.55
+const MAX_ZOOM := 3.2
 const PLAYER_COLORS := [
 	Color("#ef6a65"),
 	Color("#4ba6e8"),
@@ -22,79 +22,259 @@ var board_data: Array = []
 var players_data: Array = []
 var current_player_index := 0
 var selected_index := -1
+var route_options: Array = []
+var map_definition: Dictionary = {}
+var preview_mode := false
+var map_zoom := 1.0
+var map_pan := Vector2.ZERO
+
 var _cell_rects: Array[Rect2] = []
+var _node_positions: Array = []
+var _node_radii: Array = []
+var _dragging := false
+var _drag_button := MOUSE_BUTTON_NONE
+var _drag_start := Vector2.ZERO
+var _pan_start := Vector2.ZERO
+var _layout_size := Vector2.ZERO
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process_input(true)
 	queue_redraw()
 
-func set_game_data(next_board: Array, next_players: Array, current_index: int) -> void:
-	board_data = next_board
-	players_data = next_players
+func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = []) -> void:
+	board_data = next_board.duplicate(true)
+	players_data = next_players.duplicate(true)
 	current_player_index = current_index
-	if selected_index >= board_data.size():
+	route_options = next_route_options.duplicate(true)
+	if not definition.is_empty():
+		map_definition = definition.duplicate(true)
+		preview_mode = false
+	elif _has_coordinate_board(next_board):
+		map_definition = {"board": next_board.duplicate(true)}
+		preview_mode = false
+	if selected_index >= _geometry_board().size():
 		selected_index = -1
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func set_map_definition(definition: Dictionary, is_preview := true) -> void:
+	map_definition = definition.duplicate(true)
+	preview_mode = is_preview
+	var geometry: Variant = map_definition.get("board", [])
+	if geometry is Array:
+		board_data = geometry.duplicate(true)
+	if is_preview:
+		players_data = []
+		route_options = []
+	if selected_index >= _geometry_board().size():
+		selected_index = -1
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func set_preview_definition(definition: Dictionary) -> void:
+	set_map_definition(definition, true)
+
+func clear_map_definition() -> void:
+	map_definition = {}
+	preview_mode = false
+	_layout_size = Vector2.ZERO
 	queue_redraw()
 
 func select_tile(index: int) -> void:
-	selected_index = index if index >= 0 and index < board_data.size() else -1
+	selected_index = index if index >= 0 and index < _geometry_board().size() else -1
 	queue_redraw()
 
+func select_at_position(position: Vector2) -> int:
+	var index := _tile_at_position(position)
+	if index >= 0:
+		_activate_tile(index)
+	return index
+
+func get_screen_position_for_index(index: int) -> Vector2:
+	if is_original_map():
+		_layout_map()
+		if index < 0 or index >= _node_positions.size():
+			return Vector2.ZERO
+		return _node_positions[index]
+	_layout_legacy_cells()
+	if index < 0 or index >= _cell_rects.size():
+		return Vector2.ZERO
+	return _cell_rects[index].get_center()
+
+func get_zoom() -> float:
+	return map_zoom
+
+func set_zoom(value: float, focus := Vector2.ZERO) -> void:
+	if not is_original_map():
+		return
+	_layout_map()
+	var actual_focus := focus if focus != Vector2.ZERO else size * 0.5
+	var map_point := _screen_to_map(actual_focus)
+	map_zoom = clampf(value, MIN_ZOOM, MAX_ZOOM)
+	var projected := _map_to_screen(map_point)
+	map_pan += actual_focus - projected
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func zoom_by(factor: float, focus := Vector2.ZERO) -> void:
+	set_zoom(map_zoom * factor, focus)
+
+func pan_by(delta: Vector2) -> void:
+	if not is_original_map():
+		return
+	map_pan += delta
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func reset_view() -> void:
+	map_zoom = 1.0
+	map_pan = Vector2.ZERO
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func is_original_map() -> bool:
+	var geometry := _geometry_board()
+	return not geometry.is_empty() and _tile_has_coordinates(geometry[0])
+
+func board_mode() -> String:
+	return "original" if is_original_map() else "legacy"
+
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		for index in range(_cell_rects.size()):
-			if _cell_rects[index].has_point(event.position):
-				selected_index = index
-				tile_selected.emit(index)
-				queue_redraw()
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			zoom_by(1.12, event.position)
+			accept_event()
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			zoom_by(1.0 / 1.12, event.position)
+			accept_event()
+			return
+		if event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
+			if event.pressed:
+				_dragging = true
+				_drag_button = event.button_index
+				_drag_start = event.position
+				_pan_start = map_pan
+			else:
+				_dragging = false
+				_drag_button = MOUSE_BUTTON_NONE
+			accept_event()
+			return
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			var index := select_at_position(event.position)
+			if index >= 0:
 				accept_event()
-				return
+			return
+	if event is InputEventMouseMotion and _dragging and _drag_button in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
+		map_pan = _pan_start + event.position - _drag_start
+		_layout_size = Vector2.ZERO
+		queue_redraw()
+		accept_event()
 
 func _draw() -> void:
-	var view_size := size
-	if view_size.x < 40.0 or view_size.y < 40.0:
+	if size.x < 40.0 or size.y < 40.0:
 		return
+	if is_original_map():
+		_draw_original_board()
+	else:
+		_draw_legacy_board()
 
+func _draw_legacy_board() -> void:
+	_layout_legacy_cells()
 	var board_count: int = max(1, board_data.size())
 	var side := 8
 	while side < 14 and 4 * (side - 1) < board_count:
 		side += 1
-	var tile_size: float = min((view_size.x - BOARD_INSET * 2.0) / float(side), (view_size.y - BOARD_INSET * 2.0) / float(side))
+	var tile_size := _legacy_tile_size(side)
 	var board_size := Vector2(tile_size * side, tile_size * side)
-	var origin := (view_size - board_size) * 0.5
-
+	var origin := (size - board_size) * 0.5
 	var outer_rect := Rect2(origin - Vector2(7.0, 7.0), board_size + Vector2(14.0, 14.0))
 	_draw_style_box(outer_rect, Color("#162538"), Color("#304b61"), 18.0, 2.0)
 	var field_rect := Rect2(origin + Vector2(tile_size, tile_size), board_size - Vector2(tile_size * 2.0, tile_size * 2.0))
 	_draw_style_box(field_rect, Color("#153b3d"), Color("#2f6660"), 13.0, 1.0)
-
-	# Subtle field decoration keeps the centre readable without an image asset.
 	draw_circle(field_rect.get_center(), min(field_rect.size.x, field_rect.size.y) * 0.26, Color("#1a4848"))
 	draw_circle(field_rect.get_center(), min(field_rect.size.x, field_rect.size.y) * 0.19, Color("#205252"))
 	_draw_text("大富翁 4", field_rect.position + Vector2(0.0, field_rect.size.y * 0.48), field_rect.size.x, 22, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_CENTER)
 	_draw_text("城市地圖", field_rect.position + Vector2(0.0, field_rect.size.y * 0.48 + 27.0), field_rect.size.x, 11, Color("#8ab5a8"), HORIZONTAL_ALIGNMENT_CENTER)
-
-	var cells := _perimeter_cells(side)
-	_cell_rects.clear()
-	_cell_rects.resize(board_count)
 	for index in range(board_count):
-		var grid_cell: Vector2i = cells[index % cells.size()]
-		var cell_rect := Rect2(origin + Vector2(grid_cell) * tile_size + Vector2(2.0, 2.0), Vector2(tile_size - 4.0, tile_size - 4.0))
-		_cell_rects[index] = cell_rect
+		var cell_rect: Rect2 = _cell_rects[index]
 		_draw_tile(cell_rect, index, board_data[index] if index < board_data.size() else {})
-
 	_draw_players()
+
+func _draw_original_board() -> void:
+	_layout_map()
+	var geometry := _geometry_board()
+	var frame := Rect2(Vector2(8.0, 8.0), size - Vector2(16.0, 16.0))
+	_draw_style_box(frame, Color("#11283a"), Color("#36546b"), 14.0, 1.0)
+	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
+	_draw_text("滾輪縮放 · 中鍵／右鍵平移", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
+	for index in range(geometry.size()):
+		var tile: Dictionary = geometry[index] if geometry[index] is Dictionary else {}
+		var from: Vector2 = _node_positions[index]
+		for neighbor_value in _as_array(tile.get("adjacent", [])):
+			var neighbor := int(neighbor_value)
+			if neighbor < 0 or neighbor >= geometry.size() or neighbor <= index:
+				continue
+			draw_line(from, _node_positions[neighbor], Color("#638697"), 2.0, true)
+	var current_position := _current_position()
+	if current_position >= 0 and current_position < _node_positions.size():
+		for option in route_options:
+			var next_index := int(option)
+			if next_index >= 0 and next_index < _node_positions.size():
+				draw_line(_node_positions[current_position], _node_positions[next_index], Color("#e0a958"), 4.0, true)
+	for index in range(geometry.size()):
+		_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
+	_draw_original_players()
+
+func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
+	var kind := String(tile.get("kind", "rest"))
+	var color := _tile_color(kind)
+	var border := Color("#f1d28a") if selected_index == index else Color("#d6e5d6")
+	var border_width := 3.0 if selected_index == index else 1.2
+	if _route_options_has(index):
+		draw_circle(center, radius + 6.0, Color(0.88, 0.66, 0.34, 0.22))
+		draw_arc(center, radius + 6.0, 0.0, TAU, 24, Color("#e0a958"), 2.0)
+	draw_circle(center, radius, Color("#21354a"))
+	draw_circle(center, max(4.0, radius - 2.0), color)
+	draw_arc(center, radius, 0.0, TAU, 24, border, border_width)
+	var name := String(tile.get("name", "格位 %02d" % (index + 1)))
+	if kind == "unsupported":
+		name = "待還原 · " + name.replace("（待還原）", "")
+	_draw_text(str(index + 1).pad_zeros(2), center + Vector2(-radius, -radius - 5.0), radius * 2.0, 8, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_CENTER)
+	_draw_text(_short_text(name, 10), center + Vector2(-radius * 1.7, radius + 14.0), radius * 3.4, 9, Color("#edf3f0"), HORIZONTAL_ALIGNMENT_CENTER)
+	if _route_options_has(index):
+		_draw_text("選擇", center + Vector2(-radius * 1.5, 4.0), radius * 3.0, 8, Color("#fff1c9"), HORIZONTAL_ALIGNMENT_CENTER)
+
+func _draw_original_players() -> void:
+	var positions: Dictionary = {}
+	for player_index in range(players_data.size()):
+		var player: Dictionary = players_data[player_index] if players_data[player_index] is Dictionary else {}
+		var tile_index := int(player.get("position", 0))
+		if tile_index < 0 or tile_index >= _node_positions.size():
+			continue
+		if not positions.has(tile_index):
+			positions[tile_index] = []
+		positions[tile_index].append(player_index)
+	for tile_index in positions:
+		var occupants: Array = positions[tile_index]
+		for occupant_index in range(occupants.size()):
+			var player_index: int = occupants[occupant_index]
+			var angle: float = TAU * float(occupant_index) / max(1.0, float(occupants.size()))
+			var radius: float = _node_radii[int(tile_index)]
+			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
+			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
+			var active := player_index == current_player_index
+			draw_circle(center + Vector2(0.0, 2.0), 9.0 if active else 7.0, Color(0.0, 0.0, 0.0, 0.38))
+			draw_circle(center, 9.0 if active else 7.0, player_color)
+			draw_arc(center, 9.0 if active else 7.0, 0.0, TAU, 20, Color("#f7f3df"), 1.4 if active else 0.8)
+			_draw_text(str(player_index + 1), center + Vector2(-5.0, 4.0), 10.0, 9, Color("#173047"), HORIZONTAL_ALIGNMENT_CENTER)
 
 func _draw_tile(cell_rect: Rect2, index: int, tile: Dictionary) -> void:
 	var kind := String(tile.get("kind", "property"))
 	var base_color := _tile_color(kind)
 	var is_selected := selected_index == index
-	var is_current := false
 	var owner := int(tile.get("owner", -1))
-	if owner >= 0:
-		is_current = owner == current_player_index
-
 	var border := Color("#f1d28a") if is_selected else Color("#34536a")
 	var border_width := 2.5 if is_selected else 1.0
 	_draw_style_box(cell_rect, Color("#21354a"), border, 8.0, border_width)
@@ -103,14 +283,12 @@ func _draw_tile(cell_rect: Rect2, index: int, tile: Dictionary) -> void:
 	if owner >= 0:
 		var owner_color: Color = PLAYER_COLORS[owner % PLAYER_COLORS.size()]
 		draw_rect(Rect2(cell_rect.position + Vector2(1.0, color_band.size.y + 1.0), Vector2(4.0, cell_rect.size.y - color_band.size.y - 2.0)), owner_color)
-	if is_current:
-		draw_circle(cell_rect.position + Vector2(cell_rect.size.x - 10.0, 15.0), 4.0, Color("#f1d28a"))
-
 	var tile_number := str(index + 1).pad_zeros(2)
 	_draw_text(tile_number, cell_rect.position + Vector2(7.0, 22.0), cell_rect.size.x - 12.0, 9, Color("#89a5b4"), HORIZONTAL_ALIGNMENT_LEFT)
 	var name := String(tile.get("name", _fallback_tile_name(index, kind)))
+	if kind == "unsupported":
+		name = "待還原"
 	_draw_text(_short_text(name, 6), cell_rect.position + Vector2(6.0, cell_rect.size.y * 0.61), cell_rect.size.x - 12.0, 11, Color("#edf3f0"), HORIZONTAL_ALIGNMENT_CENTER)
-
 	if kind == "property":
 		var level := int(tile.get("building_level", 0))
 		for dot_index in range(min(level, 4)):
@@ -122,7 +300,7 @@ func _draw_tile(cell_rect: Rect2, index: int, tile: Dictionary) -> void:
 		_draw_text(_kind_label(kind), cell_rect.position + Vector2(6.0, cell_rect.size.y - 6.0), cell_rect.size.x - 12.0, 8, Color("#a9c4b9"), HORIZONTAL_ALIGNMENT_CENTER)
 
 func _draw_players() -> void:
-	var positions := {}
+	var positions: Dictionary = {}
 	for player_index in range(players_data.size()):
 		var player: Dictionary = players_data[player_index] if players_data[player_index] is Dictionary else {}
 		var tile_index := int(player.get("position", 0))
@@ -131,21 +309,135 @@ func _draw_players() -> void:
 		if not positions.has(tile_index):
 			positions[tile_index] = []
 		positions[tile_index].append(player_index)
-
 	for tile_index in positions:
 		var cell_rect: Rect2 = _cell_rects[int(tile_index)]
 		var occupants: Array = positions[tile_index]
 		for occupant_index in range(occupants.size()):
 			var player_index: int = occupants[occupant_index]
 			var angle: float = TAU * float(occupant_index) / max(1.0, float(occupants.size()))
-			var offset: Vector2 = Vector2(cos(angle), sin(angle)) * min(9.0, cell_rect.size.x * 0.16)
-			var center: Vector2 = cell_rect.get_center() + offset + Vector2(0.0, 5.0)
+			var center: Vector2 = cell_rect.get_center() + Vector2(cos(angle), sin(angle)) * min(9.0, cell_rect.size.x * 0.16) + Vector2(0.0, 5.0)
 			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
-			var is_active := player_index == current_player_index
-			draw_circle(center + Vector2(0.0, 2.0), 8.0 if is_active else 6.5, Color(0.0, 0.0, 0.0, 0.35))
-			draw_circle(center, 8.0 if is_active else 6.5, player_color)
-			draw_arc(center, 8.0 if is_active else 6.5, 0.0, TAU, 20, Color("#f7f3df"), 1.4 if is_active else 0.8)
+			var active := player_index == current_player_index
+			draw_circle(center + Vector2(0.0, 2.0), 8.0 if active else 6.5, Color(0.0, 0.0, 0.0, 0.35))
+			draw_circle(center, 8.0 if active else 6.5, player_color)
+			draw_arc(center, 8.0 if active else 6.5, 0.0, TAU, 20, Color("#f7f3df"), 1.4 if active else 0.8)
 			_draw_text(str(player_index + 1), center + Vector2(-5.0, 4.0), 10.0, 9, Color("#173047"), HORIZONTAL_ALIGNMENT_CENTER)
+
+func _activate_tile(index: int) -> void:
+	selected_index = index
+	tile_selected.emit(index)
+	if _route_options_has(index):
+		route_selected.emit(index)
+	queue_redraw()
+
+func _tile_at_position(position: Vector2) -> int:
+	if is_original_map():
+		_layout_map()
+		var best := -1
+		var best_distance := INF
+		for index in range(_node_positions.size()):
+			var distance := position.distance_to(_node_positions[index])
+			if distance <= _node_radii[index] + 10.0 and distance < best_distance:
+				best = index
+				best_distance = distance
+		return best
+	_layout_legacy_cells()
+	for index in range(_cell_rects.size()):
+		if _cell_rects[index].has_point(position):
+			return index
+	return -1
+
+func _geometry_board() -> Array:
+	var geometry: Variant = map_definition.get("board", []) if not map_definition.is_empty() else []
+	if geometry is Array and not geometry.is_empty():
+		return geometry
+	return board_data
+
+func _merged_tile(index: int) -> Dictionary:
+	var geometry := _geometry_board()
+	var tile: Dictionary = geometry[index].duplicate(true) if index >= 0 and index < geometry.size() and geometry[index] is Dictionary else {}
+	if index >= 0 and index < board_data.size() and board_data[index] is Dictionary:
+		var runtime: Dictionary = board_data[index]
+		for key in ["owner", "building_level", "cost", "upgrade_cost", "base_rent", "rent", "group", "tax_amount"]:
+			if runtime.has(key):
+				tile[key] = runtime[key]
+		if tile.is_empty():
+			tile = runtime.duplicate(true)
+	return tile
+
+func _layout_legacy_cells() -> void:
+	var board_count: int = max(1, board_data.size())
+	var side := 8
+	while side < 14 and 4 * (side - 1) < board_count:
+		side += 1
+	var tile_size := _legacy_tile_size(side)
+	var board_size := Vector2(tile_size * side, tile_size * side)
+	var origin := (size - board_size) * 0.5
+	var cells := _perimeter_cells(side)
+	_cell_rects.clear()
+	_cell_rects.resize(board_count)
+	for index in range(board_count):
+		var grid_cell: Vector2i = cells[index % cells.size()]
+		_cell_rects[index] = Rect2(origin + Vector2(grid_cell) * tile_size + Vector2(2.0, 2.0), Vector2(tile_size - 4.0, tile_size - 4.0))
+
+func _legacy_tile_size(side: int) -> float:
+	return min((size.x - BOARD_INSET * 2.0) / float(side), (size.y - BOARD_INSET * 2.0) / float(side))
+
+func _layout_map() -> void:
+	var geometry := _geometry_board()
+	if geometry.is_empty():
+		_node_positions.clear()
+		_node_radii.clear()
+		return
+	if _layout_size == size and _node_positions.size() == geometry.size():
+		return
+	var bounds := _map_bounds(geometry)
+	var center := bounds.position + bounds.size * 0.5
+	var scale := _map_scale_for_bounds(bounds)
+	var view_center := size * 0.5
+	_node_positions.resize(geometry.size())
+	_node_radii.resize(geometry.size())
+	for index in range(geometry.size()):
+		var tile: Dictionary = geometry[index] if geometry[index] is Dictionary else {}
+		var coordinate := Vector2(float(tile.get("x", index)), float(tile.get("y", 0)))
+		_node_positions[index] = view_center + map_pan + (coordinate - center) * scale * map_zoom
+		_node_radii[index] = clampf(13.0 * map_zoom, 8.0, 22.0)
+	_layout_size = size
+
+func _map_scale() -> float:
+	return _map_scale_for_bounds(_map_bounds(_geometry_board()))
+
+func _map_scale_for_bounds(bounds: Rect2) -> float:
+	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
+		return 1.0
+	return max(0.01, min((size.x - 72.0) / bounds.size.x, (size.y - 112.0) / bounds.size.y))
+
+func _map_bounds(geometry: Array) -> Rect2:
+	if geometry.is_empty():
+		return Rect2()
+	var first: Dictionary = geometry[0] if geometry[0] is Dictionary else {}
+	var minimum := Vector2(float(first.get("x", 0)), float(first.get("y", 0)))
+	var maximum := minimum
+	for value in geometry:
+		if not value is Dictionary:
+			continue
+		var point := Vector2(float(value.get("x", 0)), float(value.get("y", 0)))
+		minimum.x = min(minimum.x, point.x)
+		minimum.y = min(minimum.y, point.y)
+		maximum.x = max(maximum.x, point.x)
+		maximum.y = max(maximum.y, point.y)
+	return Rect2(minimum, maximum - minimum)
+
+func _map_to_screen(coordinate: Vector2) -> Vector2:
+	var bounds := _map_bounds(_geometry_board())
+	var coordinate_center := bounds.position + bounds.size * 0.5
+	return size * 0.5 + map_pan + (coordinate - coordinate_center) * _map_scale() * map_zoom
+
+func _screen_to_map(screen_position: Vector2) -> Vector2:
+	var bounds := _map_bounds(_geometry_board())
+	var coordinate_center := bounds.position + bounds.size * 0.5
+	var scale: float = max(0.0001, _map_scale() * map_zoom)
+	return (screen_position - size * 0.5 - map_pan) / scale + coordinate_center
 
 func _perimeter_cells(side: int) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
@@ -159,22 +451,41 @@ func _perimeter_cells(side: int) -> Array[Vector2i]:
 		cells.append(Vector2i(0, y))
 	return cells
 
+func _has_coordinate_board(value: Array) -> bool:
+	return not value.is_empty() and _tile_has_coordinates(value[0])
+
+func _tile_has_coordinates(value: Variant) -> bool:
+	return value is Dictionary and (value as Dictionary).has("x") and (value as Dictionary).has("y")
+
+func _route_options_has(index: int) -> bool:
+	for option in route_options:
+		if int(option) == index:
+			return true
+	return false
+
+func _current_position() -> int:
+	if current_player_index >= 0 and current_player_index < players_data.size() and players_data[current_player_index] is Dictionary:
+		return int(players_data[current_player_index].get("position", -1))
+	return -1
+
 func _tile_color(kind: String) -> Color:
 	match kind:
 		"start":
 			return Color("#d79b55")
-		"event":
+		"event", "card":
 			return Color("#bc78cf")
-		"tax":
+		"tax", "unsupported":
 			return Color("#df6e6e")
 		"bank":
 			return Color("#5ca9a0")
 		"stock":
 			return Color("#e2b25b")
-		"rest":
-			return Color("#728c9c")
-		_:
+		"points":
+			return Color("#8b78d0")
+		"property":
 			return Color("#4d83a5")
+		_:
+			return Color("#728c9c")
 
 func _kind_label(kind: String) -> String:
 	match kind:
@@ -188,6 +499,12 @@ func _kind_label(kind: String) -> String:
 			return "銀行"
 		"stock":
 			return "股市"
+		"card":
+			return "卡片"
+		"points":
+			return "點數"
+		"unsupported":
+			return "待還原"
 		"rest":
 			return "休息"
 		_:
@@ -209,6 +526,9 @@ func _short_text(value: String, max_length: int) -> String:
 	if value.length() <= max_length:
 		return value
 	return value.substr(0, max(1, max_length - 1)) + "…"
+
+func _as_array(value: Variant) -> Array:
+	return value if value is Array else []
 
 func _draw_text(text: String, position: Vector2, width: float, font_size: int, color: Color, alignment := HORIZONTAL_ALIGNMENT_LEFT) -> void:
 	var font := ThemeDB.fallback_font

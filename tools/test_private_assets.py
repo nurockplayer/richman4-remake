@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,8 +16,14 @@ VERIFY = ROOT / "tools" / "verify_private_assets.py"
 BOOTSTRAP = ROOT / "tools" / "bootstrap_private_assets.sh"
 
 
-def run(command: list[str], *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, check=check, text=True, capture_output=True)
+def run(
+    command: list[str],
+    *,
+    cwd: Path,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=cwd, check=check, text=True, capture_output=True, env=env)
 
 
 class PrivateAssetBootstrapTests(unittest.TestCase):
@@ -90,6 +97,66 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("destination already exists", result.stderr)
             self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
+
+    def test_bootstrap_rejects_destination_created_after_initial_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, revision = self._make_fixture(temporary)
+            temporary_root = Path(temporary)
+            destination = temporary_root / "installed"
+            fake_bin = temporary_root / "bin"
+            fake_bin.mkdir()
+            real_git = subprocess.check_output(["/usr/bin/which", "git"], text=True).strip()
+            wrapper = fake_bin / "git"
+            wrapper.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                "result = subprocess.run([os.environ['PRIVATE_ASSET_REAL_GIT'], *sys.argv[1:]])\n"
+                "if result.returncode == 0 and sys.argv[1:2] == ['clone']:\n"
+                "    destination = Path(os.environ['PRIVATE_ASSET_RACE_DESTINATION'])\n"
+                "    destination.mkdir()\n"
+                "    (destination / 'marker').write_text('race', encoding='utf-8')\n"
+                "sys.exit(result.returncode)\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            environment = os.environ.copy()
+            environment.update({
+                "PATH": f"{fake_bin}:{environment['PATH']}",
+                "PRIVATE_ASSET_REAL_GIT": real_git,
+                "PRIVATE_ASSET_RACE_DESTINATION": str(destination),
+            })
+            result = run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(destination),
+            ], cwd=ROOT, check=False, env=environment)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("destination appeared during bootstrap", result.stderr)
+            self.assertEqual((destination / "marker").read_text(encoding="utf-8"), "race")
+            self.assertFalse((destination / "repository").exists())
+
+    def test_verifier_rejects_manifest_path_case_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, _ = self._make_fixture(temporary)
+            manifest_path = repository / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"][0]["path"] = "Game/Map.mkf"
+            manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+            binding = json.loads(config.read_text(encoding="utf-8"))
+            binding["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            config.write_text(json.dumps(binding) + "\n", encoding="utf-8")
+            result = run([
+                "python3", str(VERIFY),
+                "--asset-root", str(repository),
+                "--config", str(config),
+            ], cwd=ROOT, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("manifest path does not match Git tree exactly", result.stderr)
 
     def test_verifier_rejects_revision_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

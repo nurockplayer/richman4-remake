@@ -2,8 +2,9 @@
 
 企業能力由來源 catalog 的十二個股票列與企業關聯啟用，使用 v7 存檔。
 缺少完整資料的舊 catalog 繼續使用既有版本；v1–v6 存檔不會自動轉成企業遊局。
-來源為擁有者本機的 Game／MultiverseJourney 執行檔、地圖資料與手冊 pp.16–17。
-原始資料、反組譯與衍生快取均留在本機。
+來源為擁有者本機安裝，或由擁有者授權的 private Git/LFS source 取得的
+Game／MultiverseJourney 執行檔、地圖資料與手冊 pp.16–17。反組譯輸出與衍生快取留在本機；
+public code repo 不提交未確認公開分發權的第三方原版資料。
 
 ## 股份與交易
 

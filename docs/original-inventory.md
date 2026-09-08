@@ -6,7 +6,7 @@
 
 ## 來源與驗證
 
-直接讀取擁有者本機的兩版 `rich4.exe`，每筆 8 bytes：32-bit 名稱指標，
+直接讀取擁有者本機安裝，或依 private Git/LFS binding bootstrap 取得的兩版 `rich4.exe`，每筆 8 bytes：32-bit 名稱指標，
 +4 初始供給量、+5 點券價格、+6／+7 旗標。名稱指標依 PE section 轉為 file offset，
 CP950 解碼；Game 卡片表位於 file offset `0x7c152`，道具表 `0x7c242`；
 MultiverseJourney 分別 `0x7e3f2`、`0x7e4e2`。Godot 載入目錄後輸出 JSON，
@@ -19,7 +19,8 @@ MultiverseJourney 分別 `0x7e3f2`、`0x7e4e2`。Godot 載入目錄後輸出 JSO
 
 研究 repository `mytbk/rich4` commit `54ff26750e7e7f585da6fe68c4e8972cd22ed509`
 用於定位資料與流程，再回查擁有者二進位；不複製其 GPL C／ASM 實作。
-所有原版執行檔、反組譯輸出及圖像均留本機，不隨程式碼提交。
+原版執行檔與圖像由擁有者授權的 private Git/LFS source 保存；反組譯輸出及衍生快取留在本機，
+不隨 public code repo 提交。
 
 目錄資料並不代表每張卡片、每種道具的效果已完成。可用時機、共享供給的變動、目標限制、
 商店交易與效果必須由 runtime 明確接入；未實作效果不得回報成功或消耗物品。

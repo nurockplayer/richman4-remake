@@ -3,8 +3,8 @@
   "version": 1,
   "repository": "nurockplayer/richman4-remake-assets",
   "clone_url": "https://github.com/nurockplayer/richman4-remake-assets.git",
-  "revision": "ee3f4b8ee0a585d79e75c23dd2c5735c927ae911",
+  "revision": "bb6d12b59cc8c4544c498f475ce793c8103aeb14",
   "manifest": "manifest.json",
-  "manifest_sha256": "10f8a5c003c9a86cc86b99a5e3776f9af287d604535a211d4a1db916118c60ac",
+  "manifest_sha256": "a9958f09615ede866d53508d08962285d5ad835750d0d627565d032b7c1cb4a8",
   "source_root": "source/dfw4cskzl_136622"
 }

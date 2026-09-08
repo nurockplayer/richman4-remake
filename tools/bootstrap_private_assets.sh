@@ -117,6 +117,14 @@ if ! GIT_TERMINAL_PROMPT=0 git -C "$clone_path" lfs pull origin; then
 fi
 python3 "$script_dir/verify_private_assets.py" --asset-root "$clone_path" --config "$config_path"
 
-mv -- "$clone_path" "$destination"
+if python3 "$script_dir/atomic_publish.py" "$clone_path" "$destination"; then
+  :
+else
+  publish_status=$?
+  if [[ "$publish_status" -eq 2 ]]; then
+    fail "destination appeared during bootstrap; no files were replaced: $destination"
+  fi
+  fail "cannot publish private assets atomically: $destination"
+fi
 staging=""
 printf 'Private assets installed at %s\n' "$destination"

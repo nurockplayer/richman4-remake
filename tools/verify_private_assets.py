@@ -122,6 +122,45 @@ def _git_head(asset_root: Path) -> str:
     return head
 
 
+def _git_tree_paths(asset_root: Path, source_root: PurePosixPath) -> set[str]:
+    """Return the exact UTF-8 relative paths tracked below ``source_root``."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(asset_root),
+                "ls-tree",
+                "-r",
+                "-z",
+                "--name-only",
+                "HEAD",
+                "--",
+                source_root.as_posix(),
+            ],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise VerificationError(f"cannot list the Git tree for private assets: {exc}") from exc
+    if result.returncode != 0:
+        raise VerificationError("cannot list the Git tree for private assets")
+
+    prefix = source_root.as_posix() + "/"
+    paths: set[str] = set()
+    for encoded_path in result.stdout.split(b"\0"):
+        if not encoded_path:
+            continue
+        try:
+            path = encoded_path.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise VerificationError("private asset Git tree contains a non-UTF-8 path") from exc
+        if not path.startswith(prefix):
+            raise VerificationError("private asset Git tree returned a path outside source_root")
+        paths.add(path[len(prefix) :])
+    return paths
+
+
 def _validate_manifest(
     asset_root: Path,
     manifest: dict[str, Any],
@@ -136,6 +175,7 @@ def _validate_manifest(
     source_path = _under(asset_root, source_root, field="source_root")
     if not source_path.is_dir() or source_path.is_symlink():
         raise VerificationError("private asset source_root is not a real directory")
+    git_paths = _git_tree_paths(asset_root, source_root)
     records = manifest.get("files")
     if not isinstance(records, list):
         raise VerificationError("private asset manifest files must be an array")
@@ -147,6 +187,7 @@ def _validate_manifest(
         raise VerificationError("private asset manifest file_count does not match files")
 
     seen: set[str] = set()
+    manifest_paths: set[str] = set()
     total_bytes = 0
     for index, record in enumerate(records):
         if not isinstance(record, dict):
@@ -156,6 +197,10 @@ def _validate_manifest(
         if key in seen:
             raise VerificationError(f"manifest contains a duplicate path: {relative}")
         seen.add(key)
+        relative_name = relative.as_posix()
+        if relative_name not in git_paths:
+            raise VerificationError(f"manifest path does not match Git tree exactly: {relative}")
+        manifest_paths.add(relative_name)
         size = record.get("size")
         digest = record.get("sha256")
         if not isinstance(size, int) or size < 0 or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
@@ -177,6 +222,8 @@ def _validate_manifest(
         total_bytes += size
     if total_bytes != source_bytes:
         raise VerificationError("private asset manifest source_bytes does not match files")
+    if manifest_paths != git_paths:
+        raise VerificationError("manifest paths do not match Git tree exactly")
     return source_path, file_count, source_bytes
 
 

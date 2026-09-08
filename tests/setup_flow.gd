@@ -418,10 +418,11 @@ func _test_setup_save_round_trip() -> void:
 			_expect(float_restored != null, "integral float dates reload after JSON parsing")
 			if float_restored != null:
 				_expect_equal(float_restored.state["date"], {"year": 2064, "month": 1, "day": 1}, "numeric date reload canonicalizes date fields")
-		var ui_path := "user://richman4_save.json"
+		var ui_path := OS.get_cache_dir().path_join("richman4-setup-roundtrip-%d-%d.json" % [OS.get_process_id(), Time.get_ticks_usec()])
 		_expect(numeric_game.save_to_path(ui_path), "UI save path accepts setup JSON")
 		var ui_path_restored: Object = GameState.load_from_path(ui_path)
 		_expect(ui_path_restored != null, "UI save path reloads setup JSON")
+		DirAccess.remove_absolute(ui_path)
 
 
 func _test_graph_setup_constructor() -> void:

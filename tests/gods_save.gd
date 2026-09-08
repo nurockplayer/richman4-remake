@@ -139,9 +139,54 @@ func _test_v6_effect_state_and_legacy() -> void:
 	_expect(not bool(Game.validate_save(wrong_marker).get("ok", false)), "disabled v6 marker is rejected")
 
 
+func _test_unbound_spawn_validation() -> void:
+	var game := _new_gods_game()
+	var saved: Dictionary = game.to_dict()
+	var unbound_death: Dictionary = saved.duplicate(true)
+	unbound_death.god_objects[0].id=15
+	_expect(not Game.validate_save(unbound_death).get("ok",false),"unsupported unbound death cannot validate")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(unbound_death)))==null,"unsupported unbound death cannot load")
+	var attached_death: Dictionary = unbound_death.duplicate(true)
+	attached_death.god_objects[0].owner=0
+	attached_death.god_objects[0].node=0
+	attached_death.god_objects[0].days=13
+	attached_death.players[0].god_id=15
+	_expect(Game.validate_save(attached_death).get("ok",false),"already attached death remains supported")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(attached_death)))!=null,"attached death continuation can load")
+
+	var masked: Dictionary = saved.duplicate(true)
+	var node: int = int(masked.god_objects[0].node)
+	masked.board[node].source_status_bits = 0x100
+	var without_gods: Dictionary = masked.duplicate(true)
+	without_gods.god_objects=[]
+	_expect(Game.validate_save(without_gods).get("ok",false),"masked board remains otherwise valid")
+	_expect(not Game.validate_save(masked).get("ok",false),"unbound god on source-masked node is rejected")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(masked)))==null,"masked unbound god cannot load")
+	var isolated: Dictionary = saved.duplicate(true)
+	for i in range(18,20):
+		var tile: Dictionary = saved.board[0].duplicate(true)
+		tile.index=i
+		tile.source_node_id=i+1
+		tile.adjacent=[19 if i==18 else 18]
+		isolated.board.append(tile)
+	isolated.god_objects=[]
+	_expect(Game.validate_save(isolated).get("ok",false),"unreachable non-property component remains otherwise valid")
+	isolated.god_objects=[{"id":1,"node":18,"owner":-1,"days":0}]
+	_expect(not Game.validate_save(isolated).get("ok",false),"unbound god outside reachable component is rejected")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(isolated)))==null,"unreachable unbound god cannot load")
+	var attached: Dictionary = saved.duplicate(true)
+	attached.board[0].source_status_bits=0x100
+	attached.god_objects[0].owner=0
+	attached.god_objects[0].node=0
+	attached.god_objects[0].days=7
+	attached.players[0].god_id=attached.god_objects[0].id
+	_expect(Game.validate_save(attached).get("ok",false),"attached god can follow owner onto a non-spawnable node")
+
+
 func _initialize() -> void:
 	_test_v6_roundtrip()
 	_test_v6_strict_markers()
 	_test_v6_effect_state_and_legacy()
+	_test_unbound_spawn_validation()
 	print("God save checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

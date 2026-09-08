@@ -857,10 +857,12 @@ func _god_object(god_id: int) -> Dictionary:
 
 
 func _god_reachable_nodes() -> Dictionary:
-	var board: Variant = state.get("board", null)
+	return _graph_reachable_nodes(state.get("board", null), state.get("start_position", 0))
+
+
+static func _graph_reachable_nodes(board: Variant, start_value: Variant) -> Dictionary:
 	if typeof(board) != TYPE_ARRAY or board.is_empty():
 		return {}
-	var start_value: Variant = state.get("start_position", 0)
 	if not _valid_int(start_value, 0, board.size() - 1):
 		return {}
 	var reachable: Dictionary = {int(start_value): true}
@@ -5586,6 +5588,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		else:
 			var seen_god_ids: Dictionary = {}
 			var seen_unbound_god_nodes: Dictionary = {}
+			var god_reachable_nodes := _graph_reachable_nodes(board, data.get("start_position", null))
 			var god_board_limit: int = board.size() - 1 if typeof(board) == TYPE_ARRAY else -1
 			for god_object_index in range(god_objects_value.size()):
 				var god_object_value: Variant = god_objects_value[god_object_index]
@@ -5634,12 +5637,18 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if _valid_int(god_node_value, 0, god_board_limit) and _valid_int(god_owner_player.get("position", null), 0, god_board_limit) and int(god_node_value) != int(god_owner_player.get("position")):
 							errors.append("god object %d node does not follow owner" % god_id)
 				else:
+					if not OriginalGods.is_spawnable(god_id):
+						errors.append("unattached god %d is not spawnable" % god_id)
 					if god_days != 0:
 						errors.append("unattached god %d has remaining days" % god_id)
 					if _valid_int(god_node_value, 0, god_board_limit):
 						if seen_unbound_god_nodes.has(int(god_node_value)):
 							errors.append("duplicate unattached god node %d" % int(god_node_value))
 						seen_unbound_god_nodes[int(god_node_value)] = true
+						if not god_reachable_nodes.has(int(god_node_value)):
+							errors.append("unattached god %d node is unreachable" % god_id)
+						if typeof(board[int(god_node_value)]) != TYPE_DICTIONARY or not OriginalGods.source_tile_eligible(board[int(god_node_value)]):
+							errors.append("unattached god %d node is not eligible" % god_id)
 					if typeof(players) == TYPE_ARRAY and _valid_int(god_node_value, 0, god_board_limit):
 						for god_player in players:
 							if typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):

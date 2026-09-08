@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -161,6 +162,42 @@ def _git_tree_paths(asset_root: Path, source_root: PurePosixPath) -> set[str]:
     return paths
 
 
+def _working_tree_paths(source_path: Path) -> set[str]:
+    """Return every real file below ``source_path``, including Git-ignored files.
+
+    The private source cache is consumed through ordinary filesystem walks, so
+    verification must bind the actual working tree rather than only the Git
+    index. Symlinks and special files are rejected even when they are untracked.
+    """
+    paths: set[str] = set()
+    stack: list[tuple[Path, PurePosixPath]] = [(source_path, PurePosixPath())]
+    while stack:
+        directory, prefix = stack.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise VerificationError(f"cannot enumerate private asset source directory {directory}: {exc}") from exc
+        for entry in entries:
+            relative = prefix / entry.name
+            relative_name = relative.as_posix()
+            try:
+                relative_name.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise VerificationError("private asset working tree contains a non-UTF-8 path") from exc
+            try:
+                if entry.is_symlink():
+                    raise VerificationError(f"private asset working tree contains a symlink: {relative_name}")
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append((Path(entry.path), relative))
+                elif entry.is_file(follow_symlinks=False):
+                    paths.add(relative_name)
+                else:
+                    raise VerificationError(f"private asset working tree contains a special file: {relative_name}")
+            except OSError as exc:
+                raise VerificationError(f"cannot inspect private asset path {relative_name}: {exc}") from exc
+    return paths
+
+
 def _validate_manifest(
     asset_root: Path,
     manifest: dict[str, Any],
@@ -176,6 +213,7 @@ def _validate_manifest(
     if not source_path.is_dir() or source_path.is_symlink():
         raise VerificationError("private asset source_root is not a real directory")
     git_paths = _git_tree_paths(asset_root, source_root)
+    working_paths = _working_tree_paths(source_path)
     records = manifest.get("files")
     if not isinstance(records, list):
         raise VerificationError("private asset manifest files must be an array")
@@ -224,6 +262,16 @@ def _validate_manifest(
         raise VerificationError("private asset manifest source_bytes does not match files")
     if manifest_paths != git_paths:
         raise VerificationError("manifest paths do not match Git tree exactly")
+    if manifest_paths != working_paths:
+        extra = sorted(working_paths - manifest_paths)
+        missing = sorted(manifest_paths - working_paths)
+        details: list[str] = []
+        if extra:
+            details.append(f"extra={extra[0]}")
+        if missing:
+            details.append(f"missing={missing[0]}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        raise VerificationError(f"working source files do not match manifest exactly{suffix}")
     return source_path, file_count, source_bytes
 
 

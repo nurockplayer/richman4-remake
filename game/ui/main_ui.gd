@@ -321,10 +321,15 @@ func _build_playfield() -> Control:
 
 	var players_heading := _make_label("玩家狀態", 11, TEXT_MUTED)
 	side_column.add_child(players_heading)
+	var players_scroll := ScrollContainer.new()
+	players_scroll.custom_minimum_size = Vector2(0.0, 100.0)
+	players_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	players_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	side_column.add_child(players_scroll)
 	players_list = VBoxContainer.new()
 	players_list.add_theme_constant_override("separation", 5)
-	players_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	side_column.add_child(players_list)
+	players_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	players_scroll.add_child(players_list)
 
 	var property_panel := PanelContainer.new()
 	_apply_panel_style(property_panel, PANEL_RAISED, Color("#47705f"), 12, 1)

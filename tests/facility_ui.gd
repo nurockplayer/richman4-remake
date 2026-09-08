@@ -71,6 +71,23 @@ func run() -> void:
 			await process_frame
 			expect(ui.current_property_detail.text.contains("查封") and ui.current_property_detail.text.contains("5 天"), "facility status is visible with remaining duration")
 			expect(ui.end_turn_button.get_global_rect().end.y <= ui.size.y, "facility details preserve access to the end-turn control")
+		if ui._new_game(3, 4, loaded.definition, options):
+			ui.game_state.state.players[0].position = 2
+			ui.game_state.state.phase = "await_action"
+			ui.game_state._set_action_options(0)
+			ui._refresh_from_state()
+			await process_frame
+			await process_frame
+			expect(ui.end_turn_button.get_global_rect().end.y <= root.get_visible_rect().end.y, "four-player facility actions fit actual viewport")
+			ui.game_state.state.phase = "await_route"
+			ui.game_state.state.route_options = [1, 3]
+			ui.game_state.state.remaining_steps = 1
+			ui._refresh_from_state()
+			await process_frame
+			await process_frame
+			expect(ui.end_turn_button.get_global_rect().end.y <= root.get_visible_rect().end.y, "four-player route controls preserve action bar viewport")
+		else:
+			expect(false, "four-player facility UI fixture starts")
 	ui.queue_free()
 	await create_timer(0.1).timeout
 	print("Facility UI checks: %d, failures: %d" % [checks, failures])

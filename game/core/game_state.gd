@@ -4290,7 +4290,7 @@ func run_ai_turn() -> Dictionary:
 func _ai_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if _is_companies() and int(state.get("company_service_pending",0))>0:
-		var targets := get_company_upgrade_targets(player_id)
+		var targets := _company_payable_upgrade_targets(player_id, get_company_at(int(player.get("position", -1))))
 		var selected := -1
 		var highest_value := -1
 		for target in targets:

@@ -117,5 +117,18 @@ func _initialize() -> void:
 	blocked_save.companies[0].monthly_profit=1000000000000
 	blocked_save.companies[0].cumulative_profit=1000000000000
 	expect(not Game.validate_save(blocked_save).get("ok",false) and Game.from_dict(blocked_save)==null,"impossible pending construction save rejected")
+	game=make_game()
+	game.state.board[3].owner=1
+	game.state.board[3].land_price=2000
+	game.state.board[3].cost=2000
+	game.state.players[1].properties.append(3)
+	game._recalculate_property_values()
+	game.state.companies[0].monthly_profit=999999998500
+	game.state.companies[0].cumulative_profit=999999998500
+	visit(game,1)
+	valid(game)
+	expect(game.run_ai_turn().get("ok",false),"AI chooses a payable construction target and finishes its turn")
+	expect(game.state.board[2].building_level==1 and game.state.board[3].building_level==0,"AI skips higher-value target whose fee cannot settle")
+	valid(game)
 	print("Company construction checks: %d, failures: %d"%[checks,failures])
 	quit(1 if failures else 0)

@@ -6,7 +6,7 @@ macOS / Apple Silicon 是第一個交付平台，最終提供可直接啟動的�
 
 產品使命與完成條件見 [Issue #1](https://github.com/nurockplayer/richman4-remake/issues/1)。代理工作規則見 [AGENTS.md](AGENTS.md)。
 
-素材策略以「重新 clone 後可重建完整開發環境」為目標。這個程式 repo 是公開的，因此沒有合法公開分發權的第三方原版素材不直接放在這裡；擁有者有權保存／使用的完整素材應集中到可版本化、需授權存取的私人素材來源（例如 private Git LFS repo 或等價 authenticated store），並由本 repo 提供 manifest／bootstrap 流程取得。原版本機安裝仍可作為匯入來源，但不應是唯一 source of truth。
+素材策略以「重新 clone 後可重建完整開發環境」為目標。這個程式 repo 是公開的，因此沒有合法公開分發權的第三方原版素材不直接放在這裡；本專案指定的 owner-authorized canonical source 是 private Git/LFS repo `nurockplayer/richman4-remake-assets`。`config/private-assets.json` 與 `tools/bootstrap_private_assets.sh` 會鎖定並驗證其 asset revision，原版本機安裝只作相容的匯入來源，不是唯一 source of truth。
 
 ## 開發
 

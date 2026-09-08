@@ -188,6 +188,45 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertEqual(payload_path.read_bytes(), before)
             self.assertEqual(run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=ROOT).stdout.strip(), revision)
 
+    def test_bootstrap_rejects_case_alias_without_mutation_on_case_insensitive_filesystem(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            probe = temporary_root / "CaseProbe"
+            probe.mkdir()
+            case_insensitive = (temporary_root / "caseprobe").is_dir()
+            probe.rmdir()
+            if not case_insensitive:
+                self.skipTest("fixture requires a case-insensitive filesystem")
+
+            repository, config, revision = self._make_fixture(temporary)
+            checkout = temporary_root / "private-assets"
+            run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(checkout),
+            ], cwd=ROOT, env=bootstrap_env())
+            payload_path = checkout / "source/dfw4cskzl_136622/Game/map.mkf"
+            before = payload_path.read_bytes()
+            head_before = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=ROOT).stdout.strip()
+
+            result = run([
+                "bash", str(BOOTSTRAP),
+                "--config", str(config),
+                "--repo-url", str(repository),
+                "--revision", revision,
+                "--destination", str(temporary_root / "PRIVATE-ASSETS"),
+                "--link", str(checkout),
+            ], cwd=ROOT, check=False, env=bootstrap_env())
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("destination/link paths overlap", result.stderr)
+            self.assertTrue(checkout.is_dir())
+            self.assertFalse(checkout.is_symlink())
+            self.assertEqual(payload_path.read_bytes(), before)
+            self.assertEqual(run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=ROOT).stdout.strip(), head_before)
+
     def test_bootstrap_rejects_invalid_existing_destination_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, config, revision = self._make_fixture(temporary)

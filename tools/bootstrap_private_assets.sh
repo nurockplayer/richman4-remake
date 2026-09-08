@@ -143,8 +143,24 @@ elif [[ -n "$link_path" ]]; then
   esac
 fi
 
+verify_root() {
+  python3 "$script_dir/verify_private_assets.py" --asset-root "$1" --config "$config_path"
+}
+
 verify_destination() {
-  python3 "$script_dir/verify_private_assets.py" --asset-root "$destination" --config "$config_path"
+  verify_root "$destination"
+}
+
+assert_clean_checkout() {
+  local status
+  status="$(git -C "$1" status --porcelain --untracked-files=all)" || fail "cannot inspect existing private asset checkout: $1"
+  [[ -z "$status" ]] || fail "existing worktree-local private asset checkout has local changes; refusing automatic migration: $1"
+}
+
+drop_duplicate_lfs_store() {
+  # The verified working files are the cache payload. The local LFS object store
+  # is a second, re-downloadable copy and is not needed by the verifier.
+  rm -rf -- "$1/.git/lfs/objects"
 }
 
 resolved_path() {
@@ -173,6 +189,46 @@ ensure_worktree_link() {
     fail "cannot create worktree asset link: $link_path"
   fi
 }
+
+adopt_existing_worktree_cache() {
+  [[ -n "$link_path" ]] || return 0
+  [[ -d "$link_path" && ! -L "$link_path" ]] || return 0
+
+  if ! verify_root "$link_path"; then
+    fail "existing worktree-local private asset directory is not the pinned verified source: $link_path"
+  fi
+  assert_clean_checkout "$link_path"
+  drop_duplicate_lfs_store "$link_path"
+
+  destination_parent="$(dirname -- "$destination")"
+  mkdir -p -- "$destination_parent"
+
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    [[ -d "$destination" && ! -L "$destination" ]] || fail "shared cache path exists but is not a real directory: $destination"
+    if ! verify_destination; then
+      fail "shared cache exists but failed verification; refusing to remove the verified worktree-local copy"
+    fi
+    rm -rf -- "$link_path"
+    printf 'Removed duplicate verified worktree-local private assets; shared cache already exists at %s\n' "$destination"
+  else
+    publish_status=0
+    python3 "$script_dir/atomic_publish.py" "$link_path" "$destination" || publish_status=$?
+    if [[ "$publish_status" -eq 0 ]]; then
+      printf 'Adopted verified worktree-local private assets into shared cache at %s\n' "$destination"
+    elif [[ "$publish_status" -eq 2 && -d "$destination" && ! -L "$destination" ]] && verify_destination; then
+      rm -rf -- "$link_path"
+      printf 'Another process populated the verified shared cache; removed the duplicate worktree-local copy.\n'
+    else
+      fail "cannot atomically adopt the existing worktree-local checkout; keep it in place and choose a cache root on the same filesystem"
+    fi
+  fi
+
+  ensure_worktree_link
+  printf 'Worktree private asset link: %s\n' "$link_path"
+  exit 0
+}
+
+adopt_existing_worktree_cache
 
 if [[ -e "$destination" || -L "$destination" ]]; then
   [[ -d "$destination" && ! -L "$destination" ]] || fail "shared cache path exists but is not a real directory: $destination"
@@ -209,12 +265,8 @@ if ! GIT_TERMINAL_PROMPT=0 git -C "$clone_path" lfs pull origin; then
   fail "Git LFS could not retrieve the pinned private asset content"
 fi
 python3 "$script_dir/verify_private_assets.py" --asset-root "$clone_path" --config "$config_path"
-
-# The shared checkout is an immutable verified snapshot, not an authoring repo.
-# LFS already materialized the working files, so its local object store is a
-# second, re-downloadable copy of the same large payload. Keep Git tree/pointer
-# metadata for future verification, but drop that duplicate local LFS cache.
-rm -rf -- "$clone_path/.git/lfs/objects"
+assert_clean_checkout "$clone_path"
+drop_duplicate_lfs_store "$clone_path"
 
 publish_status=0
 python3 "$script_dir/atomic_publish.py" "$clone_path" "$destination" || publish_status=$?

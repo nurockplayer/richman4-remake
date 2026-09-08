@@ -898,8 +898,10 @@ def _git_worktree_root(output: Path) -> Path | None:
     return root
 
 
-def _git_check_ignored(root: Path, path: Path) -> None:
+def _git_check_ignored(root: Path, path: Path, *, directory: bool = False) -> None:
     relative = path.relative_to(root).as_posix()
+    if directory:
+        relative += "/"
     try:
         result = subprocess.run(
             [
@@ -959,7 +961,7 @@ def assert_private_output(output: Path) -> None:
     if root is None:
         return
     # Staging and preserved rollback backups also contain private source data.
-    _git_check_ignored(root, output)
+    _git_check_ignored(root, output, directory=True)
     _git_check_ignored(root, output / "images")
     _git_check_ignored(root, output / "manifest.json")
     tracked = _git_tracked_managed_paths(root, output)

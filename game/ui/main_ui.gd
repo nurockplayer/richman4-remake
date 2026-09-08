@@ -7,8 +7,12 @@ extends Control
 ## lane.  Once present, GameState is the authority for every displayed value.
 
 const SAVE_PATH := "user://richman4_save.json"
+const OriginalMaps = preload("res://game/content/original_maps.gd")
+const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
+const MIN_SEED := -2147483648
+const MAX_SEED := 2147483647
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -29,6 +33,7 @@ var state: Dictionary = {}
 var board_view: Control
 
 var seed_label: Label
+var map_identity_label: Label
 var phase_label: Label
 var turn_label: Label
 var current_player_label: Label
@@ -60,6 +65,12 @@ var bank_withdraw_button: Button
 var new_game_popup: PopupPanel
 var seed_input: LineEdit
 var player_count_option: OptionButton
+var map_selector: OptionButton
+var map_catalog_status_label: Label
+var map_preview_status_label: Label
+var map_preview_view: Control
+var map_catalog_file_dialog: FileDialog
+var new_game_confirm_button: Button
 var cards_popup: PopupPanel
 var stocks_popup: PopupPanel
 var audio_controller: Object
@@ -71,15 +82,24 @@ var stocks_popup_list: VBoxContainer
 var end_overlay: ColorRect
 var end_title: Label
 var end_detail: Label
+var route_options_box: HBoxContainer
+var route_status_label: Label
 
 var _local_log: Array[String] = []
 var _ai_pending := false
 var _last_rendered_phase := ""
 var _selected_tile := -1
+var _map_catalog: Array = []
+var _map_catalog_path := ""
+var _map_catalog_error := ""
+var _map_catalog_ok := false
+var _selected_map_definition: Dictionary = {}
+var _active_map_definition: Dictionary = {}
 
 func _ready() -> void:
 	_build_interface()
 	_setup_audio()
+	_load_map_catalog()
 	_new_game(DEFAULT_SEED)
 
 func _process(_delta: float) -> void:
@@ -163,12 +183,15 @@ func _build_header() -> Control:
 	title_column.add_child(subtitle)
 
 	var meta_column := VBoxContainer.new()
-	meta_column.custom_minimum_size = Vector2(154.0, 0.0)
+	meta_column.custom_minimum_size = Vector2(236.0, 0.0)
 	meta_column.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_child(meta_column)
 	phase_label = _make_label("等待擲骰", 13, TEXT_GOLD)
 	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(phase_label)
+	map_identity_label = _make_label("地圖 · 測試棋盤", 10, TEXT_MUTED)
+	map_identity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	meta_column.add_child(map_identity_label)
 	seed_label = _make_label("SEED 136622", 10, TEXT_MUTED)
 	seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(seed_label)
@@ -215,7 +238,7 @@ func _build_playfield() -> Control:
 	var board_title := _make_label("棋盤", 14, TEXT_MAIN)
 	board_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	board_header.add_child(board_title)
-	var board_hint := _make_label("點選格位查看資產", 10, TEXT_MUTED)
+	var board_hint := _make_label("點選格位查看 · 原版圖可縮放平移", 10, TEXT_MUTED)
 	board_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	board_header.add_child(board_hint)
 
@@ -229,6 +252,8 @@ func _build_playfield() -> Control:
 	board_column.add_child(board_view)
 	if board_view.has_signal("tile_selected"):
 		board_view.tile_selected.connect(_on_tile_selected)
+	if board_view.has_signal("route_selected"):
+		board_view.route_selected.connect(_on_route_selected)
 
 	var board_footer := _make_label("原版圖像資產為本機研究來源；目前以向量繪製還原版面。", 10, TEXT_MUTED)
 	board_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -285,6 +310,14 @@ func _build_playfield() -> Control:
 	current_property_detail = _make_label("尚未擲骰", 11, Color("#b6d3c5"))
 	current_property_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	property_column.add_child(current_property_detail)
+
+	route_status_label = _make_label("", 11, TEXT_GOLD)
+	route_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	side_column.add_child(route_status_label)
+	route_options_box = HBoxContainer.new()
+	route_options_box.add_theme_constant_override("separation", 6)
+	route_options_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	side_column.add_child(route_options_box)
 
 	var utility_row := HBoxContainer.new()
 	utility_row.add_theme_constant_override("separation", 7)
@@ -383,12 +416,42 @@ func _build_event_log() -> Control:
 	return panel
 
 func _build_popups() -> void:
-	new_game_popup = _make_popup(Vector2i(446, 318))
+	new_game_popup = _make_popup(Vector2i(760, 680))
+	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
 	new_game_box.add_child(_make_label("建立新局", 19, TEXT_MAIN))
-	var new_game_description := _make_label("選擇玩家數與可重現的 seed；seed 留白會自動產生。", 11, TEXT_MUTED)
+	var new_game_description := _make_label("選擇地圖、玩家數與可重現的 seed；seed 留白會自動產生。", 11, TEXT_MUTED)
 	new_game_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	new_game_box.add_child(new_game_description)
+	var map_caption := _make_label("地圖", 11, TEXT_MUTED)
+	new_game_box.add_child(map_caption)
+	var map_selector_row := HBoxContainer.new()
+	map_selector_row.add_theme_constant_override("separation", 8)
+	new_game_box.add_child(map_selector_row)
+	map_selector = OptionButton.new()
+	map_selector.custom_minimum_size = Vector2(0.0, 38.0)
+	map_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_selector.add_theme_font_size_override("font_size", 12)
+	map_selector.item_selected.connect(_on_map_selected)
+	map_selector_row.add_child(map_selector)
+	var map_catalog_button := _make_button("讀取本機 catalog", _on_map_catalog_pressed)
+	map_catalog_button.custom_minimum_size = Vector2(152.0, 38.0)
+	map_selector_row.add_child(map_catalog_button)
+	map_catalog_status_label = _make_label("尚未載入地圖目錄。", 10, TEXT_MUTED)
+	map_catalog_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	new_game_box.add_child(map_catalog_status_label)
+	var preview_script: Variant = load("res://game/ui/board_view.gd")
+	if preview_script != null:
+		map_preview_view = preview_script.new()
+	else:
+		map_preview_view = _make_label("地圖預覽載入中…", 14, TEXT_MUTED)
+	map_preview_view.custom_minimum_size = Vector2(0.0, 248.0)
+	map_preview_view.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	map_preview_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	new_game_box.add_child(map_preview_view)
+	map_preview_status_label = _make_label("", 11, TEXT_MUTED)
+	map_preview_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	new_game_box.add_child(map_preview_status_label)
 	var seed_caption := _make_label("Seed", 11, TEXT_MUTED)
 	new_game_box.add_child(seed_caption)
 	seed_input = LineEdit.new()
@@ -412,9 +475,9 @@ func _build_popups() -> void:
 	var new_game_cancel := _make_button("取消", new_game_popup.hide)
 	new_game_cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	new_game_actions.add_child(new_game_cancel)
-	var new_game_confirm := _make_button("開始新局", _on_new_game_confirm, true)
-	new_game_confirm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	new_game_actions.add_child(new_game_confirm)
+	new_game_confirm_button = _make_button("開始新局", _on_new_game_confirm, true)
+	new_game_confirm_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	new_game_actions.add_child(new_game_confirm_button)
 
 	bank_popup = _make_popup(Vector2i(430, 276))
 	var bank_box := _popup_box(bank_popup)
@@ -468,6 +531,15 @@ func _build_popups() -> void:
 	audio_folder_dialog.ok_button_text = "使用此資料夾"
 	audio_folder_dialog.dir_selected.connect(_on_audio_folder_selected)
 	add_child(audio_folder_dialog)
+
+	map_catalog_file_dialog = FileDialog.new()
+	map_catalog_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	map_catalog_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	map_catalog_file_dialog.title = "選擇本機原版地圖 catalog.json"
+	map_catalog_file_dialog.ok_button_text = "載入地圖目錄"
+	map_catalog_file_dialog.filters = PackedStringArray(["*.json ; 地圖目錄 (catalog.json)"])
+	map_catalog_file_dialog.file_selected.connect(_on_map_catalog_file_selected)
+	add_child(map_catalog_file_dialog)
 
 func _build_end_overlay() -> void:
 	end_overlay = ColorRect.new()
@@ -526,16 +598,230 @@ func _popup_box(popup: PopupPanel) -> VBoxContainer:
 	margin.add_child(box)
 	return box
 
+func _load_map_catalog(path: String = "") -> void:
+	var result: Dictionary = OriginalMaps.load_catalog(path)
+	_map_catalog_path = path if not path.is_empty() else OriginalMaps.default_catalog_path()
+	_map_catalog_ok = bool(result.get("ok", false)) and _as_array(result.get("maps", [])).size() > 0
+	_map_catalog_error = str(result.get("error", ""))
+	if _map_catalog_ok:
+		_map_catalog = _as_array(result.get("maps", [])).duplicate(true)
+		_selected_map_definition = {}
+		for index in range(_map_catalog.size()):
+			var definition: Dictionary = _map_catalog[index] if _map_catalog[index] is Dictionary else {}
+			if _map_is_playable(definition):
+				_selected_map_definition = definition.duplicate(true)
+				break
+		if _selected_map_definition.is_empty() and not _map_catalog.is_empty():
+			_selected_map_definition = (_map_catalog[0] as Dictionary).duplicate(true)
+	else:
+		_map_catalog = [_make_fallback_map_definition()]
+		_selected_map_definition = (_map_catalog[0] as Dictionary).duplicate(true)
+	_update_map_selector()
+
+func _make_fallback_map_definition() -> Dictionary:
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	if state_script != null and state_script.has_method("new_game"):
+		var candidate: Variant = state_script.new_game(DEFAULT_SEED, PLAYER_COUNT)
+		if candidate != null and candidate.has_method("get_snapshot"):
+			var snapshot: Variant = candidate.get_snapshot()
+			if snapshot is Dictionary:
+				var candidate_board: Variant = snapshot.get("board", [])
+				if candidate_board is Array and not candidate_board.is_empty():
+					return {"schema": "richman4.runtime-map/v1", "version": 1, "id": FALLBACK_MAP_ID,
+						"name": "測試棋盤（%d 格）" % candidate_board.size(),
+						"source": {"edition": "Test", "map_number": 0}, "board": candidate_board.duplicate(true),
+						"start_position": 0, "supports_new_game": true, "unsupported_reason": ""}
+	var side := 11
+	var cells: Array[Vector2i] = []
+	for x in range(side):
+		cells.append(Vector2i(x, 0))
+	for y in range(1, side):
+		cells.append(Vector2i(side - 1, y))
+	for x in range(side - 2, -1, -1):
+		cells.append(Vector2i(x, side - 1))
+	for y in range(side - 2, 0, -1):
+		cells.append(Vector2i(0, y))
+	var board: Array = []
+	for index in range(cells.size()):
+		var kind := "property" if index > 0 and index % 4 != 0 else "rest"
+		var name := "測試道路 %02d" % (index + 1)
+		if index == 0:
+			kind = "start"
+			name = "測試起點"
+		elif kind == "rest":
+			name = "測試休息 %02d" % (index + 1)
+		board.append({"index": index, "source_node_id": index + 1, "kind": kind, "name": name,
+			"owner": -1, "building_level": 0, "cost": 1000 + index * 100 if kind == "property" else 0,
+			"upgrade_cost": 300 if kind == "property" else 0, "base_rent": 100 if kind == "property" else 0,
+			"rent": 100 if kind == "property" else 0, "group": "test", "tax_amount": 0})
+	return {"schema": "richman4.runtime-map/v1", "version": 1, "id": FALLBACK_MAP_ID,
+		"name": "測試棋盤（%d 格）" % board.size(), "source": {"edition": "Test", "map_number": 0}, "board": board,
+		"start_position": 0, "supports_new_game": true, "unsupported_reason": ""}
+
+func _update_map_selector() -> void:
+	if map_selector == null:
+		return
+	map_selector.clear()
+	var selected_index := 0
+	for index in range(_map_catalog.size()):
+		var definition: Dictionary = _map_catalog[index] if _map_catalog[index] is Dictionary else {}
+		var label := str(definition.get("name", "地圖 %d" % (index + 1)))
+		if not _map_is_playable(definition):
+			label += "（僅預覽）"
+		map_selector.add_item(label, index)
+		if not _selected_map_definition.is_empty() and str(definition.get("id", "")) == str(_selected_map_definition.get("id", "")):
+			selected_index = index
+	map_selector.select(selected_index)
+	if selected_index >= 0 and selected_index < _map_catalog.size():
+		_selected_map_definition = (_map_catalog[selected_index] as Dictionary).duplicate(true)
+	if _map_catalog_ok:
+		map_catalog_status_label.text = "已載入本機原版地圖 %d 張。" % _map_catalog.size()
+	else:
+		var reason := _map_catalog_error if not _map_catalog_error.is_empty() else "尚未匯入本機原版地圖。"
+		map_catalog_status_label.text = "未找到本機原版地圖，使用明確測試棋盤。\n%s" % reason
+	_update_map_preview()
+
+func _on_map_selected(index: int) -> void:
+	if index < 0 or index >= _map_catalog.size() or not _map_catalog[index] is Dictionary:
+		return
+	_selected_map_definition = (_map_catalog[index] as Dictionary).duplicate(true)
+	_update_map_preview()
+
+func _on_map_catalog_pressed() -> void:
+	if map_catalog_file_dialog != null:
+		map_catalog_file_dialog.popup_centered_ratio(0.78)
+
+func _on_map_catalog_file_selected(path: String) -> void:
+	_load_map_catalog(path)
+	_append_local_log("已讀取本機地圖目錄。") if _map_catalog_ok else _append_local_log("地圖目錄讀取失敗，已回到測試棋盤。")
+	_refresh_log_only()
+
+func _extract_map_identity(snapshot: Dictionary) -> Variant:
+	if snapshot.has("map_id"):
+		return {"id": str(snapshot.get("map_id", "")), "name": str(snapshot.get("map_name", "")),
+			"schema": str(snapshot.get("map_schema", "richman4.runtime-map/v1")),
+			"version": int(snapshot.get("map_version", 1)), "source": snapshot.get("map_source", {})}
+	for key in ["map_identity", "map_definition", "map"]:
+		if snapshot.has(key) and snapshot[key] is Dictionary:
+			var identity: Dictionary = snapshot[key].duplicate(true)
+			identity.erase("board")
+			return identity
+	return null
+
+func _snapshot_graph_definition(snapshot: Dictionary) -> Dictionary:
+	if snapshot.get("board_mode", "") != "graph" or not snapshot.has("map_id") or not snapshot.has("board"):
+		return {}
+	var board: Variant = snapshot.get("board", [])
+	var source: Variant = snapshot.get("map_source", {})
+	if not board is Array or not source is Dictionary:
+		return {}
+	var map_id := str(snapshot.get("map_id", ""))
+	if map_id.is_empty():
+		return {}
+	return {"schema": str(snapshot.get("map_schema", "richman4.runtime-map/v1")),
+		"version": int(snapshot.get("map_version", 1)), "id": map_id,
+		"name": str(snapshot.get("map_name", "")), "source": source.duplicate(true),
+		"board": board.duplicate(true), "start_position": int(snapshot.get("start_position", 0)),
+		"supports_new_game": true, "unsupported_reason": ""}
+
+func _map_source_matches(left: Variant, right: Variant) -> bool:
+	if not left is Dictionary or not right is Dictionary:
+		return false
+	for key in ["edition", "map_number", "archive", "entry_index", "payload_sha256", "source_file_sha256"]:
+		if str(left.get(key, "")) != str(right.get(key, "")):
+			return false
+	return true
+
+func _resolve_map_identity(identity: Variant) -> Dictionary:
+	var identity_id := ""
+	var identity_source: Variant = null
+	if identity is Dictionary:
+		identity_id = str(identity.get("id", ""))
+		identity_source = identity.get("source", null)
+	elif identity is String:
+		identity_id = identity
+	if not identity_id.is_empty():
+		for definition_value in _map_catalog:
+			if definition_value is Dictionary and str(definition_value.get("id", "")) == identity_id and (identity_source == null or _map_source_matches(identity_source, definition_value.get("source", {}))):
+				return definition_value.duplicate(true)
+	if identity is Dictionary:
+		var resolved_identity: Dictionary = identity.duplicate(true)
+		resolved_identity.erase("board")
+		return resolved_identity
+	return {}
+
+func _adopt_map_from_snapshot(snapshot: Dictionary) -> void:
+	var graph_definition := _snapshot_graph_definition(snapshot)
+	if not graph_definition.is_empty():
+		_active_map_definition = graph_definition
+		var graph_id := str(graph_definition.get("id", ""))
+		var graph_source: Variant = graph_definition.get("source", {})
+		for index in range(_map_catalog.size()):
+			var catalog_definition: Variant = _map_catalog[index]
+			if catalog_definition is Dictionary and str(catalog_definition.get("id", "")) == graph_id and _map_source_matches(graph_source, catalog_definition.get("source", {})):
+				_selected_map_definition = catalog_definition.duplicate(true)
+				if map_selector != null:
+					map_selector.select(index)
+				break
+		return
+	if int(snapshot.get("version", -1)) == 1:
+		_active_map_definition = _make_fallback_map_definition()
+		return
+	var raw_identity: Variant = _extract_map_identity(snapshot)
+	if raw_identity == null:
+		return
+	var resolved := _resolve_map_identity(raw_identity)
+	if resolved.is_empty():
+		return
+	_active_map_definition = resolved
+	var active_id := str(resolved.get("id", ""))
+	if active_id.is_empty():
+		return
+	for index in range(_map_catalog.size()):
+		if _map_catalog[index] is Dictionary and str(_map_catalog[index].get("id", "")) == active_id:
+			_selected_map_definition = (_map_catalog[index] as Dictionary).duplicate(true)
+			if map_selector != null:
+				map_selector.select(index)
+			break
+
+func _update_map_preview() -> void:
+	if map_preview_view != null and map_preview_view.has_method("set_preview_definition"):
+		map_preview_view.call("set_preview_definition", _selected_map_definition)
+	if map_preview_status_label == null:
+		return
+	if _selected_map_definition.is_empty():
+		map_preview_status_label.text = "尚無可預覽的地圖。"
+		return
+	var board: Array = _as_array(_selected_map_definition.get("board", []))
+	if _map_is_playable(_selected_map_definition):
+		map_preview_status_label.text = "可開始新局 · %d 格路網。" % board.size()
+	else:
+		map_preview_status_label.text = "僅供預覽：%s" % str(_selected_map_definition.get("unsupported_reason", "此地圖尚未開放對局。"))
+	if new_game_confirm_button != null:
+		new_game_confirm_button.disabled = not _map_is_playable(_selected_map_definition)
+
+func _map_is_playable(definition: Dictionary) -> bool:
+	return not definition.is_empty() and bool(definition.get("supports_new_game", false))
+
+func _is_fallback_definition(definition: Dictionary) -> bool:
+	return str(definition.get("id", "")) == FALLBACK_MAP_ID
+
 func _on_new_game_pressed() -> void:
 	if new_game_popup == null:
 		_new_game()
 		return
 	seed_input.text = ""
 	player_count_option.select(2)
-	new_game_popup.popup_centered()
+	_update_map_selector()
+	new_game_popup.popup_centered(Vector2i(760, 680))
+	new_game_popup.set_size(Vector2i(760, 680))
 	seed_input.grab_focus()
 
 func _on_new_game_confirm() -> void:
+	if not _map_is_playable(_selected_map_definition):
+		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+		_refresh_log_only()
+		return
 	var requested_seed: Variant = null
 	if not seed_input.text.strip_edges().is_empty():
 		if not seed_input.text.strip_edges().is_valid_int():
@@ -543,28 +829,44 @@ func _on_new_game_confirm() -> void:
 			_refresh_log_only()
 			return
 		requested_seed = int(seed_input.text.strip_edges())
+		if requested_seed < MIN_SEED or requested_seed > MAX_SEED:
+			_append_local_log("Seed 必須介於 -2147483648 與 2147483647。")
+			_refresh_log_only()
+			return
 	var requested_players := player_count_option.get_selected_id()
-	_new_game(requested_seed, requested_players)
+	_new_game(requested_seed, requested_players, _selected_map_definition)
 	new_game_popup.hide()
 
-func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT) -> void:
+func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map_definition: Dictionary = {}) -> void:
 	var resolved_seed: int
 	if seed_value == null:
 		resolved_seed = int(Time.get_unix_time_from_system()) % 2147483647
 	else:
 		resolved_seed = int(seed_value)
 	var resolved_players: int = clampi(player_count, 2, 4)
+	var selected_definition := map_definition.duplicate(true) if not map_definition.is_empty() else _selected_map_definition.duplicate(true)
+	if not _map_is_playable(selected_definition):
+		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+		_refresh_log_only()
+		return
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
-	if state_script != null and state_script.has_method("new_game"):
-		candidate = state_script.new_game(resolved_seed, resolved_players)
+	if state_script != null:
+		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
+			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
+		if candidate == null and _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
+			candidate = state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:
-		game_state = null
-		state = _unavailable_state(resolved_seed)
-		_local_log.clear()
-		_append_local_log("模擬核心未載入；遊戲操作已停用。")
+		if game_state == null and state.is_empty():
+			state = _unavailable_state(resolved_seed)
+			_append_local_log("模擬核心未載入；遊戲操作已停用。")
+		else:
+			_append_local_log("新局建立失敗；目前棋局保持不變。")
+		_refresh_log_only()
+		return
 	else:
 		game_state = candidate
+		_active_map_definition = selected_definition
 		_local_log.clear()
 		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
 	_refresh_from_state()
@@ -705,6 +1007,7 @@ func _load_game() -> void:
 		_refresh_log_only()
 		return
 	game_state = restored
+	_adopt_map_from_snapshot(parsed)
 	_local_log.clear()
 	_append_local_log("已讀取棋局 · seed %s。" % str(parsed.get("seed", "?")))
 	_refresh_from_state()
@@ -785,9 +1088,19 @@ func _update_bank_popup() -> void:
 
 func _on_tile_selected(index: int) -> void:
 	_selected_tile = index
-	var board: Array = state.get("board", [])
-	if index >= 0 and index < board.size() and board[index] is Dictionary:
-		_update_property_card(board[index])
+	var tile := _tile_for_index(index)
+	if not tile.is_empty():
+		_update_property_card(tile)
+
+func _on_route_selected(next_index: int) -> void:
+	if not _is_human_turn():
+		return
+	var options := _as_array(state.get("route_options", []))
+	if not _has_int_option(options, next_index):
+		return
+	var result := _invoke_game("choose_route", [next_index])
+	_append_local_log("選擇前往 %s：%s" % [_tile_name(next_index), _result_text(result, "已送出路線選擇。")])
+	_handle_result(result)
 
 func _on_end_restart_pressed() -> void:
 	_new_game()
@@ -820,6 +1133,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 		snapshot = result["state"]
 	if not snapshot.is_empty():
 		state = snapshot.duplicate(true)
+	_adopt_map_from_snapshot(state)
 	_update_all()
 
 func _read_snapshot() -> Dictionary:
@@ -840,11 +1154,12 @@ func _update_all() -> void:
 	var players: Array = state.get("players", [])
 	var board: Array = state.get("board", [])
 	if board_view != null and board_view.has_method("set_game_data"):
-		board_view.call("set_game_data", board, players, current_index)
+		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])))
 	_update_header(phase, current_index)
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())
 	_update_actions(phase, current_index)
+	_update_route_choices(phase, current_index)
 	if bank_popup.visible:
 		_update_bank_popup()
 	_update_event_log()
@@ -855,6 +1170,11 @@ func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
 	turn_label.text = "第 %d 回合 · 第 %d 輪" % [int(state.get("turn", 1)), int(state.get("round", 1))]
 	phase_label.text = _phase_text(phase)
+	var map_name := str(_active_map_definition.get("name", ""))
+	if map_name.is_empty():
+		var identity: Variant = _extract_map_identity(state)
+		map_name = str(identity.get("name", identity.get("id", "測試棋盤"))) if identity is Dictionary else str(identity) if identity is String else "測試棋盤"
+	map_identity_label.text = "地圖 · %s" % map_name
 	var player := _current_player()
 	var is_human := bool(player.get("is_human", true))
 	current_player_label.text = "你的回合" if is_human else "%s 的回合" % str(player.get("name", "AI"))
@@ -906,6 +1226,8 @@ func _update_property_card(tile: Dictionary) -> void:
 		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
+	elif kind == "unsupported":
+		details += "\n此格尚未還原，暫不執行其效果。"
 	else:
 		details += "\n此格的效果由模擬層處理。"
 	current_property_detail.text = details
@@ -933,10 +1255,32 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "本局已結束"
 	elif not human_turn:
 		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
+	elif phase == "await_route":
+		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
 		action_hint_label.text = "輪到你了，請擲骰"
 	else:
 		action_hint_label.text = "請處理目前格位"
+
+func _update_route_choices(phase: String, current_index: int) -> void:
+	if route_options_box == null:
+		return
+	for child in route_options_box.get_children():
+		child.free()
+	var options := _as_array(state.get("route_options", []))
+	var player: Dictionary = _current_player()
+	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and phase != "game_over"
+	if phase != "await_route" or options.is_empty():
+		route_status_label.text = ""
+		return
+	var remaining := int(state.get("remaining_steps", options.size()))
+	route_status_label.text = "選擇下一格 · 剩餘步數 %d" % remaining
+	for option in options:
+		var next_index := int(option)
+		var button := _make_button("前往 %s" % _tile_short_label(next_index), _on_route_selected.bind(next_index), human_turn)
+		button.disabled = not human_turn
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		route_options_box.add_child(button)
 
 func _update_event_log() -> void:
 	var lines: Array[String] = []
@@ -1104,11 +1448,22 @@ func _current_player() -> Dictionary:
 	return {"name": "玩家", "is_human": true, "cash": 0, "position": 0, "properties": [], "cards": []}
 
 func _current_tile() -> Dictionary:
-	var board: Array = state.get("board", [])
 	var position := int(_current_player().get("position", 0))
-	if position >= 0 and position < board.size() and board[position] is Dictionary:
-		return board[position]
+	return _tile_for_index(position)
+
+func _tile_for_index(index: int) -> Dictionary:
+	var board: Array = state.get("board", [])
+	if index >= 0 and index < board.size() and board[index] is Dictionary:
+		return board[index]
+	var map_board: Array = _as_array(_active_map_definition.get("board", []))
+	if index >= 0 and index < map_board.size() and map_board[index] is Dictionary:
+		return map_board[index]
 	return {}
+
+func _tile_short_label(index: int) -> String:
+	var tile := _tile_for_index(index)
+	var name := str(tile.get("name", "格位 %02d" % (index + 1)))
+	return "%02d · %s" % [index + 1, name]
 
 func _phase_text(phase: String) -> String:
 	match phase:
@@ -1116,6 +1471,8 @@ func _phase_text(phase: String) -> String:
 			return "等待擲骰"
 		"await_action":
 			return "等待行動"
+		"await_route":
+			return "選擇路線"
 		"game_over":
 			return "本局結束"
 		_:
@@ -1133,6 +1490,12 @@ func _kind_label(kind: String) -> String:
 			return "銀行"
 		"stock":
 			return "股市"
+		"card":
+			return "卡片"
+		"points":
+			return "點數"
+		"unsupported":
+			return "待還原"
 		"rest":
 			return "休息"
 		_:
@@ -1190,10 +1553,7 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return event_type
 
 func _tile_name(index: int) -> String:
-	var board: Array = state.get("board", [])
-	if index >= 0 and index < board.size() and board[index] is Dictionary:
-		return str(board[index].get("name", "格位 %02d" % (index + 1)))
-	return "格位 %02d" % (index + 1)
+	return str(_tile_for_index(index).get("name", "格位 %02d" % (index + 1)))
 
 func _roll_text(result: Dictionary) -> String:
 	var dice: Array = _as_array(result.get("last_roll", result.get("dice", state.get("last_roll", []))))
@@ -1215,6 +1575,12 @@ func _as_array(value: Variant) -> Array:
 func _has_action_option(options: Array, action: String) -> bool:
 	for option in options:
 		if str(option) == action:
+			return true
+	return false
+
+func _has_int_option(options: Array, expected: int) -> bool:
+	for option in options:
+		if int(option) == expected:
 			return true
 	return false
 

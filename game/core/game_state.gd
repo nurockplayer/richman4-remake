@@ -1235,9 +1235,9 @@ func _withdraw_internal(player_id: int, amount: int) -> void:
 	player["deposit"] = int(player.get("deposit", 0)) - actual
 	player["cash"] = int(player.get("cash", 0)) + actual
 	var bank: Dictionary = state.get("bank", {})
-	bank["cash"] = int(bank.get("cash", 0)) - actual
 	bank["deposits"] = max(0, int(bank.get("deposits", 0)) - actual)
 	state["bank"] = bank
+	_bank_subtract_cash(actual)
 
 
 func _take_loan(player_id: int, amount: int) -> Dictionary:

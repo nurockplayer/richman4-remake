@@ -18,6 +18,7 @@ func _initialize() -> void:
 	_test_setup_save_round_trip()
 	_test_graph_setup_constructor()
 	_test_setup_ai_completion()
+	_test_deposit_backed_charges_keep_bank_cash_saveable()
 	_test_legacy_versions_remain_unchanged()
 	print("Setup flow checks: %d, failures: %d" % [_checks, _failures])
 	quit(1 if _failures else 0)
@@ -306,6 +307,26 @@ func _test_setup_ai_completion() -> void:
 	_expect(long_restored != null, "730-day AI setup JSON reloads")
 	if long_restored != null:
 		_expect_equal(long_restored.to_json(), long_game.to_json(), "730-day AI setup JSON reload preserves final state")
+
+
+func _test_deposit_backed_charges_keep_bank_cash_saveable() -> void:
+	for seed_value in [3, 5, 6]:
+		var game: Object = _new_setup(seed_value, 4, {"start_date": {"year": 1998, "month": 1, "day": 1}, "initial_fund": 300000, "day_limit": 730})
+		_expect(game != null, "deposit-backed charge fixture starts for seed %d" % seed_value)
+		if game == null:
+			continue
+		var result: Dictionary = game.run_ai_match(4000)
+		_expect(bool(result.get("ok", false)), "deposit-backed charge match completes for seed %d" % seed_value)
+		_expect(int(game.state["bank"].get("cash", -1)) >= 0, "bank cash stays non-negative after deposit-backed charges for seed %d" % seed_value)
+		var saved: Dictionary = game.to_dict()
+		_expect(bool(GameState.validate_save(saved).get("ok", false)), "deposit-backed charge save validates for seed %d" % seed_value)
+		if seed_value == 6:
+			_expect_equal(game.state["elapsed"], 730, "seed 6 completes the full 730-day setup match")
+			var payload: Variant = JSON.parse_string(game.to_json())
+			var restored: Object = GameState.from_dict(payload) if payload is Dictionary else null
+			_expect(restored != null, "seed 6 final setup save reloads")
+			if restored != null:
+				_expect_equal(restored.to_json(), game.to_json(), "seed 6 final setup save round-trips exactly")
 
 
 func _test_legacy_versions_remain_unchanged() -> void:

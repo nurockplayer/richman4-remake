@@ -735,10 +735,10 @@ func _sync_attached_gods() -> void:
 			_detach_god(god_id, "owner_unavailable", true)
 
 
-func _encounter_dog(player_id: int, node_id: int) -> void:
+func _encounter_dog(player_id: int, node_id: int) -> bool:
 	var dog: Dictionary = _god_object(11)
 	if dog.is_empty() or int(dog.get("owner", -1)) >= 0 or int(dog.get("node", -1)) != node_id:
-		return
+		return false
 	var vehicle: String = str(_player(player_id).get("vehicle", "walking"))
 	var dog_node: int = int(dog.get("node", node_id))
 	_remove_god(11)
@@ -748,16 +748,18 @@ func _encounter_dog(player_id: int, node_id: int) -> void:
 		player["hospital_days"] = max(int(player.get("hospital_days", 0)), 3)
 		_record_event("hospital_started", {"player_id": player_id, "hospital_days": int(player["hospital_days"])})
 	_god_pair_respawn(11, dog_node)
+	return vehicle == "walking"
 
 
-func _process_god_step(player_id: int, node_id: int) -> void:
+func _process_god_step(player_id: int, node_id: int) -> bool:
 	if not _is_gods():
-		return
+		return false
 	_sync_attached_gods()
-	_encounter_dog(player_id, node_id)
+	if _encounter_dog(player_id, node_id):
+		return true
 	var objects: Variant = state.get("god_objects", [])
 	if typeof(objects) != TYPE_ARRAY:
-		return
+		return false
 	for actor in objects:
 		if typeof(actor) != TYPE_DICTIONARY:
 			continue
@@ -767,6 +769,7 @@ func _process_god_step(player_id: int, node_id: int) -> void:
 		if OriginalGods.is_attachable(god_id) and god_id != 11:
 			_attach_god(player_id, god_id)
 			break
+	return false
 
 
 func _tick_gods() -> void:
@@ -1057,6 +1060,15 @@ func _require_phase(expected: String) -> bool:
 	return state.get("phase", "") == expected
 
 
+func _is_gods_hospital_action(player: Dictionary) -> bool:
+	if not _is_gods() or player.is_empty():
+		return false
+	if int(player.get("hospital_days", 0)) > 0:
+		return true
+	var last_roll: Variant = state.get("last_roll", [])
+	return state.get("phase", "") == "await_action" and bool(state.get("property_action_used", false)) and typeof(last_roll) == TYPE_ARRAY and last_roll.is_empty()
+
+
 func _set_action_options(player_id: int) -> void:
 	var phase: String = str(state.get("phase", ""))
 	if phase == "game_over":
@@ -1068,6 +1080,7 @@ func _set_action_options(player_id: int) -> void:
 		state["action_options"] = options
 		return
 	var bank_open: bool = not _is_sunday()
+	var hospitalized: bool = _is_gods_hospital_action(player)
 	if bank_open:
 		options.push_front("sell_stock")
 		if int(player.get("cash", 0)) >= 10:
@@ -1088,10 +1101,10 @@ func _set_action_options(player_id: int) -> void:
 		return
 	options.push_back("end_turn")
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
-	if _is_inventory() and _is_graph() and int(tile.get("event_code", -1)) == 15:
+	if not hospitalized and _is_inventory() and _is_graph() and int(tile.get("event_code", -1)) == 15:
 		options.push_front("sell_item")
 		options.push_front("buy_item")
-	if tile.get("kind", "") == "property" and not bool(state.get("property_action_used", false)):
+	if not hospitalized and tile.get("kind", "") == "property" and not bool(state.get("property_action_used", false)):
 		var owner: int = int(tile.get("owner", -1))
 		if owner == -1 and _player_god_id(player_id) != 12 and not _god_investment_blocked(player_id) and int(player.get("cash", 0)) >= _property_buy_price(tile):
 			options.push_front("buy")
@@ -1099,7 +1112,7 @@ func _set_action_options(player_id: int) -> void:
 			var level: int = int(tile.get("building_level", 0))
 			if level < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
-	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and not bool(state.get("property_action_used", false)):
+	if not hospitalized and _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and not bool(state.get("property_action_used", false)):
 		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
 		var facility_owner: int = int(facility.get("owner", -1))
 		if facility_owner == -1 and _player_god_id(player_id) != 12 and not _god_investment_blocked(player_id) and int(player.get("cash", 0)) >= _facility_land_price(facility):
@@ -1111,7 +1124,7 @@ func _set_action_options(player_id: int) -> void:
 				options.push_front("build_facility")
 			elif _facility_type_valid(facility_type) and facility_type != FACILITY_LAB_TYPE and facility_level < _facility_type_cap(facility_type) and int(player.get("cash", 0)) >= _facility_upgrade_price(facility):
 				options.push_front("upgrade")
-	if tile.get("kind", "") == "bank":
+	if not hospitalized and tile.get("kind", "") == "bank":
 		state["bank_landing"] = bank_open
 		if bank_open:
 			options.push_front("take_loan")
@@ -1124,7 +1137,7 @@ func _set_action_options(player_id: int) -> void:
 		options.push_front("sell_stock")
 		if int(player.get("cash", 0)) >= 10:
 			options.push_front("buy_stock")
-		if not _is_inventory():
+		if not hospitalized and not _is_inventory():
 			var vehicles: Dictionary = player.get("vehicles", {})
 			for vehicle in ["motorcycle", "car"]:
 				if not bool(vehicles.get(vehicle, false)) and int(player.get("cash", 0)) >= int(VEHICLE_COSTS[vehicle]):
@@ -1132,7 +1145,14 @@ func _set_action_options(player_id: int) -> void:
 	var action_pending_remote: Variant = state.get("pending_remote_dice", {})
 	var action_remote_pending: bool = _is_inventory() and typeof(action_pending_remote) == TYPE_DICTIONARY and not action_pending_remote.is_empty()
 	if player.get("cards", []).size() > 0 and not action_remote_pending:
-		options.push_front("use_card")
+		var can_use_card: bool = not hospitalized
+		if hospitalized:
+			for card_value in player.get("cards", []):
+				if str(card_value) != "購地":
+					can_use_card = true
+					break
+		if can_use_card:
+			options.push_front("use_card")
 	state["action_options"] = options
 
 
@@ -1204,6 +1224,26 @@ func _facility_land_price(tile: Dictionary) -> int:
 
 func _facility_upgrade_price(tile: Dictionary) -> int:
 	return int(tile.get("upgrade_cost", 0)) * _facility_price_index()
+
+
+func inventory_purchase_price(tile: Dictionary) -> int:
+	if tile.is_empty():
+		return 0
+	if tile.get("kind", "") == "facility":
+		if not _is_gods():
+			return _facility_land_price(tile)
+		var facility: Dictionary = _facility_record(int(tile.get("index", -1)))
+		if facility.is_empty():
+			facility = tile
+		var facility_land_price: int = int(facility.get("land_price", facility.get("cost", 0)))
+		var facility_upgrade_price: int = int(facility.get("upgrade_cost", 0))
+		var facility_level: int = int(facility.get("building_level", 0))
+		return max(0, facility_land_price + facility_level * facility_upgrade_price) * _facility_price_index()
+	if _is_gods():
+		var land_price: int = int(tile.get("land_price", tile.get("cost", 0)))
+		var house_price: int = int(tile.get("house_price", tile.get("upgrade_cost", 0)))
+		return max(0, land_price + int(tile.get("building_level", 0)) * house_price) * _facility_price_index()
+	return int(tile.get("cost", 0))
 
 
 static func _facility_type_valid(facility_type: Variant) -> bool:
@@ -1436,6 +1476,8 @@ func is_shop_available() -> bool:
 		return false
 	var player: Dictionary = _current_player()
 	if player.is_empty() or not bool(player.get("alive", false)):
+		return false
+	if _is_gods_hospital_action(player):
 		return false
 	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
 	return not tile.is_empty() and int(tile.get("event_code", -1)) == 15
@@ -1701,6 +1743,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 		state["last_roll_total"] = total
 	state["property_action_used"] = false
 	var graph_should_move: bool = false
+	var dog_collision: bool = false
 	if int(player.get("stay_next", 0)) > 0:
 		player["stay_next"] = int(player.get("stay_next", 0)) - 1
 		_record_event("stay_resolved", {"player_id": player_id, "tile": int(player.get("position", 0))})
@@ -1717,8 +1760,8 @@ func roll(dice_count: int = -1) -> Dictionary:
 		roll_payload["remote_dice"] = true
 	_record_event("roll", roll_payload)
 	if graph_should_move:
-		_graph_begin_movement(player_id, total)
-	if not _is_graph() or state.get("phase", "") != "await_route":
+		dog_collision = _graph_begin_movement(player_id, total)
+	if (not _is_graph() or state.get("phase", "") != "await_route") and not dog_collision:
 		_resolve_landing(player_id)
 	return _result(true, "擲骰完成", {"dice": dice, "total": total})
 
@@ -1741,7 +1784,7 @@ func _graph_candidates(current_node: int, previous_node: int) -> Array:
 	return candidates
 
 
-func _graph_begin_movement(player_id: int, steps: int) -> void:
+func _graph_begin_movement(player_id: int, steps: int) -> bool:
 	var player: Dictionary = _player(player_id)
 	var current_node: int = int(player.get("position", -1))
 	var previous_node: int = int(player.get("previous_position", -1))
@@ -1753,7 +1796,7 @@ func _graph_begin_movement(player_id: int, steps: int) -> void:
 		state["remaining_steps"] = 0
 		state["phase"] = "await_roll"
 		_record_event("movement_invalid", {"player_id": player_id, "steps": requested_steps, "last_total": roll_total})
-		return
+		return false
 	state["bank_access"] = false
 	state["bank_landing"] = false
 	state["remaining_steps"] = requested_steps
@@ -1763,7 +1806,27 @@ func _graph_begin_movement(player_id: int, steps: int) -> void:
 		"previous_node": previous_node,
 	}
 	state["route_options"] = []
-	_graph_continue_movement(player_id)
+	return _graph_continue_movement(player_id)
+
+
+func _graph_bank_pass_before_god(player_id: int, node_id: int) -> bool:
+	if not _is_gods() or _is_sunday():
+		return false
+	var tile: Dictionary = _tile_at(node_id)
+	if tile.get("kind", "") != "bank":
+		return false
+	state["bank_access"] = true
+	state["bank_landing"] = false
+	_record_event("bank_passed", {"player_id": player_id, "tile": node_id})
+	return true
+
+
+func _stop_graph_for_dog(player_id: int) -> void:
+	state["route_options"] = []
+	state["pending_movement"] = {}
+	state["remaining_steps"] = 0
+	state["phase"] = "await_action"
+	_set_action_options(player_id)
 
 
 func _graph_consume_roadblock(player_id: int, node_id: int) -> bool:
@@ -1780,13 +1843,13 @@ func _graph_consume_roadblock(player_id: int, node_id: int) -> bool:
 	return true
 
 
-func _graph_continue_movement(player_id: int) -> void:
+func _graph_continue_movement(player_id: int) -> bool:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["route_options"] = []
 		state["pending_movement"] = {}
 		state["remaining_steps"] = 0
-		return
+		return false
 	var remaining: int = int(state.get("remaining_steps", 0))
 	var roll_total: int = int(state.get("last_total", 0))
 	if remaining < 0 or remaining > MAX_GRAPH_STEPS or remaining > roll_total:
@@ -1795,7 +1858,7 @@ func _graph_continue_movement(player_id: int) -> void:
 		state["remaining_steps"] = 0
 		state["phase"] = "await_roll"
 		_record_event("movement_invalid", {"player_id": player_id, "steps": remaining, "last_total": roll_total})
-		return
+		return false
 	while int(state.get("remaining_steps", 0)) > 0:
 		var current_node: int = int(player.get("position", -1))
 		var previous_node: int = int(player.get("previous_position", -1))
@@ -1809,7 +1872,7 @@ func _graph_continue_movement(player_id: int) -> void:
 				"previous_node": previous_node,
 			}
 			_set_action_options(player_id)
-			return
+			return false
 		if candidates.is_empty():
 			# A valid map can contain an isolated non-housing node. Preserve the
 			# explicit stop instead of inventing a connection to another node.
@@ -1827,12 +1890,16 @@ func _graph_continue_movement(player_id: int) -> void:
 			"previous_node": old_node,
 		}
 		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
-		_process_god_step(player_id, next_node)
+		var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, next_node)
+		var dog_collision: bool = _process_god_step(player_id, next_node)
+		if dog_collision:
+			_stop_graph_for_dog(player_id)
+			return true
 		if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
 			state["route_options"] = []
 			state["pending_movement"] = {}
 			state["remaining_steps"] = 0
-			return
+			return false
 		if _is_gods() and int(player.get("hospital_days", 0)) > 0:
 			state["remaining_steps"] = 0
 			break
@@ -1840,7 +1907,7 @@ func _graph_continue_movement(player_id: int) -> void:
 			state["remaining_steps"] = 0
 			break
 		if int(state.get("remaining_steps", 0)) > 0:
-			_graph_visit_tile(player_id, _tile_at(next_node), false)
+			_graph_visit_tile(player_id, _tile_at(next_node), false, bank_passed_before_god)
 			if not bool(player.get("alive", false)):
 				state["remaining_steps"] = 0
 				break
@@ -1848,6 +1915,7 @@ func _graph_continue_movement(player_id: int) -> void:
 	state["pending_movement"] = {}
 	state["remaining_steps"] = 0
 	state["phase"] = "await_roll"
+	return false
 
 
 func choose_route(route: int) -> Dictionary:
@@ -1881,7 +1949,11 @@ func choose_route(route: int) -> Dictionary:
 		"previous_node": current_node,
 	}
 	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
-	_process_god_step(player_id, route)
+	var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, route)
+	var dog_collision: bool = _process_god_step(player_id, route)
+	if dog_collision:
+		_stop_graph_for_dog(player_id)
+		return _result(true, "已選擇路線", {"route": route})
 	if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
 		state["route_options"] = []
 		state["pending_movement"] = {}
@@ -1893,9 +1965,9 @@ func choose_route(route: int) -> Dictionary:
 	if hit_roadblock:
 		state["remaining_steps"] = 0
 	elif int(state.get("remaining_steps", 0)) > 0:
-		_graph_visit_tile(player_id, _tile_at(route), false)
-	_graph_continue_movement(player_id)
-	if int(state.get("remaining_steps", 0)) == 0 and state.get("phase", "") != "game_over":
+		_graph_visit_tile(player_id, _tile_at(route), false, bank_passed_before_god)
+	var continued_dog_collision: bool = _graph_continue_movement(player_id)
+	if int(state.get("remaining_steps", 0)) == 0 and state.get("phase", "") != "game_over" and not continued_dog_collision:
 		_resolve_landing(player_id)
 	return _result(true, "已選擇路線", {"route": route})
 
@@ -1987,7 +2059,7 @@ func _apply_god_property_effect(player_id: int, tile: Dictionary, final_landing:
 	_record_event("god_property_effect", {"player_id": player_id, "god_id": god_id, "tile_id": int(tile.get("index", -1)), "effect": effect, "from_level": level, "to_level": next_level})
 
 
-func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) -> void:
+func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, bank_passed_before_god: bool = false) -> void:
 	if tile.is_empty():
 		return
 	var tile_index: int = int(tile.get("index", -1))
@@ -2027,7 +2099,7 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) ->
 				if final_landing:
 					state["bank_landing"] = true
 					_record_event("bank_landed", {"player_id": player_id, "tile": tile_index})
-				else:
+				elif not bank_passed_before_god:
 					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
 		"unsupported":
 			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
@@ -2940,6 +3012,8 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 	var cards: Array = player.get("cards", [])
 	if cards.find("購地") < 0:
 		return _error("沒有這張卡片")
+	if _is_gods_hospital_action(player):
+		return _error("住院中不能使用購地卡")
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
 	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
@@ -2948,9 +3022,11 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 		var facility_owner: int = int(facility.get("owner", -1))
 		if facility_owner == player_id:
 			return _error("目前設施已經是自己的")
+		if _is_gods() and facility_owner < 0:
+			return _error("購地卡只能購買他人持有的設施")
 		if facility_owner >= 0 and not _valid_player(facility_owner):
 			return _error("目前設施所有權無效")
-		var facility_price: int = _facility_land_price(facility)
+		var facility_price: int = inventory_purchase_price(facility)
 		if facility_price < 0 or int(player.get("cash", 0)) < facility_price:
 			return _error("現金不足")
 		var facility_bank: Dictionary = state.get("bank", {})
@@ -2994,9 +3070,11 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 	var owner_id: int = int(tile.get("owner", -1))
 	if owner_id == player_id:
 		return _error("目前土地已經是自己的")
+	if _is_gods() and owner_id < 0:
+		return _error("購地卡只能購買他人持有的住宅")
 	if owner_id >= 0 and not _valid_player(owner_id):
 		return _error("目前土地所有權無效")
-	var price: int = int(tile.get("cost", 0))
+	var price: int = inventory_purchase_price(tile)
 	if price < 0 or int(player.get("cash", 0)) < price:
 		return _error("現金不足")
 	var purchase_bank: Dictionary = state.get("bank", {})
@@ -3732,7 +3810,11 @@ func _ai_action(player_id: int) -> void:
 					inventory_card_params["target_id"] = player_id
 				elif card_id == "購地":
 					var purchase_owner: Variant = tile.get("owner", null)
-					var purchase_valid: bool = tile.get("kind", "") == "property" and _valid_int(purchase_owner, -1, _players().size() - 1) and int(purchase_owner) != player_id and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= int(tile.get("cost", 0))
+					var purchase_kind_valid: bool = tile.get("kind", "") == "property" or (_is_gods() and tile.get("kind", "") == "facility")
+					var purchase_owner_valid: bool = _valid_int(purchase_owner, -1, _players().size() - 1) and int(purchase_owner) != player_id
+					if _is_gods():
+						purchase_owner_valid = purchase_owner_valid and int(purchase_owner) >= 0
+					var purchase_valid: bool = purchase_kind_valid and purchase_owner_valid and not _is_gods_hospital_action(player) and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= inventory_purchase_price(tile)
 					if not purchase_valid:
 						continue
 				elif card_id == "拆除":

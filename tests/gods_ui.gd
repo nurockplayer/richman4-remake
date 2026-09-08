@@ -1,6 +1,7 @@
 extends SceneTree
 const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
+const Inventory = preload("res://game/core/inventory_rules.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 var checks := 0
 var failures := 0
@@ -62,6 +63,10 @@ func run() -> void:
 	ui._update_all()
 	expect(ui.action_hint_label.text.contains("休息") and not ui.action_hint_label.text.contains("影響停留地產"), "final rest day does not promise an angel property effect")
 	expect(ui.buy_button.disabled and ui.upgrade_button.disabled and not ui.end_turn_button.disabled, "resting controls allow ending the turn without land actions")
+	ui.state["last_roll"] = [1]
+	ui.state.players[0]["hospital_days"] = 3
+	ui._update_all()
+	expect(ui.action_hint_label.text.contains("休息") and not ui.action_hint_label.text.contains("影響停留地產"), "dog-stopped turn does not promise an angel property effect")
 	ui.state["phase"] = "await_roll"
 	ui.state.players[0]["god_id"] = 1
 	ui.state.players[0]["hospital_days"] = 3
@@ -69,6 +74,37 @@ func run() -> void:
 	ui._update_all()
 	expect(ui.board_view.god_objects_data.is_empty() and not labels(ui.players_list).contains("小財神"), "legacy saves ignore foreign god fields")
 	expect(ui.roll_button.text == "擲骰", "legacy saves retain their original turn controls")
+	var purchase_options := {"start_date": {"year":1998,"month":1,"day":1},"original_facilities":true,"original_gods":true}
+	expect(ui._new_game(42,4,loaded.definition,purchase_options),"purchase card UI starts a real v6 game")
+	var purchase_game = ui.game_state
+	purchase_game.state.god_objects=[]
+	purchase_game.state.players[0].position=2
+	purchase_game.state.players[0].previous_position=1
+	purchase_game.state.players[0].god_id=7
+	purchase_game.state.god_objects=[{"id":7,"node":2,"owner":0,"days":7}]
+	Inventory.grant_card(purchase_game.state.inventory_supply,purchase_game.state.players[0].cards,"購地")
+	purchase_game.state.board[2].owner=1
+	purchase_game.state.board[2].building_level=2
+	purchase_game.state.players[1].properties=[2]
+	purchase_game.state.price_index=2
+	purchase_game.state.players[0].cash=3199
+	purchase_game._recalculate_property_values()
+	purchase_game._set_action_options(0)
+	ui._refresh_from_state()
+	ui._update_cards_popup()
+	expect(ui._inventory_purchase_price(ui.state.board[2])==3200,"purchase card UI includes building value and price index")
+	expect(ui.cards_popup_list.find_child("UseCard_購地",true,false).disabled,"purchase card UI rejects cash below the full source price")
+	purchase_game.state.players[0].cash=3200
+	purchase_game._set_action_options(0)
+	ui._refresh_from_state()
+	ui._update_cards_popup()
+	expect(not ui.cards_popup_list.find_child("UseCard_購地",true,false).disabled,"small unlucky god does not block a valid purchase card")
+	purchase_game.state.board[2].owner=-1
+	purchase_game.state.players[1].properties=[]
+	purchase_game._set_action_options(0)
+	ui._refresh_from_state()
+	ui._update_cards_popup()
+	expect(ui.cards_popup_list.find_child("UseCard_購地",true,false).disabled,"v6 purchase card UI excludes unowned improvements")
 	ui.free()
 	print("God UI checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

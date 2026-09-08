@@ -1,6 +1,7 @@
 extends SceneTree
 const Game = preload("res://game/core/game_state.gd")
 const Maps = preload("res://game/content/original_maps.gd")
+const Inventory = preload("res://game/core/inventory_rules.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 var checks := 0
 var failures := 0
@@ -9,8 +10,9 @@ func expect(condition: bool, message: String) -> void:
 	if not condition:
 		failures += 1
 		push_error(message)
-func new_game(gods: bool = true, player_count: int = 4) -> Object:
+func new_game(gods: bool = true, player_count: int = 4, shop: bool = false) -> Object:
 	var raw := Fixture.make()
+	if shop: raw.nodes[5].event_code=15
 	raw.nodes[2].type_and_idx = 4001
 	raw.nodes[3].type_and_idx = 4001
 	raw.nodes[4].type_and_idx = 2001
@@ -41,6 +43,25 @@ func valid(game: Object, label: String) -> void:
 		print(label," validation: ",validation)
 	expect(validation.get("ok",false), label+" save-valid")
 	expect(Game.from_dict(JSON.parse_string(game.to_json())) != null, label+" JSON-restorable")
+func purchase_card_game(gods: bool, facility: bool, owner: int, level: int, price_index: int, god_id: int = 0) -> Object:
+	var game = new_game(gods)
+	var target := 2 if facility else 4
+	at_node(game,target,1 if facility else 2)
+	game.state.price_index=price_index
+	if facility:
+		game._update_facility_records(1,{"owner":owner,"facility_type":1 if level>0 else 0,"building_level":level})
+	else:
+		game.state.board[target].owner=owner
+		game.state.board[target].building_level=level
+		game._update_tile_rent(game.state.board[target])
+	if owner>=0: game.state.players[owner].properties=[target]
+	if god_id>0: attached(game,0,god_id)
+	var grant: Dictionary = Inventory.grant_card(game.state.inventory_supply,game.state.players[0].cards,"購地")
+	expect(grant.get("ok",false),"stage finite-supply purchase card")
+	game._recalculate_property_values()
+	game._set_action_options(0)
+	return game
+
 func _initialize() -> void:
 	var bankrupt = new_game()
 	attached(bankrupt,0,9)
@@ -95,6 +116,23 @@ func _initialize() -> void:
 		expect(not resting.choose_action("buy").get("ok",false),"hospital property action rejects directly")
 		expect(resting.state.players[0].cash==before.players[0].cash and resting.to_dict().rng_state==before.rng_state,"hospital rejection leaves money and RNG unchanged")
 		valid(resting,"hospital skipped turn")
+	for days in [3,1]:
+		for shop in [false,true]:
+			var service_rest = new_game(true,4,shop)
+			at_node(service_rest,5,4)
+			service_rest.state.players[0].hospital_days=days
+			service_rest.state.players[0].points=300
+			service_rest._set_action_options(0)
+			valid(service_rest,"hospital service prestate")
+			expect(service_rest.roll().get("skipped",false),"hospital service turn skips movement")
+			for action in ["take_loan","buy_item","sell_item"]:
+				expect(not service_rest.state.action_options.has(action),"hospital rest disables location service even on final day: "+action)
+			expect(not service_rest.is_shop_available(),"hospital rest hides shop availability even on final day")
+			expect(service_rest.state.action_options.has("buy_stock") and service_rest.state.action_options.has("sell_stock"),"hospital rest preserves existing stock access while source permission remains unknown")
+			var before: Dictionary = service_rest.to_dict()
+			expect(not service_rest.choose_action("buy_item",{"item_kind":"tool","item_id":"路障","quantity":1}).get("ok",false),"resting shop trade rejects publicly")
+			expect(service_rest.to_dict()==before,"resting shop rejection preserves supply and finances")
+			valid(service_rest,"hospital service completion")
 	var legacy = new_game(false)
 	legacy.state.players[0].hospital_days=3
 	legacy.state.players[0].turtle_days=1
@@ -148,5 +186,93 @@ func _initialize() -> void:
 				expect(fees.state.players[0].rent_shield==shield,"unavailable creditor does not consume fee shield")
 				expect(fees.to_dict().rng_state==before.rng_state,"unavailable creditor does not spin fee roulette")
 				valid(fees,"unavailable creditor settled")
+	for target_case in [{"node":1,"start":0,"previous":-1,"owned":false}, {"node":5,"start":4,"previous":3,"owned":false}, {"node":4,"start":2,"previous":1,"owned":false}, {"node":4,"start":2,"previous":1,"owned":true}, {"node":2,"start":1,"previous":0,"owned":false}, {"node":2,"start":1,"previous":0,"owned":true}]:
+		var dog_game = new_game()
+		var target: int = target_case.node
+		at_node(dog_game,target_case.start,target_case.previous)
+		dog_game.state.players[0].turtle_days=1
+		for i in range(1,4):
+			dog_game.state.players[i].position=0
+			dog_game.state.players[i].previous_position=1
+		if target_case.owned:
+			if target==2:
+				dog_game._update_facility_records(1,{"owner":1,"facility_type":1,"building_level":2})
+				dog_game.state.players[1].properties=[2]
+			else:
+				dog_game.state.board[target].owner=1
+				dog_game.state.board[target].building_level=1
+				dog_game.state.players[1].properties=[target]
+				dog_game._update_tile_rent(dog_game.state.board[target])
+		attached(dog_game,0,9)
+		dog_game.state.god_objects.append({"id":11,"node":target,"owner":-1,"days":0})
+		dog_game._recalculate_property_values()
+		dog_game._set_action_options(0)
+		valid(dog_game,"dog public movement prestate")
+		var cash_before: int = dog_game.state.players[0].cash
+		var points_before: int = dog_game.state.players[0].points
+		var level_before: int = dog_game.state.board[target].building_level
+		var event_start: int = dog_game.state.event_log.size()
+		expect(dog_game.roll().get("ok",false),"dog roll accepted")
+		if dog_game.state.phase=="await_route":
+			expect(dog_game.choose_route(target).get("ok",false),"dog chosen route accepted")
+		expect(dog_game.state.players[0].hospital_days==3 and dog_game.state.phase=="await_action","dog bite establishes hospitalized action boundary")
+		expect(dog_game.state.players[0].cash==cash_before,"dog collision does not collect final housing or facility fees")
+		expect(dog_game.state.players[0].points==points_before,"dog collision does not award final points")
+		for action in ["buy","build","upgrade","take_loan","buy_item","sell_item"]:
+			expect(not dog_game.state.action_options.has(action),"hospitalized dog collision exposes no location action "+action)
+		expect(not dog_game.choose_action("buy").get("ok",false),"dog collision purchase rejects at public action boundary")
+		expect(dog_game.state.players[0].cash==cash_before,"dog collision purchase rejection leaves cash unchanged")
+		if target==5:
+			var pass_index := -1
+			var dog_index := -1
+			var landed_count := 0
+			for index in range(event_start,dog_game.state.event_log.size()):
+				var event: Dictionary = dog_game.state.event_log[index]
+				if event.type=="bank_passed": pass_index=index
+				if event.type=="dog_encounter": dog_index=index
+				if event.type=="bank_landed": landed_count+=1
+			expect(pass_index>=event_start and pass_index<dog_index,"source bank pass happens before dog collision")
+			expect(dog_game.state.bank_access and not dog_game.state.bank_landing and landed_count==0,"dog retains completed bank pass without final bank landing")
+			expect(dog_game.state.action_options.has("deposit") and dog_game.state.action_options.has("withdraw"),"dog collision preserves the completed bank-pass service")
+		valid(dog_game,"dog collision completion")
+		expect(dog_game.choose_action("end_turn").get("ok",false),"dog turn ends normally")
+		expect(dog_game.state.board[target].building_level==level_before,"dog-stopped turn does not settle attached angel on collision land")
+		valid(dog_game,"dog turn ended")
+	for facility in [false,true]:
+		for price_index in [1,2]:
+			for god_id in [0,7,8,15]:
+				var purchase = purchase_card_game(true,facility,1,2,price_index,god_id)
+				valid(purchase,"source purchase card prestate")
+				var before: Dictionary = purchase.to_dict()
+				var price: int = 1600*price_index
+				var result: Dictionary = purchase.choose_action("use_card",{"card_id":"購地"})
+				expect(result.get("ok",false),"purchase card bypasses ordinary god investment restriction")
+				expect(purchase.state.players[0].cash==before.players[0].cash-price,"purchase card charges land and existing building value at price index")
+				expect(purchase.state.players[1].deposit==before.players[1].deposit+price,"purchase card pays full value into former owner's deposit")
+				var target := 2 if facility else 4
+				expect(purchase.state.board[target].owner==0 and purchase.state.board[target].building_level==2,"purchase card preserves acquired improvements")
+				if facility: expect(purchase.state.board[3].owner==0,"purchase card synchronizes the second facility entrance")
+				valid(purchase,"source purchase card completed")
+			var short_cash = purchase_card_game(true,facility,1,2,price_index)
+			short_cash.state.players[0].cash=1600*price_index-1
+			short_cash._set_action_options(0)
+			valid(short_cash,"purchase card insufficient funds prestate")
+			var before: Dictionary = short_cash.to_dict()
+			expect(not short_cash.choose_action("use_card",{"card_id":"購地"}).get("ok",false),"purchase card rejects one unit below complete price")
+			expect(short_cash.to_dict()==before,"rejected complete-price purchase preserves state and finite card supply")
+		for level in [0,2]:
+			var unowned = purchase_card_game(true,facility,-1,level,1)
+			valid(unowned,"v6 unowned purchase-card prestate")
+			var before: Dictionary = unowned.to_dict()
+			expect(not unowned.choose_action("use_card",{"card_id":"購地"}).get("ok",false),"v6 source purchase card excludes unowned land")
+			expect(unowned.to_dict()==before,"unowned purchase-card rejection is atomic")
+		var old_purchase = purchase_card_game(false,facility,1,2,2)
+		valid(old_purchase,"legacy purchase price prestate")
+		var old_cash: int = old_purchase.state.players[0].cash
+		expect(old_purchase.choose_action("use_card",{"card_id":"購地"}).get("ok",false),"legacy purchase card still works")
+		expect(old_purchase.state.players[0].cash==old_cash-(2000 if facility else 1000),"legacy purchase card retains historical price")
+		var old_unowned = purchase_card_game(false,facility,-1,0,1)
+		valid(old_unowned,"legacy unowned purchase prestate")
+		expect(old_unowned.choose_action("use_card",{"card_id":"購地"}).get("ok",false),"legacy purchase card retains unowned target compatibility")
 	print("God review regression checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)

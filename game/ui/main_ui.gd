@@ -1761,12 +1761,12 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
 		action_hint_label.text = "住院休養中，按休養推進回合" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "輪到你了，請擲骰"
-	elif _has_original_gods() and phase == "await_action" and _as_array(state.get("last_roll", [])).is_empty():
+	elif _has_original_gods() and phase == "await_action" and (int(player.get("hospital_days", 0)) > 0 or _as_array(state.get("last_roll", [])).is_empty()):
 		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
 		action_hint_label.text = "%s將在結束回合時影響停留地產" % OriginalGods.name_for(int(player.god_id))
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [7, 8, 15]:
-		action_hint_label.text = "%s附身，暫時無法購地或建造" % OriginalGods.name_for(int(player.god_id))
+		action_hint_label.text = "%s附身，暫停直接購地與建造" % OriginalGods.name_for(int(player.god_id))
 	else:
 		action_hint_label.text = "請處理目前格位"
 
@@ -1907,6 +1907,8 @@ func _update_cards_popup() -> void:
 			if card_id == "購地":
 				var current_tile := _current_tile()
 				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or _inventory_purchase_price(current_tile) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
+				if _has_original_gods():
+					use.disabled = use.disabled or int(current_tile.get("owner", -1)) < 0 or int(_current_player().get("hospital_days", 0)) > 0
 			if not implemented:
 				use.text = "尚未還原"
 			row.add_child(use)
@@ -2258,6 +2260,8 @@ func _style_box(background: Color, border: Color, radius: int, border_width: int
 	return style
 
 func _inventory_purchase_price(tile: Dictionary) -> int:
+	if game_state != null and game_state.has_method("inventory_purchase_price"):
+		return int(game_state.call("inventory_purchase_price", tile))
 	if tile.get("kind", "") == "facility":
 		return int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
 	return int(tile.get("cost", 0))

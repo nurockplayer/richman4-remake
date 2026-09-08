@@ -3,7 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 GODOT_BIN="${GODOT_BIN:-godot}"
 mkdir -p .local build
-touch build/.gdignore
+# Private source/derived data under .local is read through explicit FileAccess
+# paths. Keep Godot from scanning/importing those multi-GB local caches into a
+# second per-worktree .godot/imported copy.
+touch .local/.gdignore build/.gdignore
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"

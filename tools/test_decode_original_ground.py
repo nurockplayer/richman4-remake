@@ -11,7 +11,7 @@ from decode_original_ground import (
     PAYLOAD_SIZE, PIXEL_OFFSET, PLACEMENT_OFFSET, SIDE, TILE_COUNT,
     FormatError, InputError, decode_ground, decode_source, scene_objects,
 )
-from test_decode_original_images import make_mkf, init_git_repo
+from test_decode_original_images import make_mkf, init_git_repo, read_png_rgba
 from test_import_original import make_map_payload
 
 
@@ -25,6 +25,16 @@ def fixture() -> bytes:
     data[PIXEL_OFFSET + 1024:PIXEL_OFFSET + 2048] = bytes([1]) * 1024
     data[PIXEL_OFFSET + 1024 + 31 * 32 + 31] = 2
     return bytes(data)
+
+
+def road_fixture(chunk_count: int = 17) -> bytes:
+    table = bytearray()
+    pixels = bytearray()
+    for index in range(chunk_count):
+        table.extend(struct.pack("<hhhhI", 1, 1, 62, 46, 2))
+        pixels.extend(struct.pack("<H", 0 if index == 0 else 0x8000))
+    start_offset = 12 + len(table)
+    return b"SMP\0" + struct.pack("<II", chunk_count, start_offset) + table + pixels
 
 
 class GroundTests(unittest.TestCase):
@@ -123,6 +133,64 @@ class GroundTests(unittest.TestCase):
             for output in [source, source / "derived", source.parent]:
                 with self.assertRaises(InputError):
                     decode_source(source, output)
+
+    def test_import_exports_all_game_road_icons_with_word_zero_keying(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source"
+            game = source / "Game"
+            game.mkdir(parents=True)
+            graph = make_map_payload()
+            filler = (b"filler", 6, 0, 0)
+            road = road_fixture()
+            resources = [
+                (self.payload, len(self.payload), 16, 512),
+                (graph, len(graph), 0, 0),
+                *([filler] * 10),
+                (road, len(road), 12 + 17 * 12, 17 * 2),
+            ]
+            archive = make_mkf(resources)
+            (game / "map.mkf").write_bytes(archive)
+            output = Path(root) / "output"
+            manifest = decode_source(source, output)
+            item = manifest["maps"][0]
+            self.assertEqual(item["road_source"]["resource_index"], 12)
+            self.assertEqual(item["road_source"]["chunk_count"], 17)
+            self.assertEqual(item["road_source"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
+            self.assertTrue(item["road_source"]["transparent_word_zero"])
+            self.assertEqual(len(item["road_sprites"]), 17)
+            self.assertEqual(item["road_sprites"][0]["visual_index"], 1)
+            self.assertEqual(item["road_sprites"][-1]["visual_index"], 17)
+            frame = item["road_sprites"][0]["frames"][0]
+            self.assertEqual(frame["logical"], {"width": 1, "height": 1, "anchor_x": 62, "anchor_y": 46})
+            self.assertEqual(frame["width"], 1)
+            self.assertEqual(frame["height"], 1)
+            _, _, rgba = read_png_rgba((output / frame["path"]).read_bytes())
+            self.assertEqual(rgba, bytes((0, 0, 0, 0)))
+            opaque = item["road_sprites"][1]["frames"][0]
+            _, _, opaque_rgba = read_png_rgba((output / opaque["path"]).read_bytes())
+            self.assertEqual(opaque_rgba, bytes((0, 0, 0, 255)))
+
+    def test_import_uses_multiverse_road_resource_24_and_all_58_chunks(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source"
+            edition = source / "MultiverseJourney"
+            edition.mkdir(parents=True)
+            graph = make_map_payload()
+            filler = (b"filler", 6, 0, 0)
+            road = road_fixture(58)
+            resources = [
+                (self.payload, len(self.payload), 16, 512),
+                (graph, len(graph), 0, 0),
+                *([filler] * 22),
+                (road, len(road), 12 + 58 * 12, 58 * 2),
+            ]
+            archive = make_mkf(resources)
+            (edition / "map.mkf").write_bytes(archive)
+            item = decode_source(source, Path(root) / "output")["maps"][0]
+            self.assertEqual(item["road_source"]["resource_index"], 24)
+            self.assertEqual(item["road_source"]["chunk_count"], 58)
+            self.assertEqual(len(item["road_sprites"]), 58)
+            self.assertEqual(item["road_sprites"][-1]["visual_index"], 58)
 
 
 if __name__ == "__main__":

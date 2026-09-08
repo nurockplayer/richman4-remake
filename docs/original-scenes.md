@@ -26,6 +26,14 @@ placement 為 row-major；色號零在底圖中不透明。合成測試驗證非
 土地座標與道路座標不同，房屋使用 land.x/y；方向為 `(8 - field_0x1b) & 7`（目前 rotation=0）。
 SPR 的 x/y 為 anchor，繪製左上角從世界位置減去 anchor。
 
+道路／事件節點圖示使用地圖圖資的獨立 SMP：Game 為 `map.mkf` resource 12、17 個圖塊，
+資料片為 resource 24、58 個圖塊。原作繪圖路徑讀取節點 `field_0x22`，以 1-based 值
+索引 SMP 圖塊；值 0 不繪製。匯入器會輸出每個圖塊，manifest 的 `road_sprites` 以
+`visual_index` 對應並保留 PNG 像素尺寸及 `frame.logical` 的尺寸／anchor；`road_source`
+同時綁定 map archive 與 SMP payload SHA。SMP 的 16-bit word 0 只在這個已核實的道路
+輸出路徑作透明 color-key；一般 `write_png` 呼叫預設仍輸出不透明像素，`0x8000` 的黑色
+word 也保持不透明。
+
 ## 已驗證與差異
 
 已在私人 macOS 套件查看台灣地圖，擲骰、直接點選分岔與縮放可運作。
@@ -52,3 +60,8 @@ manifest 的 `world_rect` 是 GND 圖塊格式推導的地圖世界範圍，不�
 Board 明確使用 `TEXTURE_FILTER_NEAREST`，保留原圖像素邊界。合成測試用 4／8／16 像素
 背景與住宅／人物 texture，驗證相同 logical 矩形、anchor、鏡頭與選路命中位置；包裝驗證亦接受
 同一 world_rect 的不同像素尺寸。像素上限 16384 是載入資源限制，不是遊戲幾何。
+
+目前 Board 以來源 GND 的平面 world 座標繪製路網，將節點圖示放在 map node 座標，
+並讓道路圖示位於住宅與角色圖層之下。缺少或驗證失敗的圖示會保留 graph edge 與節點
+命中區，避免路線變成不可見。來源執行檔另有透視／旋轉的座標投影表；本實作尚未還原
+原版 perspective 或 rotation，也未宣稱目前視圖是原版鏡頭。

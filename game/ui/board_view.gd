@@ -23,6 +23,7 @@ var visuals = OriginalVisuals.new()
 var _scene: Dictionary = {}
 var _background: Texture2D
 var _scene_draws: Array = []
+var _graph_fallback_edges := false
 var _focused_player_position := Vector2i(-1, -1)
 var _focused_map_identity := ""
 
@@ -261,6 +262,7 @@ func _draw_original_board() -> void:
 	if _background != null:
 		var bounds: Rect2 = visuals.world_rect(_scene)
 		draw_texture_rect(_background, Rect2(_map_to_screen(bounds.position), bounds.size * _map_scale() * map_zoom), false)
+	_graph_fallback_edges = _background == null or _road_icons_missing(geometry)
 	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
 	_draw_text("滾輪縮放 · 中鍵／右鍵平移", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
 	for index in range(geometry.size()):
@@ -270,7 +272,7 @@ func _draw_original_board() -> void:
 			var neighbor := int(neighbor_value)
 			if neighbor < 0 or neighbor >= geometry.size() or neighbor <= index:
 				continue
-			if _background == null:
+			if _graph_fallback_edges:
 				draw_line(from, _node_positions[neighbor], Color("#638697"), 2.0, true)
 	var current_position := _current_position()
 	if current_position >= 0 and current_position < _node_positions.size():
@@ -281,9 +283,20 @@ func _draw_original_board() -> void:
 	for index in range(geometry.size()):
 		_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
 	_scene_draws.clear()
+	_draw_original_node_icons(geometry)
 	_draw_original_houses()
 	_draw_original_players()
-	_scene_draws.sort_custom(func(a, b): return a.center.y < b.center.y)
+	_scene_draws.sort_custom(func(a, b):
+		var a_is_road: bool = a.get("kind", "") == "road_icon"
+		var b_is_road: bool = b.get("kind", "") == "road_icon"
+		if a_is_road != b_is_road:
+			return a_is_road
+		if a_is_road:
+			return a.get("center", Vector2.ZERO).y < b.get("center", Vector2.ZERO).y
+		if is_equal_approx(float(a.get("center", Vector2.ZERO).y), float(b.get("center", Vector2.ZERO).y)):
+			return int(a.get("layer", 1)) < int(b.get("layer", 1))
+		return a.get("center", Vector2.ZERO).y < b.get("center", Vector2.ZERO).y
+	)
 	for job in _scene_draws:
 		_draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
 		if job.has("color"):
@@ -291,6 +304,11 @@ func _draw_original_board() -> void:
 
 func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: float) -> void:
 	if _background != null:
+		var visual_index := int(tile.get("visual_index", 0))
+		var road_frame := _road_icon_frame(tile)
+		if visual_index > 0 and (road_frame.is_empty() or visuals.texture(road_frame) == null):
+			draw_circle(center, maxf(4.0, radius * 0.32), Color("#21354a"))
+			draw_arc(center, maxf(4.0, radius * 0.32), 0.0, TAU, 20, Color("#8fb0bc"), 1.0)
 		var owner := int(tile.get("owner", -1))
 		if owner >= 0:
 			draw_circle(center, 4.0, PLAYER_COLORS[owner % PLAYER_COLORS.size()])
@@ -336,7 +354,7 @@ func _draw_original_players() -> void:
 			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
 			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index))) if _background != null else {}
 			if visuals.texture(frame) != null:
-				_scene_draws.append({"frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
+				_scene_draws.append({"kind": "player", "layer": 2, "frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
 				continue
 			var player_color: Color = PLAYER_COLORS[player_index % PLAYER_COLORS.size()]
 			var active := player_index == current_player_index
@@ -626,6 +644,32 @@ func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bo
 	draw_texture_rect(sprite, visuals.sprite_rect(frame, center, scale_factor), false)
 	return true
 
+func _road_icon_frame(tile: Dictionary) -> Dictionary:
+	return visuals.road(_scene, int(tile.get("visual_index", 0)))
+
+func _road_icons_missing(geometry: Array) -> bool:
+	if not visuals.has_road_sprites(_scene):
+		return true
+	for index in range(geometry.size()):
+		var tile: Dictionary = _merged_tile(index)
+		if int(tile.get("visual_index", 0)) <= 0:
+			continue
+		var frame := _road_icon_frame(tile)
+		if frame.is_empty() or visuals.texture(frame) == null:
+			return true
+	return false
+
+func _draw_original_node_icons(geometry: Array) -> void:
+	for index in range(geometry.size()):
+		var tile: Dictionary = _merged_tile(index)
+		var visual_index := int(tile.get("visual_index", 0))
+		if visual_index <= 0:
+			continue
+		var frame := visuals.road(_scene, visual_index)
+		if frame.is_empty() or visuals.texture(frame) == null:
+			continue
+		_scene_draws.append({"kind": "road_icon", "layer": 0, "node_index": index, "visual_index": visual_index, "frame": frame, "center": _node_positions[index]})
+
 func _draw_original_houses() -> void:
 	if _background == null:
 		return
@@ -640,6 +684,6 @@ func _draw_original_houses() -> void:
 		var tile: Dictionary = properties[int(land.id)]
 		var level := int(tile.get("building_level", 0))
 		if level > 0:
-			_scene_draws.append({"frame": visuals.house(_scene, level, int(land.get("direction", 0))), "center": _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0))))})
+			_scene_draws.append({"kind": "house", "layer": 1, "frame": visuals.house(_scene, level, int(land.get("direction", 0))), "center": _map_to_screen(Vector2(float(land.get("x", 0)), float(land.get("y", 0))))})
 	for item in _scene.get("scenery", []):
-		_scene_draws.append({"frame": visuals.scenery(_scene, int(item.get("sprite_id", 0)), int(item.direction)), "center": _map_to_screen(Vector2(float(item.x), float(item.y)))})
+		_scene_draws.append({"kind": "scenery", "layer": 1, "frame": visuals.scenery(_scene, int(item.get("sprite_id", 0)), int(item.direction)), "center": _map_to_screen(Vector2(float(item.x), float(item.y)))})

@@ -33,6 +33,8 @@ TILE_COUNT = SIDE * SIDE
 PLACEMENT_OFFSET = 0x210
 PIXEL_OFFSET = 0x2A90
 PAYLOAD_SIZE = 0x512A90
+ROAD_RESOURCE_INDEX = {"Game": 12, "MultiverseJourney": 24}
+ROAD_CHUNK_COUNT = {"Game": 17, "MultiverseJourney": 58}
 
 
 def decode_ground(payload: bytes) -> VisualResource:
@@ -80,6 +82,50 @@ def export_sprite(archive, index: int, stage: Path, relative: Path) -> dict | No
                                    "anchor_x": chunk.x, "anchor_y": chunk.y}})
     return {"resource_index": index, "payload_sha256": hashlib.sha256(payload).hexdigest(),
             "frames": frames}
+
+
+def export_road_sprites(archive, edition: str, stage: Path, relative: Path) -> dict | None:
+    """Export the edition's verified node-icon SMP, preserving 1-based IDs."""
+    index = ROAD_RESOURCE_INDEX[edition]
+    if index >= len(archive.entries):
+        return None
+    entry = archive.entries[index]
+    payload = decode_entry(archive, entry)
+    visual = parse_visual_resource(payload, entry)
+    expected_chunks = ROAD_CHUNK_COUNT[edition]
+    if visual is None or visual.signature != "SMP" or visual.chunk_count != expected_chunks:
+        raise FormatError(
+            f"expected {expected_chunks}-chunk SMP road icon resource at {archive.path}:{index}"
+        )
+    sprites = []
+    for chunk in visual.chunks:
+        image_path = relative / f"chunk-{chunk.index:04d}.png"
+        path = stage / image_path
+        write_png(path, chunk, visual, pixel_format="rgb555", transparent_word_zero=True)
+        frame = {
+            "path": image_path.as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "width": chunk.width,
+            "height": chunk.height,
+            "logical": {
+                "width": chunk.width,
+                "height": chunk.height,
+                "anchor_x": chunk.x,
+                "anchor_y": chunk.y,
+            },
+        }
+        # Map graph field_0x22 is a 1-based resource chunk number.  Keep the
+        # explicit value beside a one-frame direction list so the scene
+        # manifest uses the same logical/anchor contract as SPR sprites.
+        sprites.append({"visual_index": chunk.index + 1, "frames": [frame]})
+    return {
+        "resource_index": index,
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "signature": visual.signature,
+        "chunk_count": visual.chunk_count,
+        "transparent_word_zero": True,
+        "sprites": sprites,
+    }
 
 
 def scene_objects(graph: bytes, parsed: dict) -> list[dict]:
@@ -139,6 +185,12 @@ def decode_source(source: Path, output: Path) -> dict:
                 continue
             archive = parse_mkf(archive_path)
             archive_hash = hashlib.sha256(archive.data).hexdigest()
+            road_sprites = export_road_sprites(
+                archive,
+                edition,
+                stage,
+                Path("images") / edition / "road-icons",
+            )
             for entry in archive.entries:
                 # Known map resources alternate GND and graph, before sprites.
                 if entry.index % 2 or archive.payload(entry)[:4] != b"GND\0":
@@ -171,6 +223,18 @@ def decode_source(source: Path, output: Path) -> dict:
                     if sprite is not None:
                         sprite["sprite_id"] = sprite_id
                         scenery_sprites.append(sprite)
+                road_source = {}
+                road_frames = []
+                if road_sprites is not None:
+                    road_source = {
+                        "archive_sha256": archive_hash,
+                        "resource_index": road_sprites["resource_index"],
+                        "payload_sha256": road_sprites["payload_sha256"],
+                        "signature": road_sprites["signature"],
+                        "chunk_count": road_sprites["chunk_count"],
+                        "transparent_word_zero": road_sprites["transparent_word_zero"],
+                    }
+                    road_frames = road_sprites["sprites"]
                 manifest["maps"].append({
                     "id": f"{edition}:{map_number}",
                     "archive": f"{edition}/map.mkf",
@@ -185,6 +249,7 @@ def decode_source(source: Path, output: Path) -> dict:
                               for land in graph_data["lands"]],
                     "house_sprites": house_sprites,
                     "scenery": objects, "scenery_sprites": scenery_sprites,
+                    "road_source": road_source, "road_sprites": road_frames,
                     "image": {"path": relative.as_posix(),
                               "width": SIDE * TILE_SIZE, "height": SIDE * TILE_SIZE,
                               "sha256": hashlib.sha256(path.read_bytes()).hexdigest()},

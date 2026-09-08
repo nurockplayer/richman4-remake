@@ -29,7 +29,7 @@ func scene_for(definition: Dictionary) -> Dictionary:
 	var identity := "%s:%d" % [source.get("edition", ""), int(source.get("map_number", 0))]
 	for entry in manifest.get("maps", []):
 		if entry is Dictionary and entry.get("id") == identity and entry.get("source_file_sha256") == source.get("source_file_sha256") and entry.get("graph_payload_sha256") == source.get("payload_sha256"):
-			if world_rect(entry).has_area() and entry.get("lands") is Array and entry.get("house_sprites") is Array and entry.get("scenery", []) is Array and entry.get("scenery_sprites", []) is Array:
+			if world_rect(entry).has_area() and entry.get("lands") is Array and entry.get("house_sprites") is Array and entry.get("scenery", []) is Array and entry.get("scenery_sprites", []) is Array and _valid_road_source(entry, source) and _valid_road_sprites(entry.get("road_sprites", [])):
 				var valid := true
 				for land in entry.lands + entry.get("scenery", []):
 					if not land is Dictionary:
@@ -73,6 +73,18 @@ func house(scene: Dictionary, level: int, direction: int) -> Dictionary:
 func scenery(scene: Dictionary, sprite_id: int, direction: int) -> Dictionary:
 	return _frame(scene.get("scenery_sprites", []), "sprite_id", sprite_id, direction)
 
+func road(scene: Dictionary, visual_index: int) -> Dictionary:
+	# The graph stores a 1-based chunk number; zero intentionally suppresses
+	# an icon.  SMP resources are exported as one-frame sprite records so they
+	# share the SPR logical size and anchor contract.
+	if visual_index <= 0:
+		return {}
+	return _frame(scene.get("road_sprites", []), "visual_index", visual_index, 0)
+
+func has_road_sprites(scene: Dictionary) -> bool:
+	var sprites: Variant = scene.get("road_sprites", [])
+	return sprites is Array and not sprites.is_empty()
+
 func _frame(sprites: Array, field: String, value: int, direction: int) -> Dictionary:
 	for sprite in sprites:
 		if not sprite is Dictionary or sprite.get(field) != value:
@@ -87,6 +99,32 @@ func _frame(sprites: Array, field: String, value: int, direction: int) -> Dictio
 					return {}
 			return frame
 	return {}
+
+func _valid_frame(frame: Variant) -> bool:
+	if not frame is Dictionary or not frame.get("logical") is Dictionary:
+		return false
+	for key in ["anchor_x", "anchor_y", "width", "height"]:
+		if not _number(frame.logical.get(key), 1 if key in ["width", "height"] else -65535, 65535):
+			return false
+	return true
+
+func _valid_road_sprites(value: Variant) -> bool:
+	if not value is Array:
+		return false
+	for sprite in value:
+		if not sprite is Dictionary or not _number(sprite.get("visual_index"), 1, 65535):
+			return false
+		var frames: Variant = sprite.get("frames", [])
+		if not frames is Array or frames.size() != 1 or not _valid_frame(frames[0]):
+			return false
+	return true
+
+func _valid_road_source(entry: Dictionary, source: Dictionary) -> bool:
+	var value: Variant = entry.get("road_source", {})
+	if not value is Dictionary or value.is_empty():
+		return true
+	var expected_resource := 12 if str(source.get("edition", "")) == "Game" else 24
+	return value.get("archive_sha256", "") == source.get("source_file_sha256", "") and int(value.get("resource_index", -1)) == expected_resource and value.get("signature", "") == "SMP" and value.get("transparent_word_zero", false) == true and _number(value.get("chunk_count"), 1, 65535)
 
 func _number(value: Variant, low: int, high: int) -> bool:
 	return (value is int or value is float) and is_finite(float(value)) and floor(float(value)) == float(value) and value >= low and value <= high

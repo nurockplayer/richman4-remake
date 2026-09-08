@@ -10,6 +10,7 @@ extends RefCounted
 
 const SAVE_VERSION = 1
 const GRAPH_SAVE_VERSION = 2
+const SETUP_SAVE_VERSION = 3
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -28,6 +29,17 @@ const INT64_MIN = -9223372036854775808
 const INT64_MAX = 9223372036854775807
 const MIN_SEED = -2147483648
 const MAX_SEED = 2147483647
+const SETUP_INITIAL_FUNDS = [300000, 200000, 100000, 50000, 30000, 10000]
+const SETUP_DAY_LIMITS = [0, 730, 365, 182, 91, 30]
+const SETUP_WEALTH_MULTIPLIERS = [0, 100, 50, 10, 5, 3]
+const AI_CASH_RATIOS = [50, 40, 70, 60, 40, 70, 50, 40, 60, 50, 55, 80]
+const SETUP_CHARACTER_NAMES = [
+	"約翰喬", "沙隆巴斯", "忍太郎", "錢夫人", "阿土伯", "莎拉公主",
+	"宮本寶藏", "糖糖", "烏咪", "孫小美", "小丹尼", "金貝貝",
+]
+const SETUP_CHARACTER_COUNT = 12
+const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
+const GameCalendar = preload("res://game/core/game_calendar.gd")
 
 const VEHICLE_DICE = {
 	"walking": 1,
@@ -91,17 +103,24 @@ var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 
-static func new_game(seed_value: int, player_count: int = 4) -> Richman4GameState:
+static func new_game(seed_value: int, player_count: int = 4, options: Dictionary = {}) -> Richman4GameState:
 	if seed_value < MIN_SEED or seed_value > MAX_SEED:
 		return null
 	if player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		return null
+	if not options.is_empty():
+		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
+		if setup_options.is_empty():
+			return null
+		var setup_game = new()
+		setup_game._initialize_setup(seed_value, player_count, setup_options)
+		return setup_game
 	var game = new()
 	game._initialize(seed_value, player_count)
 	return game
 
 
-static func new_game_on_board(seed_value: int, player_count: int, definition: Dictionary) -> Richman4GameState:
+static func new_game_on_board(seed_value: int, player_count: int, definition: Dictionary, options: Dictionary = {}) -> Richman4GameState:
 	if seed_value < MIN_SEED or seed_value > MAX_SEED:
 		return null
 	if player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
@@ -109,9 +128,146 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 	var validation: Dictionary = validate_board_definition(definition)
 	if not bool(validation.get("ok", false)):
 		return null
+	if not options.is_empty():
+		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
+		if setup_options.is_empty():
+			return null
+		var setup_game = new()
+		setup_game._initialize_graph_setup(seed_value, player_count, validation["definition"], setup_options)
+		return setup_game
 	var game := new()
 	game._initialize_graph(seed_value, player_count, validation["definition"])
 	return game
+
+
+static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids"]
+	for key in options.keys():
+		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
+			return {}
+	if not options.has("start_date") or typeof(options.get("start_date")) != TYPE_DICTIONARY:
+		return {}
+	var start_date: Dictionary = options["start_date"]
+	var date_keys: Array = ["year", "month", "day"]
+	if start_date.size() != date_keys.size():
+		return {}
+	for key in date_keys:
+		if not start_date.has(key):
+			return {}
+	if not GameCalendar.is_valid(start_date):
+		return {}
+	var normalized_start_date: Dictionary = {
+		"year": int(start_date["year"]),
+		"month": int(start_date["month"]),
+		"day": int(start_date["day"]),
+	}
+
+	var initial_fund: int = 200000
+	if options.has("initial_fund"):
+		var fund_value: Variant = options["initial_fund"]
+		if not _valid_int(fund_value) or not SETUP_INITIAL_FUNDS.has(int(fund_value)):
+			return {}
+		initial_fund = int(fund_value)
+	var day_limit: int = 0
+	if options.has("day_limit"):
+		var limit_value: Variant = options["day_limit"]
+		if not _valid_int(limit_value) or not SETUP_DAY_LIMITS.has(int(limit_value)):
+			return {}
+		day_limit = int(limit_value)
+	var wealth_multiplier: int = 0
+	if options.has("wealth_multiplier"):
+		var multiplier_value: Variant = options["wealth_multiplier"]
+		if not _valid_int(multiplier_value) or not SETUP_WEALTH_MULTIPLIERS.has(int(multiplier_value)):
+			return {}
+		wealth_multiplier = int(multiplier_value)
+
+	var character_ids: Array = []
+	if options.has("character_ids"):
+		var character_value: Variant = options["character_ids"]
+		if typeof(character_value) != TYPE_ARRAY or character_value.size() != player_count:
+			return {}
+		var seen_characters: Dictionary = {}
+		for character_id in character_value:
+			if not _valid_int(character_id, 0, SETUP_CHARACTER_COUNT - 1):
+				return {}
+			var normalized_character_id: int = int(character_id)
+			if seen_characters.has(normalized_character_id):
+				return {}
+			seen_characters[normalized_character_id] = true
+			character_ids.append(normalized_character_id)
+	else:
+		for player_id in range(player_count):
+			character_ids.append(player_id)
+
+	return {
+		"initial_fund": initial_fund,
+		"day_limit": day_limit,
+		"wealth_multiplier": wealth_multiplier,
+		"start_date": normalized_start_date,
+		"character_ids": character_ids,
+	}
+
+
+func _initialize_setup(seed_value: int, player_count: int, options: Dictionary) -> void:
+	_initialize(seed_value, player_count)
+	_configure_setup(options, player_count)
+
+
+func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dictionary, options: Dictionary) -> void:
+	_initialize_graph(seed_value, player_count, definition)
+	_configure_setup(options, player_count)
+
+
+func _configure_setup(options: Dictionary, player_count: int) -> void:
+	state["version"] = SETUP_SAVE_VERSION
+	state["initial_fund"] = int(options["initial_fund"])
+	state["day_limit"] = int(options["day_limit"])
+	state["wealth_multiplier"] = int(options["wealth_multiplier"])
+	state["start_date"] = options["start_date"].duplicate(true)
+	state["date"] = options["start_date"].duplicate(true)
+	state["elapsed"] = 0
+	state["last_settled_month"] = {}
+	state["character_ids"] = options["character_ids"].duplicate(true)
+	var start_position: int = int(state.get("start_position", START_POSITION))
+	state["players"] = _build_setup_players(
+		player_count,
+		int(options["initial_fund"]),
+		options["character_ids"],
+		start_position,
+		_is_graph(),
+	)
+	var total_deposits: int = 0
+	for player in state["players"]:
+		total_deposits += int(player.get("deposit", 0))
+	var bank: Dictionary = state.get("bank", {})
+	bank["deposits"] = total_deposits
+	state["bank"] = bank
+	_sync_state()
+	_set_action_options(0)
+
+
+func _build_setup_players(
+	player_count: int,
+	initial_fund: int,
+	character_ids: Array,
+	start_position: int,
+	graph_mode: bool,
+) -> Array:
+	var players: Array = _build_players(player_count, start_position, graph_mode)
+	for player_id in range(player_count):
+		var player: Dictionary = players[player_id]
+		var character_id: int = int(character_ids[player_id])
+		var cash_ratio: int = 50 if player_id == 0 else int(AI_CASH_RATIOS[character_id])
+		player["character_id"] = character_id
+		player["name"] = SETUP_CHARACTER_NAMES[character_id]
+		player["init_cash_ratio"] = cash_ratio
+		player["cash"] = int(float(initial_fund * cash_ratio) / 100.0)
+		player["deposit"] = initial_fund - int(player["cash"])
+	return players
+
+
+func _is_setup() -> bool:
+	return int(state.get("version", 0)) == SETUP_SAVE_VERSION
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -315,6 +471,22 @@ func _sync_state() -> void:
 	state["rng_state"] = int(_rng.state)
 	state["rng_state_text"] = str(_rng.state)
 	var day: int = int(state.get("day", 1))
+	if _is_setup():
+		var elapsed: int = max(0, day - 1)
+		var start_date: Dictionary = state.get("start_date", {})
+		var current_date: Dictionary = GameCalendar.add_days(start_date, elapsed)
+		if not current_date.is_empty():
+			state["elapsed"] = elapsed
+			state["date"] = current_date
+			state["month"] = int(current_date["month"])
+			state["day_of_month"] = int(current_date["day"])
+			state["weekday"] = GameCalendar.weekday(current_date)
+		else:
+			state["elapsed"] = elapsed
+		var market: Dictionary = state.get("market", {})
+		market["open"] = not _is_sunday()
+		state["market"] = market
+		return
 	state["day_of_month"] = ((day - 1) % DAYS_PER_MONTH) + 1
 	state["month"] = ((day - 1) / DAYS_PER_MONTH) + 1
 	state["weekday"] = ((day - 1) % 7) + 1
@@ -413,7 +585,7 @@ func _set_action_options(player_id: int) -> void:
 			if level < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
 	if tile.get("kind", "") == "bank":
-		state["bank_landing"] = true
+		state["bank_landing"] = bank_open
 		if bank_open:
 			options.push_front("take_loan")
 	if bool(state.get("bank_access", false)) and bank_open:
@@ -1212,7 +1384,8 @@ func end_turn() -> Dictionary:
 	if bool(player.get("alive", false)):
 		player["turns_taken"] = int(player.get("turns_taken", 0)) + 1
 		_repay_due_loan(player_id)
-		_tick_market()
+		if not _is_setup():
+			_tick_market()
 	state["bank_access"] = false
 	state["bank_landing"] = false
 	state["doubles_count"] = 0
@@ -1239,19 +1412,31 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	if wraps:
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
-		var market: Dictionary = state.get("market", {})
-		var trends: Dictionary = market.get("trends", {})
-		for symbol in trends.keys():
-			var trend: Dictionary = trends[symbol]
-			trend["days"] = int(trend.get("days", 0)) - 1
-			if int(trend["days"]) <= 0:
-				trends.erase(symbol)
-			else:
-				trends[symbol] = trend
-		market["trends"] = trends
-		state["market"] = market
-		_apply_month_boundary()
-	state["turn"] = int(state.get("turn", 1)) + 1
+		if _is_setup():
+			# The original flow advances the calendar first, settles a deadline or
+			# wealth target, then updates the market and pays month-end interest.
+			state["turn"] = int(state.get("turn", 1)) + 1
+			_sync_state()
+			if _check_setup_end_conditions():
+				return
+			_tick_market()
+			_decrement_market_trends()
+			_apply_month_boundary()
+		else:
+			var market: Dictionary = state.get("market", {})
+			var trends: Dictionary = market.get("trends", {})
+			for symbol in trends.keys():
+				var trend: Dictionary = trends[symbol]
+				trend["days"] = int(trend.get("days", 0)) - 1
+				if int(trend["days"]) <= 0:
+					trends.erase(symbol)
+				else:
+					trends[symbol] = trend
+			market["trends"] = trends
+			state["market"] = market
+			_apply_month_boundary()
+	if not (_is_setup() and wraps):
+		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
 	state["phase"] = "await_roll"
 	state["last_roll"] = []
@@ -1262,8 +1447,29 @@ func _advance_to_next_alive(previous_id: int) -> void:
 
 func _apply_month_boundary() -> void:
 	_sync_state()
+	if _is_setup():
+		var elapsed: int = int(state.get("elapsed", 0))
+		if elapsed <= 0:
+			return
+		var start_date: Dictionary = state.get("start_date", {})
+		var previous_date: Dictionary = GameCalendar.add_days(start_date, elapsed - 1)
+		var current_date: Dictionary = state.get("date", {})
+		if previous_date.is_empty() or current_date.is_empty() or int(previous_date["month"]) == int(current_date["month"]):
+			return
+		var last_settled_month: Dictionary = state.get("last_settled_month", {})
+		if not last_settled_month.is_empty() and int(last_settled_month.get("year", -1)) == int(previous_date["year"]) and int(last_settled_month.get("month", -1)) == int(previous_date["month"]):
+			return
+		_apply_deposit_interest()
+		state["last_settled_month"] = {"year": int(previous_date["year"]), "month": int(previous_date["month"])}
+		_record_event("month_end_settlement", {"month": int(previous_date["month"]), "year": int(previous_date["year"])})
+		return
 	if int(state.get("day_of_month", 1)) != DAYS_PER_MONTH:
 		return
+	_apply_deposit_interest()
+	_record_event("month_end_settlement", {"month": int(state.get("month", 1))})
+
+
+func _apply_deposit_interest() -> void:
 	var players: Array = _players()
 	for player in players:
 		if not bool(player.get("alive", false)) or int(player.get("loan", 0)) > 0:
@@ -1280,7 +1486,6 @@ func _apply_month_boundary() -> void:
 		bank["cash"] = int(bank.get("cash", 0)) - interest
 		state["bank"] = bank
 		_record_event("monthly_interest", {"player_id": int(player["id"]), "amount": interest})
-	_record_event("month_end_settlement", {"month": int(state.get("month", 1))})
 
 
 func _repay_due_loan(player_id: int) -> void:
@@ -1333,6 +1538,20 @@ func _tick_market() -> void:
 	_record_event("market_tick", {"prices": prices.duplicate(true)})
 
 
+func _decrement_market_trends() -> void:
+	var market: Dictionary = state.get("market", {})
+	var trends: Dictionary = market.get("trends", {})
+	for symbol in trends.keys():
+		var trend: Dictionary = trends[symbol]
+		trend["days"] = int(trend.get("days", 0)) - 1
+		if int(trend["days"]) <= 0:
+			trends.erase(symbol)
+		else:
+			trends[symbol] = trend
+	market["trends"] = trends
+	state["market"] = market
+
+
 func _update_tile_rent(tile: Dictionary) -> void:
 	if _is_graph() and tile.has("rent_by_level") and tile.get("rent_by_level") is Array:
 		var rents: Array = tile.get("rent_by_level", [])
@@ -1369,6 +1588,75 @@ func _bank_subtract_cash(amount: int) -> void:
 	var bank: Dictionary = state.get("bank", {})
 	bank["cash"] = max(0, int(bank.get("cash", 0)) - max(0, amount))
 	state["bank"] = bank
+
+
+func _player_wealth(player_id: int) -> int:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return 0
+	var wealth: int = int(player.get("cash", 0)) + int(player.get("deposit", 0)) - int(player.get("loan", 0))
+	var prices: Dictionary = state.get("market", {}).get("prices", {})
+	var stocks: Dictionary = player.get("stocks", {})
+	for symbol in STOCK_SYMBOLS:
+		# The original routine truncates the per-share market value to an
+		# integer, which is already represented by integer prices in this state.
+		wealth += int(stocks.get(symbol, 0)) * int(prices.get(symbol, STOCK_BASE_PRICES[symbol]))
+	for property_id in player.get("properties", []):
+		var tile: Dictionary = _tile_at(int(property_id))
+		if tile.is_empty():
+			continue
+		wealth += int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
+	return wealth
+
+
+func get_player_wealth(player_id: int) -> int:
+	return _player_wealth(player_id)
+
+
+func _richest_alive_player() -> int:
+	var winner: int = -1
+	var best_wealth: int = INT64_MIN
+	for player in _players():
+		if not bool(player.get("alive", false)):
+			continue
+		var player_id: int = int(player.get("id", -1))
+		var wealth: int = _player_wealth(player_id)
+		# Strictly greater preserves the earlier player on a tie.
+		if winner < 0 or wealth > best_wealth:
+			winner = player_id
+			best_wealth = wealth
+	return winner
+
+
+func _check_setup_end_conditions() -> bool:
+	if not _is_setup() or state.get("phase", "") == "game_over":
+		return false
+	var elapsed: int = int(state.get("elapsed", max(0, int(state.get("day", 1)) - 1)))
+	var day_limit: int = int(state.get("day_limit", 0))
+	var wealth_multiplier: int = int(state.get("wealth_multiplier", 0))
+	var wealth_target: int = int(state.get("initial_fund", 0)) * wealth_multiplier
+	var target_reached: bool = false
+	if wealth_target > 0:
+		for player in _players():
+			if bool(player.get("alive", false)) and _player_wealth(int(player.get("id", -1))) >= wealth_target:
+				target_reached = true
+				break
+	var deadline_reached: bool = day_limit > 0 and elapsed >= day_limit
+	if not deadline_reached and not target_reached:
+		return false
+	var winner: int = _richest_alive_player()
+	state["winner"] = winner
+	state["phase"] = "game_over"
+	state["action_options"] = []
+	var reason: String = "day_limit" if deadline_reached else "wealth_target"
+	_record_event("game_over", {
+		"winner": winner,
+		"reason": reason,
+		"elapsed": elapsed,
+		"wealth_target": wealth_target,
+		"winner_wealth": _player_wealth(winner),
+	})
+	return true
 
 
 func _check_game_over() -> void:
@@ -1636,10 +1924,23 @@ static func _valid_string(value: Variant) -> bool:
 	return typeof(value) == TYPE_STRING
 
 
+static func _valid_setup_date(value: Variant) -> bool:
+	if typeof(value) != TYPE_DICTIONARY:
+		return false
+	var date: Dictionary = value
+	if date.size() != 3:
+		return false
+	for key in ["year", "month", "day"]:
+		if not date.has(key):
+			return false
+	return GameCalendar.is_valid(date)
+
+
 static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
+	var setup_save: bool = _valid_int(version_marker, SETUP_SAVE_VERSION, SETUP_SAVE_VERSION)
 	var graph_save: bool = (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
 	var required_top: Array = [
 		"version", "ruleset", "seed", "seed_text", "rng_state", "rng_state_text",
@@ -1651,11 +1952,15 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	]
 	if graph_save:
 		required_top.append_array(["board_mode", "map_id", "map_name", "map_schema", "map_version", "map_source", "start_position", "route_options", "remaining_steps", "pending_movement"])
+	if setup_save:
+		required_top.append_array(["initial_fund", "day_limit", "wealth_multiplier", "start_date", "date", "elapsed", "last_settled_month", "character_ids"])
+		if data.has("board_mode") and (typeof(board_mode_marker) != TYPE_STRING or board_mode_marker != GRAPH_BOARD_MODE):
+			errors.append("invalid setup board mode")
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
@@ -1689,10 +1994,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
-	for key in ["turn", "round", "day", "month"]:
+	for key in ["turn", "round", "month"]:
 		if not _valid_int(data.get(key, null), 1, 1000000000):
 			errors.append("invalid %s" % key)
-	if not _valid_int(data.get("day_of_month", null), 1, DAYS_PER_MONTH):
+	var day_max: int = 3000001 if setup_save else 1000000000
+	if not _valid_int(data.get("day", null), 1, day_max):
+		errors.append("invalid day")
+	var day_of_month_max: int = 31 if setup_save else DAYS_PER_MONTH
+	if not _valid_int(data.get("day_of_month", null), 1, day_of_month_max):
 		errors.append("invalid day_of_month")
 	if not _valid_int(data.get("weekday", null), 1, 7):
 		errors.append("invalid weekday")
@@ -1700,19 +2009,67 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var day_of_month_value: Variant = data.get("day_of_month", null)
 	var month_value: Variant = data.get("month", null)
 	var weekday_value: Variant = data.get("weekday", null)
-	if _valid_int(day_value, 1, 1000000000):
-		var day_int: int = day_value
-		if not _valid_int(day_of_month_value, 1, DAYS_PER_MONTH) or int(day_of_month_value) != ((day_int - 1) % DAYS_PER_MONTH) + 1:
-			errors.append("day_of_month mismatch")
-		if not _valid_int(month_value, 1, 1000000000) or int(month_value) != ((day_int - 1) / DAYS_PER_MONTH) + 1:
-			errors.append("month mismatch")
-		if not _valid_int(weekday_value, 1, 7) or int(weekday_value) != ((day_int - 1) % 7) + 1:
-			errors.append("weekday mismatch")
+	if setup_save:
+		var start_date: Variant = data.get("start_date", null)
+		var current_date: Variant = data.get("date", null)
+		if not _valid_setup_date(start_date):
+			errors.append("invalid start_date")
+		if not _valid_setup_date(current_date):
+			errors.append("invalid date")
+		var elapsed_value: Variant = data.get("elapsed", null)
+		if not _valid_int(elapsed_value, 0, 3000000):
+			errors.append("invalid elapsed")
+		var last_settled_month: Variant = data.get("last_settled_month", null)
+		var last_month_valid: bool = false
+		if typeof(last_settled_month) == TYPE_DICTIONARY and last_settled_month.is_empty():
+			last_month_valid = true
+		elif typeof(last_settled_month) == TYPE_DICTIONARY and last_settled_month.size() == 2 and _valid_int(last_settled_month.get("year", null), 1998, 9999) and _valid_int(last_settled_month.get("month", null), 1, 12):
+			last_month_valid = true
+		if not last_month_valid:
+			errors.append("invalid last_settled_month")
+		if _valid_int(day_value, 1, day_max) and _valid_int(elapsed_value, 0, 3000000) and int(elapsed_value) != int(day_value) - 1:
+			errors.append("elapsed mismatch")
+		if _valid_setup_date(start_date) and _valid_int(elapsed_value, 0, 3000000):
+			var expected_date: Dictionary = GameCalendar.add_days(start_date, int(elapsed_value))
+			if expected_date.is_empty() or typeof(current_date) != TYPE_DICTIONARY or current_date != expected_date:
+				errors.append("date mismatch")
+			elif not _valid_int(day_of_month_value, 1, 31) or int(day_of_month_value) != int(expected_date["day"]):
+				errors.append("day_of_month mismatch")
+			elif not _valid_int(month_value, 1, 12) or int(month_value) != int(expected_date["month"]):
+				errors.append("month mismatch")
+			elif not _valid_int(weekday_value, 1, 7) or int(weekday_value) != GameCalendar.weekday(expected_date):
+				errors.append("weekday mismatch")
+	else:
+		if _valid_int(day_value, 1, 1000000000):
+			var day_int: int = day_value
+			if not _valid_int(day_of_month_value, 1, DAYS_PER_MONTH) or int(day_of_month_value) != ((day_int - 1) % DAYS_PER_MONTH) + 1:
+				errors.append("day_of_month mismatch")
+			if not _valid_int(month_value, 1, 1000000000) or int(month_value) != ((day_int - 1) / DAYS_PER_MONTH) + 1:
+				errors.append("month mismatch")
+			if not _valid_int(weekday_value, 1, 7) or int(weekday_value) != ((day_int - 1) % 7) + 1:
+				errors.append("weekday mismatch")
 
 	var players: Variant = data.get("players", null)
 	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
+	if setup_save:
+		if not _valid_int(data.get("initial_fund", null)) or not SETUP_INITIAL_FUNDS.has(int(data.get("initial_fund", 0))):
+			errors.append("invalid initial_fund")
+		if not _valid_int(data.get("day_limit", null)) or not SETUP_DAY_LIMITS.has(int(data.get("day_limit", 0))):
+			errors.append("invalid day_limit")
+		if not _valid_int(data.get("wealth_multiplier", null)) or not SETUP_WEALTH_MULTIPLIERS.has(int(data.get("wealth_multiplier", 0))):
+			errors.append("invalid wealth_multiplier")
+		var character_ids: Variant = data.get("character_ids", null)
+		if typeof(character_ids) != TYPE_ARRAY or character_ids.size() != player_count:
+			errors.append("invalid character_ids")
+		else:
+			var seen_characters: Dictionary = {}
+			for character_id in character_ids:
+				if not _valid_int(character_id, 0, SETUP_CHARACTER_COUNT - 1) or seen_characters.has(int(character_id)):
+					errors.append("invalid character_ids")
+					continue
+				seen_characters[int(character_id)] = true
 	var board: Variant = data.get("board", null)
 	var board_valid: bool = typeof(board) == TYPE_ARRAY
 	if board_valid:
@@ -1812,6 +2169,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				var rate_type: int = typeof(trend.get("rate", null))
 				if rate_type not in [TYPE_INT, TYPE_FLOAT] or float(trend.get("rate", 0.0)) <= 0.0 or float(trend.get("rate", 0.0)) > 1.0:
 					errors.append("invalid market trend rate")
+		if setup_save and typeof(market.get("open", null)) == TYPE_BOOL and _valid_setup_date(data.get("date", null)):
+			var expected_market_open: bool = GameCalendar.weekday(data["date"]) != 7
+			if bool(market["open"]) != expected_market_open:
+				errors.append("market open mismatch")
 
 	var graph_reachable: Dictionary = {}
 	var property_owners: Dictionary = {}
@@ -1972,6 +2333,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			var required_player: Array = ["id", "name", "is_human", "is_ai", "alive", "bankrupt", "cash", "deposit", "position", "properties", "property_values", "stocks", "cards", "vehicle", "dice_count", "vehicles", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan", "loan_due_day", "turns_taken"]
 			if graph_save:
 				required_player.append_array(["previous_position", "points"])
+			if setup_save:
+				required_player.append_array(["character_id", "init_cash_ratio"])
 			for required_key in required_player:
 				if not player.has(required_key):
 					errors.append("player %d missing %s" % [index, required_key])
@@ -1984,6 +2347,16 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("player %d control flags invalid" % index)
 			if _valid_bool(player.get("alive", null)) and _valid_bool(player.get("bankrupt", null)) and bool(player["alive"]) == bool(player["bankrupt"]):
 				errors.append("player %d alive state invalid" % index)
+			if setup_save:
+				var character_id_value: Variant = player.get("character_id", null)
+				var character_id_valid: bool = _valid_int(character_id_value, 0, SETUP_CHARACTER_COUNT - 1)
+				var expected_ratio: int = 50 if index == 0 else int(AI_CASH_RATIOS[int(character_id_value)]) if character_id_valid else -1
+				if not character_id_valid or typeof(data.get("character_ids", null)) != TYPE_ARRAY or index >= data["character_ids"].size() or int(data["character_ids"][index]) != int(character_id_value):
+					errors.append("player %d character identity invalid" % index)
+				if character_id_valid and _valid_string(player.get("name", null)) and str(player.get("name", "")) != str(SETUP_CHARACTER_NAMES[int(character_id_value)]):
+					errors.append("player %d character name mismatch" % index)
+				if not _valid_int(player.get("init_cash_ratio", null), 0, 100) or int(player.get("init_cash_ratio", -1)) != expected_ratio:
+					errors.append("player %d initial cash ratio invalid" % index)
 			for money_key in ["cash", "deposit", "property_values", "loan"]:
 				if not _valid_int(player.get(money_key, null), 0, 1000000000000):
 					errors.append("player %d %s invalid" % [index, money_key])
@@ -2044,6 +2417,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d vehicle ownership invalid" % index)
 				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
+
+	if setup_save and typeof(players) == TYPE_ARRAY and typeof(bank) == TYPE_DICTIONARY and _valid_int(bank.get("deposits", null), 0, 1000000000000):
+		var setup_deposits: int = 0
+		for player in players:
+			if typeof(player) == TYPE_DICTIONARY and _valid_int(player.get("deposit", null), 0, 1000000000000):
+				setup_deposits += int(player.get("deposit", 0))
+		if setup_deposits != int(bank["deposits"]):
+			errors.append("bank deposits mismatch")
 
 	if graph_save:
 		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
@@ -2188,7 +2569,7 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		return null
 	var game = new()
 	game.state = data.duplicate(true)
-	if game.state.get("board_mode", "") == GRAPH_BOARD_MODE:
+	if int(game.state.get("version", SAVE_VERSION)) >= GRAPH_SAVE_VERSION:
 		game.state = _canonicalize_json_numbers(game.state)
 	game._rng = RandomNumberGenerator.new()
 	game._rng.seed = int(game.state.get("seed", 0))

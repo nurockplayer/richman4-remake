@@ -23,9 +23,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --quit-after 5
 python3 -m unittest discover -s tools -p 'test_*.py'

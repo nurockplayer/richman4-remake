@@ -536,7 +536,7 @@ func _on_new_game_pressed() -> void:
 	seed_input.grab_focus()
 
 func _on_new_game_confirm() -> void:
-	var requested_seed := -1
+	var requested_seed: Variant = null
 	if not seed_input.text.strip_edges().is_empty():
 		if not seed_input.text.strip_edges().is_valid_int():
 			_append_local_log("Seed 必須是整數，或留白自動產生。")
@@ -547,10 +547,12 @@ func _on_new_game_confirm() -> void:
 	_new_game(requested_seed, requested_players)
 	new_game_popup.hide()
 
-func _new_game(seed_value: int = -1, player_count: int = PLAYER_COUNT) -> void:
-	var resolved_seed := seed_value
-	if resolved_seed < 0:
+func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT) -> void:
+	var resolved_seed: int
+	if seed_value == null:
 		resolved_seed = int(Time.get_unix_time_from_system()) % 2147483647
+	else:
+		resolved_seed = int(seed_value)
 	var resolved_players: int = clampi(player_count, 2, 4)
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
@@ -738,8 +740,11 @@ func _on_end_turn_pressed() -> void:
 	_handle_result(result)
 
 func _on_deposit_pressed() -> void:
-	var result := _invoke_game("choose_action", ["deposit", {"amount": 500}])
-	_append_local_log("銀行存入 $500：%s" % _result_text(result, "已送出存款指令。"))
+	var amount := mini(500, maxi(0, int(_current_player().get("cash", 0))))
+	if amount <= 0:
+		return
+	var result := _invoke_game("choose_action", ["deposit", {"amount": amount}])
+	_append_local_log("銀行存入 %s：%s" % [_format_money(amount), _result_text(result, "已送出存款指令。")])
 	_handle_result(result)
 
 func _on_withdraw_pressed() -> void:
@@ -772,7 +777,9 @@ func _update_bank_popup() -> void:
 	if balance != null:
 		balance.text = "現金 %s　·　存款 %s" % [_format_money(int(player.get("cash", 0))), _format_money(int(player.get("deposit", 0)))]
 	var options: Array = _as_array(state.get("action_options", []))
-	bank_deposit_button.disabled = not _has_action_option(options, "deposit")
+	var deposit_amount := mini(500, maxi(0, int(player.get("cash", 0))))
+	bank_deposit_button.text = "存入 %s" % _format_money(deposit_amount)
+	bank_deposit_button.disabled = not _has_action_option(options, "deposit") or deposit_amount <= 0
 	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw")
 	bank_withdraw_button.text = "提取 %s" % _format_money(mini(500, int(player.get("deposit", 0))))
 

@@ -22,3 +22,6 @@ original/
 *.zip
 *.tpz
 
+
+# Raw map payloads can be extracted to a user-selected output folder.
+*.bin

@@ -38,6 +38,8 @@ func _run() -> void:
 	_expect(int(game.state.turn) > turn_after_death, "Actual UI timer runs the next AI turn")
 	_expect(not game.state.players[game.state.current_player].bankrupt, "UI never rests on a bankrupt actor")
 	ui.set_process(false)
+	ui._new_game(-2, 2)
+	_expect(int(ui.state.get("seed", 0)) == -2, "Explicit negative seed is preserved by UI")
 	game = GameState.new_game(42, 3)
 	game.state.current_player = 1
 	game._set_action_options(1)
@@ -50,6 +52,18 @@ func _run() -> void:
 	var result: Dictionary = ui._invoke_game("choose_action", ["buy_stock", {"symbol": "tech", "quantity": 1}])
 	_expect(not result.get("ok", false), "UI action boundary rejects human action for AI")
 	_expect(int(game.state.players[1].cash) == ai_cash, "AI cash remains unchanged by human input")
+	var deposit_game := GameState.new_game(42, 2)
+	deposit_game.state.players[0].cash = 250
+	deposit_game.state.phase = "await_action"
+	deposit_game.state.bank_access = true
+	deposit_game._set_action_options(0)
+	ui.game_state = deposit_game
+	ui._refresh_from_state()
+	ui._on_bank_pressed()
+	_expect(ui.bank_deposit_button.text == "存入 $250", "UI shows the actual remaining deposit amount")
+	ui._on_deposit_pressed()
+	_expect(int(deposit_game.state.players[0].cash) == 0, "UI deposits sub-500 remaining cash")
+	_expect(int(deposit_game.state.players[0].deposit) == 250, "UI records exact sub-500 deposit")
 	game = GameState.new_game(42, 2)
 	game.state.players[0].deposit = 250
 	game.state.bank.deposits = 250

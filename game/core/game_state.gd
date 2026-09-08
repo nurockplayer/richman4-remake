@@ -325,9 +325,9 @@ func _set_action_options(player_id: int) -> void:
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property" and not bool(state.get("property_action_used", false)):
 		var owner: int = int(tile.get("owner", -1))
-		if owner == -1 and bank_open and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
+		if owner == -1 and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
 			options.push_front("buy")
-		elif owner == player_id and bank_open:
+		elif owner == player_id:
 			var level: int = int(tile.get("building_level", 0))
 			if level < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
@@ -647,7 +647,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法行動")
-	if _is_sunday() and ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
+	if _is_sunday() and ["deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
 		return _error("週日銀行休息")
 	_set_action_options(player_id)
 	var allowed_options: Array = state.get("action_options", [])
@@ -1022,7 +1022,18 @@ func _repay_due_loan(player_id: int) -> void:
 		return
 	var available: int = int(player.get("cash", 0)) + int(player.get("deposit", 0))
 	if available < loan:
-		_declare_bankruptcy(player_id, -1, loan, "loan_due")
+		var deposit_payment: int = int(player.get("deposit", 0))
+		if deposit_payment > 0:
+			_withdraw_internal(player_id, deposit_payment)
+		var cash_payment: int = int(player.get("cash", 0))
+		if cash_payment > 0:
+			_pay_from_player(player_id, cash_payment, -1)
+		var remaining_loan: int = max(0, loan - cash_payment)
+		player["loan"] = remaining_loan
+		var bank: Dictionary = state.get("bank", {})
+		bank["loans"] = max(0, int(bank.get("loans", 0)) - cash_payment)
+		state["bank"] = bank
+		_declare_bankruptcy(player_id, -1, remaining_loan, "loan_due")
 		return
 	if int(player.get("cash", 0)) < loan:
 		_withdraw_internal(player_id, loan - int(player.get("cash", 0)))

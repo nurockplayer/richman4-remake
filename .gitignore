@@ -7,7 +7,9 @@ dist/
 .DS_Store
 __pycache__/
 .venv/
-# Owner-provided original files and all derived caches must stay local.
+# In this public code repo, owner-provided originals and derived caches stay
+# local; the canonical owner-authorized source is the separate private asset
+# repository retrieved by tools/bootstrap_private_assets.sh.
 dfw4cskzl_136622/
 original/
 *.mkf

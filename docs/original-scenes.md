@@ -2,7 +2,7 @@
 
 `python3 tools/decode_original_ground.py --source /本機/原作 --output .local/original-scenes`
 會匯入兩版本的 12 張底圖、12 位角色各 8 個靜態方向，各地圖 5 級住宅，以及來源明示的地景與企業圖像。
-原作、PNG、manifest、私人套件皆不得提交或上傳。
+public code repo 不提交未確認公開分發權的原作檔案；private asset repo 只保存 owner-authorized 原始來源。PNG、場景 manifest 與私人套件是可重建的本機衍生輸出，留在 `.local/` 或套件輸出目錄，不作為 public code repo 的素材來源。
 
 Godot 依 `RICHMAN4_SCENE_MANIFEST`、私人套件 Resources/Original/scenes/manifest.json、
 `.local/original-scenes/manifest.json` 的順序尋找素材。地圖 ID、來源 archive SHA 與 graph payload SHA

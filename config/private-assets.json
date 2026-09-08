@@ -1,0 +1,10 @@
+{
+  "schema": "richman4.private-assets-binding/v1",
+  "version": 1,
+  "repository": "nurockplayer/richman4-remake-assets",
+  "clone_url": "https://github.com/nurockplayer/richman4-remake-assets.git",
+  "revision": "ee3f4b8ee0a585d79e75c23dd2c5735c927ae911",
+  "manifest": "manifest.json",
+  "manifest_sha256": "10f8a5c003c9a86cc86b99a5e3776f9af287d604535a211d4a1db916118c60ac",
+  "source_root": "source/dfw4cskzl_136622"
+}

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,6 +26,7 @@ from decode_original_images import (  # noqa: E402
     InputError,
     MkfEntry,
     _preflight_output_keys,
+    assert_private_output,
     decode_source,
     decompress_private,
     parse_mkf,
@@ -105,6 +107,17 @@ def pack_bits(*codes: tuple[int, int]) -> bytes:
     for index, bit in enumerate(bits):
         result[index // 8] |= bit << (index % 8)
     return bytes(result)
+
+
+def init_git_repo(path: Path, ignore: str = ".local/\n") -> None:
+    path.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "--quiet", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / ".gitignore").write_text(ignore, encoding="utf-8")
 
 
 def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
@@ -202,6 +215,88 @@ class DecodeOriginalImagesTests(unittest.TestCase):
             self.assertFalse(output.exists())
             manifest = decode_source(source, output, editions={"game"})
             self.assertEqual(len(manifest["visual_resources"]), 1)
+
+    def test_default_local_output_is_allowed_in_git_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            init_git_repo(repository)
+            source = repository / "source" / "Game"
+            source.mkdir(parents=True)
+            spr = make_spr()
+            (source / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = repository / decoder.DEFAULT_OUTPUT
+
+            manifest = decode_source(repository / "source", output)
+
+            self.assertEqual(len(manifest["visual_resources"]), 1)
+            self.assertTrue((output / "manifest.json").is_file())
+            outside = Path(temporary) / "outside" / "custom-output"
+            assert_private_output(outside)
+            self.assertFalse(outside.exists())
+            self.assertTrue((output / "images").is_dir())
+
+    def test_unignored_custom_git_output_fails_before_output_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            init_git_repo(repository)
+            source = repository / "source" / "Game"
+            source.mkdir(parents=True)
+            spr = make_spr()
+            (source / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = repository / "review-output-check"
+
+            with self.assertRaisesRegex(InputError, "ignored"):
+                decode_source(repository / "source", output)
+
+            self.assertFalse(output.exists())
+
+    def test_ignored_custom_git_output_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            init_git_repo(repository, ".local/\nreview-output-check/\n")
+            source = repository / "source" / "Game"
+            source.mkdir(parents=True)
+            spr = make_spr()
+            (source / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = repository / "review-output-check"
+
+            manifest = decode_source(repository / "source", output)
+
+            self.assertEqual(len(manifest["visual_resources"]), 1)
+            self.assertTrue((output / "manifest.json").is_file())
+
+    def test_tracked_managed_output_fails_and_preserves_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            init_git_repo(repository)
+            source = repository / "source" / "Game"
+            source.mkdir(parents=True)
+            spr = make_spr()
+            (source / "map.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            output = repository / decoder.DEFAULT_OUTPUT
+            tracked_file = output / "images" / "tracked.png"
+            tracked_file.parent.mkdir(parents=True)
+            tracked_file.write_bytes(b"tracked sentinel")
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "add",
+                    "-f",
+                    "--",
+                    str(tracked_file.relative_to(repository)),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            with self.assertRaisesRegex(InputError, "tracked"):
+                decode_source(repository / "source", output)
+
+            self.assertEqual(tracked_file.read_bytes(), b"tracked sentinel")
+            self.assertFalse((output / "manifest.json").exists())
 
     def test_case_alias_output_cannot_replace_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

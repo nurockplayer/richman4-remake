@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
 from typing import Any, Iterable, Sequence
@@ -816,6 +817,157 @@ def _cleanup_path(path: Path) -> None:
         pass
 
 
+def _nearest_existing_parent(path: Path) -> Path:
+    candidate = path
+    while not _path_present(candidate):
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    if candidate.is_dir() and not candidate.is_symlink():
+        return candidate
+    return candidate.parent
+
+
+def _git_marker(path: Path) -> Path | None:
+    for ancestor in (path, *path.parents):
+        marker = ancestor / ".git"
+        try:
+            if _path_present(marker):
+                return marker
+        except OSError:
+            continue
+    return None
+
+
+def _git_error_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = result.stderr.strip() or result.stdout.strip()
+    return detail or f"git exited with status {result.returncode}"
+
+
+def _git_worktree_root(output: Path) -> Path | None:
+    existing_parent = _nearest_existing_parent(output)
+    marker = _git_marker(existing_parent)
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(existing_parent),
+                "rev-parse",
+                "--show-toplevel",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        if marker is None:
+            return None
+        raise InputError(
+            "cannot protect private image output: Git is unavailable while "
+            f"a worktree was detected at {marker.parent}"
+        ) from exc
+    except OSError as exc:
+        if marker is None:
+            return None
+        raise InputError(
+            "cannot inspect private image output Git worktree at "
+            f"{marker.parent}: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        if marker is None:
+            return None
+        raise InputError(
+            "cannot inspect private image output Git worktree at "
+            f"{marker.parent}: {_git_error_detail(result)}"
+        )
+    root_text = result.stdout.strip()
+    if not root_text:
+        if marker is None:
+            return None
+        raise InputError(
+            "cannot inspect private image output Git worktree at "
+            f"{marker.parent}: git returned no worktree root"
+        )
+    root = Path(root_text).expanduser().resolve()
+    try:
+        output.relative_to(root)
+    except ValueError:
+        return None
+    return root
+
+
+def _git_check_ignored(root: Path, path: Path) -> None:
+    relative = path.relative_to(root).as_posix()
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "check-ignore",
+                "--quiet",
+                "--no-index",
+                "--",
+                relative,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise InputError(
+            f"cannot verify ignored private image output path {path}: {exc}"
+        ) from exc
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        raise InputError(f"private image output inside a Git worktree must be ignored: {path}")
+    raise InputError(
+        f"cannot verify ignored private image output path {path}: "
+        f"{_git_error_detail(result)}"
+    )
+
+
+def _git_tracked_managed_paths(root: Path, output: Path) -> list[str]:
+    managed = [output / "images", output / "manifest.json"]
+    relative = [path.relative_to(root).as_posix() for path in managed]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "-z", "--", *relative],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise InputError(
+            f"cannot inspect tracked private image output paths under {output}: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise InputError(
+            f"cannot inspect tracked private image output paths under {output}: "
+            f"{_git_error_detail(result)}"
+        )
+    return [path for path in result.stdout.split("\0") if path]
+
+
+def assert_private_output(output: Path) -> None:
+    """Reject unignored or already tracked managed paths inside Git worktrees."""
+    output = output.expanduser().resolve()
+    root = _git_worktree_root(output)
+    if root is None:
+        return
+    _git_check_ignored(root, output / "images")
+    _git_check_ignored(root, output / "manifest.json")
+    tracked = _git_tracked_managed_paths(root, output)
+    if tracked:
+        raise InputError(
+            "private image output contains already tracked managed content: "
+            + ", ".join(tracked)
+        )
+
+
 def _publish_staged_images(
     staged_images: Path, staged_manifest: Path, output: Path
 ) -> None:
@@ -951,6 +1103,7 @@ def decode_source(
         ]
 
     archive_snapshot = _preflight_output_keys(discovered, source)
+    assert_private_output(output)
     try:
         output.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

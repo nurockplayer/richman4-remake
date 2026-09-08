@@ -1433,7 +1433,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			var next_date: Dictionary = GameCalendar.add_days(state.get("start_date", {}), current_elapsed + 1)
 			if next_date.is_empty():
 				_sync_state()
-				_check_setup_end_conditions()
+				_check_setup_end_conditions(true)
 				return
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
@@ -1658,7 +1658,7 @@ func _richest_alive_player() -> int:
 	return winner
 
 
-func _check_setup_end_conditions() -> bool:
+func _check_setup_end_conditions(calendar_boundary: bool = false) -> bool:
 	if not _is_setup() or state.get("phase", "") == "game_over":
 		return false
 	var elapsed: int = int(state.get("elapsed", max(0, int(state.get("day", 1)) - 1)))
@@ -1672,7 +1672,7 @@ func _check_setup_end_conditions() -> bool:
 				target_reached = true
 				break
 	var deadline_reached: bool = day_limit > 0 and elapsed >= day_limit
-	var calendar_limit_reached: bool = GameCalendar.is_last_supported_date(state.get("date", {}))
+	var calendar_limit_reached: bool = calendar_boundary and GameCalendar.is_last_supported_date(state.get("date", {}))
 	if not deadline_reached and not target_reached and not calendar_limit_reached:
 		return false
 	var winner: int = _richest_alive_player()
@@ -1681,7 +1681,7 @@ func _check_setup_end_conditions() -> bool:
 	state["winner"] = winner
 	state["phase"] = "game_over"
 	state["action_options"] = []
-	var reason: String = "day_limit" if deadline_reached else "wealth_target" if target_reached else "calendar_limit"
+	var reason: String = "calendar_limit" if winner < 0 and calendar_limit_reached else "day_limit" if deadline_reached else "wealth_target" if target_reached else "calendar_limit"
 	var game_over_event: Dictionary = {
 		"winner": winner,
 		"reason": reason,
@@ -2037,6 +2037,37 @@ static func _valid_setup_date(value: Variant) -> bool:
 	return not _canonical_setup_date(value).is_empty()
 
 
+static func _expected_last_settled_month(
+	start_date: Dictionary,
+	current_date: Dictionary,
+	elapsed: int,
+	phase_name: String,
+	last_event: Variant,
+) -> Dictionary:
+	if start_date.is_empty() or current_date.is_empty():
+		return {}
+	var settlement_date: Dictionary = current_date
+	if phase_name == "game_over" and int(current_date.get("day", 0)) == 1 and elapsed > 0 and last_event is Dictionary:
+		var reason := str(last_event.get("reason", ""))
+		if reason in ["day_limit", "wealth_target"]:
+			var before_boundary := GameCalendar.add_days(start_date, elapsed - 1)
+			if not before_boundary.is_empty():
+				settlement_date = before_boundary
+	var start_month_key := int(start_date["year"]) * 12 + int(start_date["month"])
+	var settlement_month_key := int(settlement_date["year"]) * 12 + int(settlement_date["month"])
+	if settlement_month_key <= start_month_key:
+		return {}
+	var marker_year := int(settlement_date["year"])
+	var marker_month := int(settlement_date["month"]) - 1
+	if marker_month == 0:
+		marker_year -= 1
+		marker_month = 12
+	var marker_month_key := marker_year * 12 + marker_month
+	if marker_month_key < start_month_key:
+		return {}
+	return {"year": marker_year, "month": marker_month}
+
+
 static func _validate_graph_source_classification(tile: Dictionary, index: int, errors: Array) -> void:
 	var type_value: Variant = tile.get("type_and_idx", null)
 	var event_value: Variant = tile.get("event_code", null)
@@ -2144,10 +2175,12 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid elapsed")
 		var last_settled_month: Variant = data.get("last_settled_month", null)
 		var last_month_valid: bool = false
+		var normalized_last_month: Dictionary = {}
 		if typeof(last_settled_month) == TYPE_DICTIONARY and last_settled_month.is_empty():
 			last_month_valid = true
 		elif typeof(last_settled_month) == TYPE_DICTIONARY and last_settled_month.size() == 2 and _valid_int(last_settled_month.get("year", null), 1998, 9999) and _valid_int(last_settled_month.get("month", null), 1, 12):
 			last_month_valid = true
+			normalized_last_month = {"year": int(last_settled_month.get("year")), "month": int(last_settled_month.get("month"))}
 		if not last_month_valid:
 			errors.append("invalid last_settled_month")
 		if _valid_int(day_value, 1, day_max) and _valid_int(elapsed_value, 0, 3000000) and int(elapsed_value) != int(day_value) - 1:
@@ -2162,6 +2195,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("month mismatch")
 			elif not _valid_int(weekday_value, 1, 7) or int(weekday_value) != GameCalendar.weekday(expected_date):
 				errors.append("weekday mismatch")
+		if last_month_valid and not canonical_start_date.is_empty() and not canonical_current_date.is_empty() and _valid_int(elapsed_value, 0, 3000000):
+			var expected_last_month := _expected_last_settled_month(canonical_start_date, canonical_current_date, int(elapsed_value), phase_name, data.get("last_event", null))
+			if normalized_last_month != expected_last_month:
+				errors.append("last_settled_month mismatch")
 	else:
 		if _valid_int(day_value, 1, 1000000000):
 			var day_int: int = day_value
@@ -2242,7 +2279,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("graph last roll is missing for total")
 		elif not last_roll.is_empty() and last_roll_sum != int(last_total_value):
 			errors.append("graph last roll total mismatch")
-	if typeof(data.get("last_event", null)) != TYPE_DICTIONARY:
+	var last_event: Variant = data.get("last_event", null)
+	if typeof(last_event) != TYPE_DICTIONARY:
 		errors.append("invalid last_event")
 	var event_log: Variant = data.get("event_log", null)
 	if typeof(event_log) != TYPE_ARRAY or event_log.size() > 200:
@@ -2677,8 +2715,20 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if not _valid_bool(current_actor.get("alive", null)) or not bool(current_actor.get("alive", false)) or not _valid_bool(current_actor.get("bankrupt", null)) or bool(current_actor.get("bankrupt", false)):
 			errors.append("dead current player")
 	if phase_name == "game_over":
-		if winner < 0 and not setup_save:
-			errors.append("invalid game over winner")
+		if winner < 0:
+			var calendar_terminal_event := false
+			if setup_save and last_event is Dictionary:
+				var event_boundary: Variant = last_event.get("calendar_boundary", false)
+				var event_elapsed: Variant = last_event.get("elapsed", null)
+				calendar_terminal_event = GameCalendar.is_last_supported_date(data.get("date", {})) \
+					and str(last_event.get("type", "")) == "game_over" \
+					and str(last_event.get("reason", "")) == "calendar_limit" \
+					and typeof(event_boundary) == TYPE_BOOL and bool(event_boundary) \
+					and _valid_int(event_elapsed, 0, 3000000) \
+					and _valid_int(data.get("elapsed", null), 0, 3000000) \
+					and int(event_elapsed) == int(data.get("elapsed", -1))
+			if not setup_save or not calendar_terminal_event:
+				errors.append("invalid game over winner")
 		elif winner >= 0 and (winner >= player_count or typeof(players[winner]) != TYPE_DICTIONARY or not bool(players[winner].get("alive", false))):
 			errors.append("invalid game over winner")
 	elif winner != -1:

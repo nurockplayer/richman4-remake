@@ -1053,6 +1053,9 @@ func _adopt_map_from_snapshot(snapshot: Dictionary) -> void:
 	if int(snapshot.get("version", -1)) == 1:
 		_active_map_definition = _make_fallback_map_definition()
 		return
+	if snapshot.get("board_mode", "") != "graph":
+		_active_map_definition = _make_fallback_map_definition()
+		return
 	var raw_identity: Variant = _extract_map_identity(snapshot)
 	if raw_identity == null:
 		return

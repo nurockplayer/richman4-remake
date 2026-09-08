@@ -34,6 +34,7 @@ DEFAULT_OUTPUT = Path(".local/original-images")
 DEFAULT_MAX_RESOURCE_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_DIMENSION = 4096
 DEFAULT_MAX_CHUNKS = 4096
+PUBLISH_LOCK_NAME = ".images-publish-lock"
 SPR_SIGNATURE = b"SPR\0"
 SMP_SIGNATURE = b"SMP\0"
 GND_SIGNATURE = b"GND\0"
@@ -816,6 +817,15 @@ def _publish_staged_images(
 
     images = output / "images"
     manifest = output / "manifest.json"
+    publish_lock = output / PUBLISH_LOCK_NAME
+    try:
+        publish_lock.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise InputError(
+            f"cannot publish decoded images: publish lock already exists: {publish_lock}"
+        ) from exc
+    except OSError as exc:
+        raise InputError(f"cannot create publish lock {publish_lock}: {exc}") from exc
     image_backup = output / f".images-backup-{uuid.uuid4().hex}"
     manifest_backup = output / f".manifest-backup-{uuid.uuid4().hex}"
     old_images_moved = False
@@ -874,6 +884,18 @@ def _publish_staged_images(
             _cleanup_path(image_backup)
         if old_manifest_moved:
             _cleanup_path(manifest_backup)
+    finally:
+        active_error = sys.exc_info()[1]
+        try:
+            publish_lock.rmdir()
+        except OSError as lock_exc:
+            if active_error is None:
+                raise InputError(
+                    f"cannot release publish lock {publish_lock}: {lock_exc}"
+                ) from lock_exc
+            raise InputError(
+                f"{active_error}; cannot release publish lock {publish_lock}: {lock_exc}"
+            ) from active_error
 
 
 def decode_source(

@@ -27,7 +27,10 @@ manifest 後，才替換工具管理的 `output/images/` 與 `manifest.json`。�
 整批替換掉，並發布空的 `images/` 與新 manifest；輸出根目錄的其他檔案會
 保留。解碼或發佈失敗會清理暫存內容並嘗試回復上一個有效的 images 與
 manifest，不會刪除或移動來源檔案。edition 與 archive 名稱在寫入前會先
-經過清理及不分大小寫的輸出路徑碰撞檢查。
+經過清理及不分大小寫的輸出路徑碰撞檢查。同一輸出目錄的發布會以固定隱藏
+目錄 `.images-publish-lock` 互斥；成功或失敗都只會移除本次建立且仍為空的
+鎖目錄。若該鎖目錄已存在，工具會 fail closed 並保留它；確認沒有其他匯入
+程序後，才可人工移除疑似崩潰遺留的鎖。
 
 預設以原版常見的 RGB555 解讀 16 位元像素（`--pixel-format rgb555`），
 並把 `SPR` palette index `0` 輸出為透明像素。可選格式為 `rgb565`、

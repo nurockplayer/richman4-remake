@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import zlib
@@ -139,6 +141,159 @@ def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
 
 
 class DecodeOriginalImagesTests(unittest.TestCase):
+    def test_concurrent_publish_does_not_mix_manifest_and_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            source_a = temporary_root / "source-a" / "Game"
+            source_b = temporary_root / "source-b" / "Game"
+            source_a.mkdir(parents=True)
+            source_b.mkdir(parents=True)
+            red_spr = make_spr()
+            green_spr = bytearray(red_spr)
+            struct.pack_into("<H", green_spr, 26, 0x03E0)
+            for source, spr in ((source_a, red_spr), (source_b, bytes(green_spr))):
+                (source / "Panel.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+                (source / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = (temporary_root / "decoded").resolve()
+            first_publish_started = threading.Event()
+            second_publish_done = threading.Event()
+            release_first_publish = threading.Event()
+            first_image_install_seen = False
+            formal_mutations: list[str] = []
+            worker_errors: list[tuple[str, BaseException]] = []
+            real_replace = decoder.os.replace
+
+            def replace_with_publish_barrier(
+                source: os.PathLike[str], destination: os.PathLike[str]
+            ) -> None:
+                nonlocal first_image_install_seen
+                destination_path = Path(destination)
+                block_first_image = (
+                    threading.current_thread().name == "publish-A"
+                    and destination_path == output / "images"
+                    and not first_image_install_seen
+                )
+                record_formal_mutation = (
+                    first_publish_started.is_set()
+                    and not release_first_publish.is_set()
+                    and destination_path in {output / "images", output / "manifest.json"}
+                    and threading.current_thread().name == "publish-B"
+                )
+                real_replace(source, destination)
+                if record_formal_mutation:
+                    formal_mutations.append(destination_path.name)
+                if block_first_image:
+                    first_image_install_seen = True
+                    first_publish_started.set()
+                    if not second_publish_done.wait(5):
+                        raise OSError("second publish did not reach the barrier")
+                    if not release_first_publish.wait(5):
+                        raise OSError("first publish was not released")
+
+            def decode_in_worker(name: str, source: Path) -> None:
+                try:
+                    decoder.decode_source(source, output)
+                except BaseException as exc:  # noqa: BLE001
+                    worker_errors.append((name, exc))
+                finally:
+                    if name == "publish-B":
+                        second_publish_done.set()
+
+            first_thread = threading.Thread(
+                target=decode_in_worker, args=("publish-A", source_a), name="publish-A"
+            )
+            second_thread = threading.Thread(
+                target=decode_in_worker, args=("publish-B", source_b), name="publish-B"
+            )
+            with patch.object(
+                decoder.os, "replace", side_effect=replace_with_publish_barrier
+            ):
+                first_thread.start()
+                try:
+                    self.assertTrue(first_publish_started.wait(5))
+                    self.assertTrue((output / decoder.PUBLISH_LOCK_NAME).is_dir())
+                    blocked_image = next((output / "images").rglob("*.png")).read_bytes()
+                    second_thread.start()
+                    self.assertTrue(second_publish_done.wait(5))
+                    self.assertEqual(formal_mutations, [])
+                    self.assertTrue((output / decoder.PUBLISH_LOCK_NAME).is_dir())
+                    self.assertEqual(
+                        next((output / "images").rglob("*.png")).read_bytes(),
+                        blocked_image,
+                    )
+                finally:
+                    release_first_publish.set()
+                    first_thread.join(5)
+                    second_thread.join(5)
+            self.assertFalse(first_thread.is_alive())
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(len(worker_errors), 1)
+            self.assertEqual(worker_errors[0][0], "publish-B")
+            self.assertIsInstance(worker_errors[0][1], InputError)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            image_entry = manifest["visual_resources"][0]["images"][0]
+            image_path = output / image_entry["path"]
+            self.assertEqual(
+                image_entry["sha256"],
+                hashlib.sha256(image_path.read_bytes()).hexdigest(),
+            )
+            self.assertFalse((output / decoder.PUBLISH_LOCK_NAME).exists())
+
+    def test_existing_publish_lock_fails_closed_and_is_preserved(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            (root / "Panel.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            output.mkdir()
+            images = output / "images"
+            images.mkdir()
+            sentinel_image = images / "sentinel.bin"
+            sentinel_image.write_bytes(b"previous image tree")
+            manifest = output / "manifest.json"
+            manifest.write_text("previous manifest\n", encoding="utf-8")
+            publish_lock = output / decoder.PUBLISH_LOCK_NAME
+            publish_lock.mkdir()
+
+            with self.assertRaises(InputError):
+                decoder.decode_source(root, output)
+
+            self.assertTrue(publish_lock.is_dir())
+            self.assertEqual(sentinel_image.read_bytes(), b"previous image tree")
+            self.assertEqual(manifest.read_text(encoding="utf-8"), "previous manifest\n")
+            self.assertFalse(any(output.glob(".images-staging-*")))
+            self.assertFalse(any(output.glob(".manifest-staging-*.json")))
+
+    def test_publish_lock_release_failure_is_reported_and_lock_remains(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            (root / "Panel.mkf").write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            publish_lock = output / decoder.PUBLISH_LOCK_NAME
+            real_rmdir = decoder.Path.rmdir
+
+            def fail_publish_lock_release(path: Path) -> None:
+                if path.name == decoder.PUBLISH_LOCK_NAME:
+                    raise OSError("publish lock release failed")
+                real_rmdir(path)
+
+            with patch.object(decoder.Path, "rmdir", new=fail_publish_lock_release):
+                with self.assertRaisesRegex(InputError, "cannot release publish lock"):
+                    decoder.decode_source(root, output)
+            self.assertTrue(publish_lock.is_dir())
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            image_entry = manifest["visual_resources"][0]["images"][0]
+            image_path = output / image_entry["path"]
+            self.assertEqual(
+                image_entry["sha256"],
+                hashlib.sha256(image_path.read_bytes()).hexdigest(),
+            )
+
     def test_late_corrupt_archive_preserves_previous_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "Game"
@@ -241,6 +396,7 @@ class DecodeOriginalImagesTests(unittest.TestCase):
                     decoder.decode_source(root, output)
             self.assertEqual(image_path.read_bytes(), previous_image)
             self.assertEqual(manifest_path.read_bytes(), previous_manifest)
+            self.assertFalse((output / decoder.PUBLISH_LOCK_NAME).exists())
 
     def test_image_rollback_failure_leaves_manifest_absent_and_backups(self) -> None:
         spr = make_spr()
@@ -276,6 +432,7 @@ class DecodeOriginalImagesTests(unittest.TestCase):
             self.assertFalse((output / "manifest.json").exists())
             self.assertTrue(any(output.glob(".images-backup-*")))
             self.assertTrue(any(output.glob(".manifest-backup-*")))
+            self.assertFalse((output / decoder.PUBLISH_LOCK_NAME).exists())
 
     def test_private_codec_decodes_initial_tree_literal_and_rejects_truncation(
         self,

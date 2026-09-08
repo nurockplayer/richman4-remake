@@ -92,6 +92,11 @@ esac
 command -v git >/dev/null 2>&1 || fail "git is required"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 
+# Keep machine-local private/derived data out of Godot's importer. This marker
+# stays under ignored .local/ rather than being tracked in the public repo.
+mkdir -p -- "$project_root/.local"
+touch -- "$project_root/.local/.gdignore"
+
 config_values="$(python3 - "$config_path" <<'PY'
 import json
 import sys

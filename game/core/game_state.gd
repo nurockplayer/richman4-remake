@@ -1819,6 +1819,7 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		errors.append("invalid graph board")
 	var board_array: Array = board if typeof(board) == TYPE_ARRAY else []
 	var property_count := 0
+	var source_properties: Dictionary = {}
 	for index in range(board_array.size()):
 		var tile_value: Variant = board_array[index]
 		if typeof(tile_value) != TYPE_DICTIONARY:
@@ -1827,10 +1828,14 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 		var tile: Dictionary = tile_value
 		if not _valid_int(tile.get("index", null), index, index):
 			errors.append("graph tile index mismatch %d" % index)
+		if not _valid_int(tile.get("source_node_id", null), index + 1, index + 1):
+			errors.append("graph source node mismatch %d" % index)
 		for coordinate in ["x", "y"]:
 			if not _valid_int(tile.get(coordinate, null), -1000000, 1000000):
 				errors.append("invalid graph tile coordinate %d" % index)
 		var kind: Variant = tile.get("kind", null)
+		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
+			errors.append("housing source must remain a property %d" % index)
 		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event"]
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
 			errors.append("invalid graph tile kind %d" % index)
@@ -1843,11 +1848,24 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 					errors.append("invalid graph edge %d" % index)
 				else:
 					adjacent.append(int(neighbor))
+					var reverse_tile: Variant = board_array[int(neighbor)]
+					var reverse_has := false
+					if typeof(reverse_tile) == TYPE_DICTIONARY:
+						var reverse_edges: Variant = reverse_tile.get("adjacent", null)
+						if typeof(reverse_edges) == TYPE_ARRAY:
+							for reverse_neighbor in reverse_edges:
+								if _valid_int(reverse_neighbor) and int(reverse_neighbor) == index:
+									reverse_has = true
+									break
+					if not reverse_has:
+						errors.append("asymmetric graph edge %d" % index)
 		for text_key in ["name", "group"]:
 			if not _valid_string(tile.get(text_key, null)):
 				errors.append("invalid graph tile text %d" % index)
 		if not _valid_int(tile.get("owner", null), -1, -1):
 			errors.append("graph definition has owned tile %d" % index)
+		if not _valid_int(tile.get("building_level", null), 0, 0):
+			errors.append("graph definition must start at level zero %d" % index)
 		for numeric_key in ["building_level", "cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 			if not _valid_int(tile.get(numeric_key, null), 0, 1000000000):
 				errors.append("invalid graph tile value %d" % index)
@@ -1856,10 +1874,23 @@ static func validate_board_definition(definition: Dictionary) -> Dictionary:
 			var source_object_id: Variant = tile.get("source_object_id", null)
 			if not _valid_int(source_object_id, 1, 1999):
 				errors.append("invalid graph property identity %d" % index)
+			elif source_properties.has(int(source_object_id)):
+				errors.append("duplicate graph property identity %d" % index)
+			else:
+				source_properties[int(source_object_id)] = true
 			var land_price: Variant = tile.get("land_price", null)
 			var house_price: Variant = tile.get("house_price", null)
 			if not _valid_int(land_price, 0, 1000000) or not _valid_int(house_price, 0, 1000000):
 				errors.append("invalid graph property prices %d" % index)
+			var property_type: Variant = tile.get("type_and_idx", null)
+			if not _valid_int(property_type, 2001, 3999):
+				errors.append("invalid graph property source type %d" % index)
+			elif _valid_int(source_object_id, 1, 1999) and int(property_type) - 2000 != int(source_object_id):
+				errors.append("graph property source mismatch %d" % index)
+			if _valid_int(land_price, 0, 1000000) and _valid_int(tile.get("cost", null), 0, 1000000000) and int(tile.cost) != int(land_price):
+				errors.append("graph property cost mismatch %d" % index)
+			if _valid_int(house_price, 0, 1000000) and _valid_int(tile.get("upgrade_cost", null), 0, 1000000000) and int(tile.upgrade_cost) != int(house_price):
+				errors.append("graph property upgrade price mismatch %d" % index)
 			var rents: Variant = tile.get("rent_by_level", null)
 			if typeof(rents) != TYPE_ARRAY or rents.size() != 6:
 				errors.append("invalid graph rent table %d" % index)
@@ -2175,6 +2206,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("market open mismatch")
 
 	var graph_reachable: Dictionary = {}
+	var source_properties: Dictionary = {}
 	var property_owners: Dictionary = {}
 	if typeof(board) == TYPE_ARRAY:
 		for index in range(board.size()):
@@ -2238,11 +2270,17 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if not _valid_int(tile.get("type_and_idx", null), 0, 65535) or not _valid_int(tile.get("event_code", null), 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
 				var tile_kind: Variant = tile.get("kind", null)
+				if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(tile_kind) != TYPE_STRING or tile_kind != "property"):
+					errors.append("housing source must remain a property %d" % index)
 				if typeof(tile_kind) == TYPE_STRING and tile_kind == "property":
 					var source_object_id: Variant = tile.get("source_object_id", null)
 					var source_object_valid: bool = _valid_int(source_object_id, 1, 1999)
 					if not source_object_valid:
 						errors.append("invalid graph property identity %d" % index)
+					elif source_properties.has(int(source_object_id)):
+						errors.append("duplicate graph property identity %d" % index)
+					else:
+						source_properties[int(source_object_id)] = true
 					var land_price: Variant = tile.get("land_price", null)
 					var house_price: Variant = tile.get("house_price", null)
 					var land_price_valid: bool = _valid_int(land_price, 0, 1000000)

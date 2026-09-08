@@ -105,6 +105,34 @@ func _test_graph_constructor_and_legacy_compatibility() -> void:
 	var unsupported: Dictionary = _definition.duplicate(true)
 	unsupported["supports_new_game"] = false
 	_expect(_new_game_from_definition(unsupported) == null, "browse-only definition cannot start a game")
+	var asymmetric: Dictionary = _definition.duplicate(true)
+	asymmetric["board"][1]["adjacent"].erase(0)
+	_expect(not bool(GameState.validate_board_definition(asymmetric).get("ok", false)), "asymmetric definition is rejected")
+	_expect(_new_game_from_definition(asymmetric) == null, "asymmetric definition cannot create an unsaveable game")
+	for change in [
+		{"field": "source_node_id", "value": 0},
+		{"field": "type_and_idx", "value": 0},
+		{"field": "type_and_idx", "value": 2002},
+		{"field": "cost", "value": 999},
+		{"field": "upgrade_cost", "value": 999},
+		{"field": "building_level", "value": 6}]:
+		var invalid: Dictionary = _definition.duplicate(true)
+		invalid["board"][2][change.field] = change.value
+		_expect(not bool(GameState.validate_board_definition(invalid).get("ok", false)), "reject invalid definition " + str(change))
+		_expect(_new_game_from_definition(invalid) == null, "invalid definition never creates unsaveable game " + str(change))
+	var missing_node: Dictionary = _definition.duplicate(true)
+	missing_node["board"][0].erase("source_node_id")
+	_expect(_new_game_from_definition(missing_node) == null, "missing source node identity cannot start")
+	var invalid_level: Dictionary = _definition.duplicate(true)
+	invalid_level["board"][0]["building_level"] = 6
+	_expect(_new_game_from_definition(invalid_level) == null, "non-property cannot start with invalid level")
+	var disguised_housing: Dictionary = _definition.duplicate(true)
+	disguised_housing["board"][2]["kind"] = "rest"
+	_expect(_new_game_from_definition(disguised_housing) == null, "housing cannot be admitted as inert non-property")
+	var duplicate_housing: Dictionary = _definition.duplicate(true)
+	duplicate_housing["board"][3]["source_object_id"] = 1
+	duplicate_housing["board"][3]["type_and_idx"] = 2001
+	_expect(_new_game_from_definition(duplicate_housing) == null, "one source house cannot occupy two purchase records")
 	var bad_identity: Dictionary = _definition.duplicate(true)
 	bad_identity["source"]["payload_sha256"] = ""
 	_expect(_new_game_from_definition(bad_identity) == null, "missing source hash rejects graph game")
@@ -251,6 +279,13 @@ func _test_pending_route_save_load_and_validation() -> void:
 		var first_roll: Dictionary = game.roll()
 		var second_roll: Dictionary = restored.roll()
 		_expect_equal(second_roll.get("dice", []), first_roll.get("dice", []), "restored RNG continues after route replay")
+	var disguised_housing: Dictionary = saved.duplicate(true)
+	disguised_housing["board"][2]["kind"] = "rest"
+	_expect(not bool(GameState.validate_save(disguised_housing).get("ok", false)), "save housing cannot masquerade as a non-property")
+	var duplicate_housing: Dictionary = saved.duplicate(true)
+	duplicate_housing["board"][3]["source_object_id"] = 1
+	duplicate_housing["board"][3]["type_and_idx"] = 2001
+	_expect(not bool(GameState.validate_save(duplicate_housing).get("ok", false)), "duplicate source house in save is rejected")
 	var bad_identity: Dictionary = saved.duplicate(true)
 	bad_identity["map_id"] = "Game:tampered"
 	_expect(not bool(GameState.validate_save(bad_identity).get("ok", false)), "tampered map identity is rejected")

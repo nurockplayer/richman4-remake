@@ -728,7 +728,7 @@ func _default_setup_options(player_count: int) -> Dictionary:
 		character_ids.append(player_id)
 	return {
 		"original_inventory": true,
-		"original_facilities": true,
+		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -875,7 +875,7 @@ func _collect_setup_options() -> Dictionary:
 		seen[character_id] = true
 	return {"ok": true, "options": {
 		"original_inventory": true,
-		"original_facilities": true,
+		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,

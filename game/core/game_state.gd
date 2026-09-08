@@ -136,7 +136,7 @@ static func new_game(seed_value: int, player_count: int = 4, options: Dictionary
 		return null
 	if not options.is_empty():
 		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
-		if setup_options.is_empty():
+		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)):
 			return null
 		var setup_game = new()
 		setup_game._initialize_setup(seed_value, player_count, setup_options)
@@ -3756,6 +3756,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var last_total_valid: bool = _valid_int(last_total_value, 0, MAX_GRAPH_STEPS)
 	if not last_total_valid:
 		errors.append("invalid last_total")
+	if facility_save and last_total_valid and _valid_int(data.get("last_roll_total", null), 0, MAX_GRAPH_STEPS) and int(data["last_roll_total"]) != int(last_total_value):
+		errors.append("facility preserved roll total mismatch")
 	if graph_save and last_roll_valid and last_total_valid:
 		if last_roll.is_empty() and int(last_total_value) != 0:
 			errors.append("graph last roll is missing for total")

@@ -17,11 +17,14 @@ func _initialize() -> void:
 	_test_graph_constructor_and_legacy_compatibility()
 	_test_branch_movement_and_previous_node()
 	_test_card_points_and_unsupported_tiles()
+	_test_graph_source_classification_and_points()
 	_test_fixed_property_economics()
 	_test_pending_route_save_load_and_validation()
+	_test_graph_remaining_step_bounds()
 	_test_graph_save_degree_limit()
 	_test_graph_save_positions()
 	_test_ai_completes_pending_routes_deterministically()
+	_test_ai_completes_eighteen_step_car_route()
 	print("Graph flow checks: %d, failures: %d" % [_checks, _failures])
 	quit(1 if _failures else 0)
 
@@ -219,6 +222,87 @@ func _test_card_points_and_unsupported_tiles() -> void:
 		_expect_equal(unsupported_game.state["players"][0]["cards"].size(), 0, "unsupported tile does not grant a guessed card")
 
 
+func _test_graph_source_classification_and_points() -> void:
+	var source_kinds := {0: "unsupported", 1: "points", 4: "card", 5: "bank"}
+	for index in source_kinds:
+		var tampered: Dictionary = _definition.duplicate(true)
+		tampered["board"][index]["kind"] = "rest"
+		_expect(not bool(GameState.validate_board_definition(tampered).get("ok", false)), "source kind tampering is rejected for node %d" % index)
+		_expect(_new_game_from_definition(tampered) == null, "source kind tampering cannot start node %d" % index)
+
+	var rest: Dictionary = _definition.duplicate(true)
+	rest["board"][0]["type_and_idx"] = 0
+	rest["board"][0]["event_code"] = 0
+	rest["board"][0]["kind"] = "rest"
+	_expect(bool(GameState.validate_board_definition(rest).get("ok", false)), "event zero source remains an inert rest tile")
+	for invalid_kind in ["tax", "event", "stock", "start"]:
+		var active_rest: Dictionary = rest.duplicate(true)
+		active_rest["board"][0]["kind"] = invalid_kind
+		_expect(not bool(GameState.validate_board_definition(active_rest).get("ok", false)), "event zero cannot opt into %s" % invalid_kind)
+	var event_two: Dictionary = rest.duplicate(true)
+	event_two["board"][0]["event_code"] = 2
+	_expect(not bool(GameState.validate_board_definition(event_two).get("ok", false)), "event two cannot remain an inert rest tile")
+	var event_two_card: Dictionary = event_two.duplicate(true)
+	event_two_card["board"][0]["kind"] = "card"
+	_expect(not bool(GameState.validate_board_definition(event_two_card).get("ok", false)), "event two cannot masquerade as a card")
+	var raw_event_two: Dictionary = Fixture.make()
+	raw_event_two["nodes"][1]["event_code"] = 2
+	var normalized_event_two: Dictionary = Maps.normalize_map(raw_event_two)
+	_expect(bool(normalized_event_two.get("ok", false)), "event two source normalizes")
+	if bool(normalized_event_two.get("ok", false)):
+		_expect_equal(normalized_event_two["definition"]["board"][1]["kind"], "unsupported", "event two source is explicitly unsupported")
+		_expect_equal(normalized_event_two["definition"]["board"][1]["name"], "新聞（待還原）", "event two keeps its source event name")
+
+	for source_points in [{"event_code": 10, "points": 50}, {"event_code": 11, "points": 30}, {"event_code": 12, "points": 10}]:
+		var mapped: Dictionary = _definition.duplicate(true)
+		mapped["board"][1]["event_code"] = source_points["event_code"]
+		mapped["board"][1]["points"] = source_points["points"]
+		_expect(bool(GameState.validate_board_definition(mapped).get("ok", false)), "point source %d keeps exact value" % source_points["event_code"])
+		var wrong_points: Dictionary = mapped.duplicate(true)
+		wrong_points["board"][1]["points"] = int(source_points["points"]) + 1
+		_expect(not bool(GameState.validate_board_definition(wrong_points).get("ok", false)), "point source %d rejects wrong value" % source_points["event_code"])
+	var negative_points: Dictionary = _definition.duplicate(true)
+	negative_points["board"][1]["points"] = -1
+	_expect(not bool(GameState.validate_board_definition(negative_points).get("ok", false)), "negative point tile value is rejected")
+	var point_extra: Dictionary = _definition.duplicate(true)
+	point_extra["board"][4]["points"] = 1
+	_expect(not bool(GameState.validate_board_definition(point_extra).get("ok", false)), "non-point tile cannot carry point value")
+
+	var game: Object = _new_graph(1101)
+	_expect(game != null, "source classification save fixture starts")
+	if game == null:
+		return
+	var saved: Dictionary = game.to_dict()
+	for index in source_kinds:
+		var bad_save: Dictionary = saved.duplicate(true)
+		bad_save["board"][index]["kind"] = "rest"
+		_expect(not bool(GameState.validate_save(bad_save).get("ok", false)), "source kind tampering is rejected in save for node %d" % index)
+	var bad_rest_save: Dictionary = saved.duplicate(true)
+	bad_rest_save["board"][0]["type_and_idx"] = 0
+	bad_rest_save["board"][0]["event_code"] = 0
+	bad_rest_save["board"][0]["kind"] = "tax"
+	_expect(not bool(GameState.validate_save(bad_rest_save).get("ok", false)), "rest source cannot opt into an active save tile")
+	saved["board"][1]["points"] = -1
+	_expect(not bool(GameState.validate_save(saved).get("ok", false)), "negative point tile value is rejected in save")
+	var capped_points: Object = _new_graph(1102)
+	_expect(capped_points != null, "point ceiling transition fixture starts")
+	if capped_points != null:
+		capped_points.state["players"][0]["points"] = GameState.MAX_GRAPH_POINTS
+		capped_points._graph_visit_tile(0, capped_points.state["board"][1], false)
+		_expect_equal(capped_points.state["players"][0]["points"], GameState.MAX_GRAPH_POINTS, "point award saturates at the save ceiling")
+		_expect_equal(capped_points.state["last_event"].get("points", -1), 0, "capped point event records the actual award")
+		_expect_equal(capped_points.state["last_event"].get("source_points", -1), 50, "capped point event preserves source value")
+		_expect(bool(GameState.validate_save(capped_points.to_dict()).get("ok", false)), "capped point transition remains saveable")
+
+	var facility_event: Dictionary = _definition.duplicate(true)
+	facility_event["board"][4]["type_and_idx"] = 4001
+	facility_event["board"][4]["kind"] = "unsupported"
+	_expect(bool(GameState.validate_board_definition(facility_event).get("ok", false)), "facility event remains explicitly unsupported")
+	var facility_as_card: Dictionary = facility_event.duplicate(true)
+	facility_as_card["board"][4]["kind"] = "card"
+	_expect(not bool(GameState.validate_board_definition(facility_as_card).get("ok", false)), "facility event cannot masquerade as a card")
+
+
 func _test_fixed_property_economics() -> void:
 	var game: Object = _new_graph(1200)
 	_expect(game != null, "property economy fixture starts")
@@ -347,6 +431,54 @@ func _test_pending_route_save_load_and_validation() -> void:
 		_expect(not bool(GameState.validate_save(bad_current_rent).get("ok", false)), "graph current rent must match building level")
 
 
+func _test_graph_remaining_step_bounds() -> void:
+	var game: Object = _new_graph(1601)
+	_expect(game != null, "remaining-step validation fixture starts")
+	if game == null:
+		return
+	var pending: Dictionary = game.to_dict()
+	pending["phase"] = "await_route"
+	pending["route_options"] = [0, 2, 3]
+	pending["pending_movement"] = {"player_id": 0, "current_node": 1, "previous_node": -1}
+	pending["last_roll"] = [6, 6, 6]
+	pending["last_total"] = 18
+	pending["remaining_steps"] = 19
+	pending["players"][0]["vehicles"]["car"] = true
+	pending["players"][0]["vehicle"] = "car"
+	pending["players"][0]["dice_count"] = 3
+	_expect(not bool(GameState.validate_save(pending).get("ok", false)), "graph remaining steps above eighteen are rejected")
+	pending["remaining_steps"] = 1000000000
+	_expect(not bool(GameState.validate_save(pending).get("ok", false)), "graph billion-step cycle payload is rejected")
+	pending["remaining_steps"] = 18
+	pending["last_roll"] = [1]
+	_expect(not bool(GameState.validate_save(pending).get("ok", false)), "graph pending roll total must match dice")
+	pending["last_roll"] = [6, 6, 6]
+	pending["last_total"] = 18
+	pending["players"][0]["vehicle"] = "walking"
+	pending["players"][0]["dice_count"] = 1
+	_expect(not bool(GameState.validate_save(pending).get("ok", false)), "graph pending roll cannot exceed vehicle dice limit")
+	pending["players"][0]["vehicle"] = "car"
+	pending["players"][0]["dice_count"] = 3
+	pending["last_roll"] = []
+	pending["last_total"] = 0
+	pending["remaining_steps"] = 1
+	_expect(not bool(GameState.validate_save(pending).get("ok", false)), "route phase requires an actual pending roll")
+
+	var guarded: Object = _new_graph(1602)
+	_expect(guarded != null, "runtime remaining-step guard fixture starts")
+	if guarded != null:
+		guarded.set_player_ai(0, true)
+		guarded.state["phase"] = "await_route"
+		guarded.state["route_options"] = [0, 2, 3]
+		guarded.state["pending_movement"] = {"player_id": 0, "current_node": 1, "previous_node": -1}
+		guarded.state["last_roll"] = [6, 6, 6]
+		guarded.state["last_total"] = 18
+		guarded.state["remaining_steps"] = 1000000000
+		var result: Dictionary = guarded.run_ai_turn()
+		_expect(not bool(result.get("ok", false)), "AI rejects an unbounded pending route explicitly")
+		_expect_equal(result.get("completed", true), false, "AI marks an invalid pending route incomplete")
+
+
 func _test_ai_completes_pending_routes_deterministically() -> void:
 	var first: Object = _new_graph(1500)
 	var second: Object = _new_graph(1500)
@@ -363,6 +495,66 @@ func _test_ai_completes_pending_routes_deterministically() -> void:
 	_expect(second.state.get("phase", "") != "await_route", "second AI does not stop at pending route")
 	_expect_equal(first.state.get("route_options", []), [], "AI clears route options")
 	_expect_equal(first.to_json(), second.to_json(), "AI graph route choice is deterministic")
+
+
+func _long_branch_definition() -> Dictionary:
+	var board: Array = []
+	var node_count := 20
+	for index in range(node_count):
+		var adjacent: Array = []
+		for delta in [-3, -1, 1, 3]:
+			adjacent.append((index + delta + node_count) % node_count)
+		adjacent.sort()
+		var tile: Dictionary = {
+			"index": index, "source_node_id": index + 1, "x": index * 10, "y": 0, "adjacent": adjacent,
+			"type_and_idx": 0, "visual_index": 0, "event_code": 0, "source_object_id": 0,
+			"kind": "rest", "name": "道路 %d" % index, "owner": -1, "building_level": 0,
+			"cost": 0, "upgrade_cost": 0, "base_rent": 0, "rent": 0, "group": "", "tax_amount": 0}
+		if index == node_count - 1:
+			tile.merge({
+				"type_and_idx": 2001, "source_object_id": 1, "kind": "property", "name": "長路住宅",
+				"cost": 100, "land_price": 100, "house_price": 50, "upgrade_cost": 50,
+				"base_rent": 10, "rent": 10, "rent_by_level": [10, 20, 30, 40, 50, 60], "group": "long"}, true)
+		board.append(tile)
+	return {
+		"schema": "richman4.runtime-map/v1", "version": 1, "id": "Game:98", "name": "長路分岔測試",
+		"source": {"edition": "Game", "map_number": 98, "archive": "Game/map.mkf", "entry_index": 1,
+			"payload_sha256": "a".repeat(64), "source_file_sha256": "b".repeat(64)},
+		"board": board, "start_position": 0, "supports_new_game": true}
+
+
+func _test_ai_completes_eighteen_step_car_route() -> void:
+	var definition := _long_branch_definition()
+	var found: Dictionary = {}
+	for seed_value in range(1, 10000):
+		var game: Object = GameState.new_game_on_board(seed_value, 2, definition)
+		if game == null:
+			continue
+		game.state["players"][0]["vehicles"]["car"] = true
+		game.state["players"][0]["vehicle"] = "car"
+		game.state["players"][0]["dice_count"] = 3
+		var roll_result: Dictionary = game.roll()
+		if bool(roll_result.get("ok", false)) and int(roll_result.get("total", 0)) == 18:
+			found = {"game": game, "seed": seed_value}
+			break
+	_expect(not found.is_empty(), "car eighteen-step branch fixture is available")
+	if found.is_empty():
+		return
+	var game: Object = found["game"]
+	game.set_player_ai(0, true)
+	var result: Dictionary = game.run_ai_turn()
+	_expect(bool(result.get("ok", false)), "AI completes an eighteen-step car route")
+	_expect_equal(result.get("completed", false), true, "eighteen-step AI result is explicitly complete")
+	_expect(int(result.get("iterations", 99)) <= 16, "car route does not expand the AI action budget")
+	_expect_equal(result.get("route_iterations", -1), 18, "car route uses a separate route budget")
+	_expect(game.state.get("phase", "") != "await_route", "eighteen-step AI route does not remain pending")
+	_expect_equal(game.state.get("remaining_steps", -1), 0, "eighteen-step route consumes all movement")
+	_expect_equal(game.state.get("route_options", []), [], "eighteen-step route clears choices")
+	var route_choices := 0
+	for event in game.state.get("event_log", []):
+		if event.get("type", "") == "route_chosen":
+			route_choices += 1
+	_expect_equal(route_choices, 18, "AI chooses one branch for every car step")
 
 
 func _test_graph_save_positions() -> void:

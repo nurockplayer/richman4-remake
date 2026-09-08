@@ -777,7 +777,10 @@ def _preflight_output_keys(
     snapshot: list[tuple[str, Path]] = []
     for edition_name, edition_path in discovered:
         edition_component = _safe_component(edition_name)
-        for archive_path in _archive_files(edition_path):
+        archives = _archive_files(edition_path)
+        if not any(path.name.casefold() == "map.mkf" for path in archives):
+            raise InputError(f"edition no longer contains map.mkf: {edition_path}")
+        for archive_path in archives:
             archive_component = _safe_component(archive_path.stem)
             key = (edition_component.casefold(), archive_component.casefold())
             try:

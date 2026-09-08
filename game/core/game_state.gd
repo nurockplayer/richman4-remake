@@ -2466,6 +2466,8 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 	if _trap_pending():
 		return _error("請先回應陷害卡")
+	if _is_statuses() and _status_active(_current_player()):
+		return _error("拘留期間無法切換交通工具")
 	if not _require_phase("await_roll"):
 		return _error("只能在擲骰前選擇交通工具")
 	var player: Dictionary = _current_player()
@@ -3428,6 +3430,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return _respond_trap(params)
 	if _trap_pending():
 		return _error("請先回應陷害卡")
+	if _is_statuses() and _status_active(_current_player()) and normalized != "end_turn":
+		return _error("拘留期間無法執行主動操作")
 	if _is_companies() and int(state.get("company_service_pending",0))>0 and normalized != "company_upgrade":
 		return _error("請先選擇企業建設目標")
 	if normalized == "set_vehicle":

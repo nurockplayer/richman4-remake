@@ -51,6 +51,7 @@ func _initialize() -> void:
 	_test_status_actions_and_fees()
 	_test_dog_and_legacy_hospital()
 	_test_insurance_for_every_admission()
+	_test_status_public_action_gates()
 	print("Status flow checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -298,3 +299,24 @@ func _test_insurance_for_every_admission() -> void:
 	expect(int(player.cash) == initial_cash + 2000 * (3 + 2 + 1 + 128), "every admission input receives insurance payout")
 	expect(int(insurer.monthly_profit) == initial_profit - 2000 * (3 + 2 + 1 + 128), "insurance company is charged for every admission input")
 	expect(last_event_of_type(game, "company_insurance_paid").get("days", 0) == 128, "128-day insurance payment is observable")
+
+
+func _test_status_public_action_gates() -> void:
+	for kind in ["hospital", "prison"]:
+		var game := make_status_game(110)
+		game.state.god_objects=[]
+		expect(game.choose_action("buy_stock", {"symbol":"s02", "quantity":1}).get("ok",false), kind+" market baseline buys an available share")
+		expect(game.choose_action("set_vehicle", {"vehicle":"walking"}).get("ok",false), kind+" vehicle baseline is available")
+		expect(game._admit_player_status(0,kind,3).get("ok",false),kind+" action gate fixture admits current player")
+		for phase_name in ["await_roll", "await_action"]:
+			if phase_name=="await_action": game.roll()
+			for action in ["buy_stock", "sell_stock", "set_vehicle"]:
+				var before: String=game.to_json()
+				var result: Dictionary=game.choose_action(action,{"symbol":"s02","quantity":1,"vehicle":"walking"})
+				expect(not result.get("ok",false) and game.to_json()==before,kind+" "+phase_name+" rejects "+action+" without mutation")
+			var direct_before: String=game.to_json()
+			expect(not game.set_vehicle("walking").get("ok",false) and game.to_json()==direct_before,kind+" direct vehicle selection rejected")
+			expect(Game.validate_save(game.to_dict()).get("ok",false),kind+" "+phase_name+" still has valid save")
+	var legacy := Game.new_game_on_board(110,4,CompanyFixture.definition(),{"original_facilities":true,"original_gods":true,"original_companies":true,"start_date":{"year":1998,"month":1,"day":1}})
+	legacy.state.players[0].hospital_days=3
+	expect(legacy.choose_action("buy_stock",{"symbol":"s02","quantity":1}).get("ok",false),"v7 retains prior hospital stock permission")

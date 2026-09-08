@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "zh"
+tone_instructions: "請使用繁體中文（台灣）回覆。優先指出會影響正確性、遊戲流程、存讀檔、可重現性、穩定性或安全性的問題；避免純風格與低價值吹毛求疵。"
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  review_details: false
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
+
+chat:
+  auto_reply: true

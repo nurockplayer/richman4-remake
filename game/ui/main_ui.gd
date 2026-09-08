@@ -1,0 +1,1227 @@
+extends Control
+
+## Desktop game shell for the Richman 4 reconstruction.
+##
+## This script owns presentation and input only.  The simulation is loaded at
+## runtime so the UI remains parseable while the core is developed in its own
+## lane.  Once present, GameState is the authority for every displayed value.
+
+const SAVE_PATH := "user://richman4_save.json"
+const PLAYER_COUNT := 4
+const DEFAULT_SEED := 136622
+const PANEL_BG := Color("#1c2d40")
+const PANEL_RAISED := Color("#243b50")
+const PANEL_BORDER := Color("#36546b")
+const TEXT_MAIN := Color("#edf3f0")
+const TEXT_MUTED := Color("#99b2bd")
+const TEXT_GOLD := Color("#f1d28a")
+const ACCENT := Color("#e0a958")
+const ACCENT_DARK := Color("#a96d36")
+const PLAYER_COLORS := [
+	Color("#ef6a65"),
+	Color("#4ba6e8"),
+	Color("#e6b84f"),
+	Color("#73c989"),
+]
+
+var game_state: Object
+var state: Dictionary = {}
+var board_view: Control
+
+var seed_label: Label
+var phase_label: Label
+var turn_label: Label
+var current_player_label: Label
+var current_property_label: Label
+var current_property_detail: Label
+var players_list: VBoxContainer
+var event_log_view: RichTextLabel
+var event_status_label: Label
+var action_hint_label: Label
+
+var roll_button: Button
+var buy_button: Button
+var upgrade_button: Button
+var end_turn_button: Button
+var bank_button: Button
+var cards_button: Button
+var stocks_button: Button
+
+var new_game_button: Button
+var save_button: Button
+var load_button: Button
+
+var bank_popup: PopupPanel
+var bank_deposit_button: Button
+var bank_withdraw_button: Button
+var new_game_popup: PopupPanel
+var seed_input: LineEdit
+var player_count_option: OptionButton
+var cards_popup: PopupPanel
+var stocks_popup: PopupPanel
+var audio_controller: Object
+var audio_button: Button
+var audio_config_button: Button
+var audio_folder_dialog: FileDialog
+var cards_popup_list: VBoxContainer
+var stocks_popup_list: VBoxContainer
+var end_overlay: ColorRect
+var end_title: Label
+var end_detail: Label
+
+var _local_log: Array[String] = []
+var _ai_pending := false
+var _last_rendered_phase := ""
+var _selected_tile := -1
+
+func _ready() -> void:
+	_build_interface()
+	_setup_audio()
+	_new_game(DEFAULT_SEED)
+
+func _process(_delta: float) -> void:
+	_maybe_schedule_ai_turn()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_SPACE:
+			if roll_button != null and not roll_button.disabled:
+				_on_roll_pressed()
+				get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_N:
+			_new_game()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_S and event.ctrl_pressed:
+			_save_game()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_L and event.ctrl_pressed:
+			_load_game()
+			get_viewport().set_input_as_handled()
+
+func _build_interface() -> void:
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	
+	var background := ColorRect.new()
+	background.color = Color("#0d1b2a")
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(background)
+
+	var backdrop_glow := ColorRect.new()
+	backdrop_glow.color = Color("#11283a")
+	backdrop_glow.position = Vector2(0.0, 0.0)
+	backdrop_glow.size = Vector2(520.0, 180.0)
+	backdrop_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(backdrop_glow)
+
+	var margins := MarginContainer.new()
+	margins.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margins.add_theme_constant_override("margin_left", 22)
+	margins.add_theme_constant_override("margin_top", 18)
+	margins.add_theme_constant_override("margin_right", 22)
+	margins.add_theme_constant_override("margin_bottom", 18)
+	add_child(margins)
+
+	var root_column := VBoxContainer.new()
+	root_column.add_theme_constant_override("separation", 12)
+	root_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margins.add_child(root_column)
+
+	root_column.add_child(_build_header())
+	root_column.add_child(_build_playfield())
+	root_column.add_child(_build_action_bar())
+	root_column.add_child(_build_event_log())
+
+	_build_popups()
+	_build_end_overlay()
+
+func _build_header() -> Control:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(0.0, 68.0)
+	_apply_panel_style(panel, Color("#17283a"), PANEL_BORDER, 16, 1)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	margin.add_child(row)
+
+	var title_column := VBoxContainer.new()
+	title_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_column.add_theme_constant_override("separation", 1)
+	row.add_child(title_column)
+	var title := _make_label("大富翁 4", 24, TEXT_MAIN)
+	title_column.add_child(title)
+	var subtitle := _make_label("城市棋局 · 桌面重製版", 11, TEXT_MUTED)
+	title_column.add_child(subtitle)
+
+	var meta_column := VBoxContainer.new()
+	meta_column.custom_minimum_size = Vector2(154.0, 0.0)
+	meta_column.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(meta_column)
+	phase_label = _make_label("等待擲骰", 13, TEXT_GOLD)
+	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	meta_column.add_child(phase_label)
+	seed_label = _make_label("SEED 136622", 10, TEXT_MUTED)
+	seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	meta_column.add_child(seed_label)
+
+	new_game_button = _make_button("新局", _on_new_game_pressed, true)
+	new_game_button.custom_minimum_size = Vector2(72.0, 42.0)
+	row.add_child(new_game_button)
+	save_button = _make_button("儲存", _save_game)
+	save_button.custom_minimum_size = Vector2(72.0, 42.0)
+	row.add_child(save_button)
+	load_button = _make_button("讀取", _load_game)
+	load_button.custom_minimum_size = Vector2(72.0, 42.0)
+	row.add_child(load_button)
+	audio_button = _make_button("音樂", _on_audio_pressed)
+	audio_button.custom_minimum_size = Vector2(72.0, 42.0)
+	row.add_child(audio_button)
+	audio_config_button = _make_button("音樂設定", _on_audio_config_pressed)
+	audio_config_button.custom_minimum_size = Vector2(86.0, 42.0)
+	row.add_child(audio_config_button)
+	return panel
+
+func _build_playfield() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var board_panel := PanelContainer.new()
+	board_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	board_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_apply_panel_style(board_panel, PANEL_BG, PANEL_BORDER, 16, 1)
+	row.add_child(board_panel)
+	var board_margin := MarginContainer.new()
+	board_margin.add_theme_constant_override("margin_left", 10)
+	board_margin.add_theme_constant_override("margin_top", 10)
+	board_margin.add_theme_constant_override("margin_right", 10)
+	board_margin.add_theme_constant_override("margin_bottom", 10)
+	board_panel.add_child(board_margin)
+	var board_column := VBoxContainer.new()
+	board_column.add_theme_constant_override("separation", 7)
+	board_margin.add_child(board_column)
+	var board_header := HBoxContainer.new()
+	board_column.add_child(board_header)
+	var board_title := _make_label("棋盤", 14, TEXT_MAIN)
+	board_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	board_header.add_child(board_title)
+	var board_hint := _make_label("點選格位查看資產", 10, TEXT_MUTED)
+	board_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	board_header.add_child(board_hint)
+
+	var board_script: Variant = load("res://game/ui/board_view.gd")
+	if board_script != null:
+		board_view = board_script.new()
+	else:
+		board_view = _make_label("棋盤載入中…", 18, TEXT_MUTED)
+	board_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	board_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	board_column.add_child(board_view)
+	if board_view.has_signal("tile_selected"):
+		board_view.tile_selected.connect(_on_tile_selected)
+
+	var board_footer := _make_label("原版圖像資產為本機研究來源；目前以向量繪製還原版面。", 10, TEXT_MUTED)
+	board_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	board_column.add_child(board_footer)
+
+	var sidebar := PanelContainer.new()
+	sidebar.custom_minimum_size = Vector2(334.0, 0.0)
+	sidebar.size_flags_horizontal = Control.SIZE_SHRINK_END
+	sidebar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_apply_panel_style(sidebar, PANEL_BG, PANEL_BORDER, 16, 1)
+	row.add_child(sidebar)
+	var side_margin := MarginContainer.new()
+	side_margin.add_theme_constant_override("margin_left", 16)
+	side_margin.add_theme_constant_override("margin_top", 14)
+	side_margin.add_theme_constant_override("margin_right", 16)
+	side_margin.add_theme_constant_override("margin_bottom", 14)
+	sidebar.add_child(side_margin)
+	var side_column := VBoxContainer.new()
+	side_column.add_theme_constant_override("separation", 10)
+	side_margin.add_child(side_column)
+
+	var turn_header := HBoxContainer.new()
+	side_column.add_child(turn_header)
+	current_player_label = _make_label("你的回合", 18, TEXT_MAIN)
+	current_player_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	turn_header.add_child(current_player_label)
+	turn_label = _make_label("第 1 回合", 11, TEXT_GOLD)
+	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	turn_header.add_child(turn_label)
+
+	var players_heading := _make_label("玩家狀態", 11, TEXT_MUTED)
+	side_column.add_child(players_heading)
+	players_list = VBoxContainer.new()
+	players_list.add_theme_constant_override("separation", 5)
+	players_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side_column.add_child(players_list)
+
+	var property_panel := PanelContainer.new()
+	_apply_panel_style(property_panel, PANEL_RAISED, Color("#47705f"), 12, 1)
+	side_column.add_child(property_panel)
+	var property_margin := MarginContainer.new()
+	property_margin.add_theme_constant_override("margin_left", 12)
+	property_margin.add_theme_constant_override("margin_top", 10)
+	property_margin.add_theme_constant_override("margin_right", 12)
+	property_margin.add_theme_constant_override("margin_bottom", 10)
+	property_panel.add_child(property_margin)
+	var property_column := VBoxContainer.new()
+	property_column.add_theme_constant_override("separation", 3)
+	property_margin.add_child(property_column)
+	var property_caption := _make_label("目前所在格位", 10, TEXT_MUTED)
+	property_column.add_child(property_caption)
+	current_property_label = _make_label("街區 01", 15, TEXT_MAIN)
+	property_column.add_child(current_property_label)
+	current_property_detail = _make_label("尚未擲骰", 11, Color("#b6d3c5"))
+	current_property_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	property_column.add_child(current_property_detail)
+
+	var utility_row := HBoxContainer.new()
+	utility_row.add_theme_constant_override("separation", 7)
+	side_column.add_child(utility_row)
+	var bank_shortcut := _make_button("銀行", _on_bank_pressed)
+	bank_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	utility_row.add_child(bank_shortcut)
+	var cards_shortcut := _make_button("卡片", _on_cards_pressed)
+	cards_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	utility_row.add_child(cards_shortcut)
+	var stocks_shortcut := _make_button("股市", _on_stocks_pressed)
+	stocks_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	utility_row.add_child(stocks_shortcut)
+	return row
+
+func _build_action_bar() -> Control:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(0.0, 76.0)
+	_apply_panel_style(panel, Color("#17283a"), PANEL_BORDER, 16, 1)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	margin.add_child(row)
+	var hint_column := VBoxContainer.new()
+	hint_column.custom_minimum_size = Vector2(172.0, 0.0)
+	hint_column.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(hint_column)
+	action_hint_label = _make_label("準備開始", 13, TEXT_MAIN)
+	hint_column.add_child(action_hint_label)
+	var hint := _make_label("SPACE 擲骰 · N 新局", 10, TEXT_MUTED)
+	hint_column.add_child(hint)
+
+	roll_button = _make_button("擲骰", _on_roll_pressed, true)
+	roll_button.custom_minimum_size = Vector2(112.0, 52.0)
+	row.add_child(roll_button)
+	buy_button = _make_button("購買地產", _on_buy_pressed)
+	buy_button.custom_minimum_size = Vector2(112.0, 52.0)
+	row.add_child(buy_button)
+	upgrade_button = _make_button("升級建設", _on_upgrade_pressed)
+	upgrade_button.custom_minimum_size = Vector2(112.0, 52.0)
+	row.add_child(upgrade_button)
+	end_turn_button = _make_button("結束回合", _on_end_turn_pressed)
+	end_turn_button.custom_minimum_size = Vector2(112.0, 52.0)
+	row.add_child(end_turn_button)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+	bank_button = _make_button("銀行", _on_bank_pressed)
+	bank_button.custom_minimum_size = Vector2(92.0, 52.0)
+	row.add_child(bank_button)
+	cards_button = _make_button("卡片", _on_cards_pressed)
+	cards_button.custom_minimum_size = Vector2(92.0, 52.0)
+	row.add_child(cards_button)
+	stocks_button = _make_button("股票", _on_stocks_pressed)
+	stocks_button.custom_minimum_size = Vector2(92.0, 52.0)
+	row.add_child(stocks_button)
+	return panel
+
+func _build_event_log() -> Control:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(0.0, 132.0)
+	_apply_panel_style(panel, PANEL_BG, PANEL_BORDER, 16, 1)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	margin.add_child(column)
+	var header := HBoxContainer.new()
+	column.add_child(header)
+	var title := _make_label("行動紀錄", 12, TEXT_MAIN)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	event_status_label = _make_label("simulation log", 10, TEXT_MUTED)
+	event_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	header.add_child(event_status_label)
+	event_log_view = RichTextLabel.new()
+	event_log_view.bbcode_enabled = false
+	event_log_view.fit_content = false
+	event_log_view.scroll_active = true
+	event_log_view.scroll_following = true
+	event_log_view.custom_minimum_size = Vector2(0.0, 80.0)
+	event_log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	event_log_view.add_theme_font_size_override("normal_font_size", 11)
+	event_log_view.add_theme_color_override("default_color", TEXT_MUTED)
+	column.add_child(event_log_view)
+	return panel
+
+func _build_popups() -> void:
+	new_game_popup = _make_popup(Vector2i(446, 318))
+	var new_game_box := _popup_box(new_game_popup)
+	new_game_box.add_child(_make_label("建立新局", 19, TEXT_MAIN))
+	var new_game_description := _make_label("選擇玩家數與可重現的 seed；seed 留白會自動產生。", 11, TEXT_MUTED)
+	new_game_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	new_game_box.add_child(new_game_description)
+	var seed_caption := _make_label("Seed", 11, TEXT_MUTED)
+	new_game_box.add_child(seed_caption)
+	seed_input = LineEdit.new()
+	seed_input.placeholder_text = "留白以使用新 seed"
+	seed_input.custom_minimum_size = Vector2(0.0, 38.0)
+	seed_input.add_theme_font_size_override("font_size", 13)
+	new_game_box.add_child(seed_input)
+	var players_caption := _make_label("玩家人數", 11, TEXT_MUTED)
+	new_game_box.add_child(players_caption)
+	player_count_option = OptionButton.new()
+	player_count_option.custom_minimum_size = Vector2(0.0, 38.0)
+	player_count_option.add_theme_font_size_override("font_size", 12)
+	player_count_option.add_item("2 位玩家", 2)
+	player_count_option.add_item("3 位玩家", 3)
+	player_count_option.add_item("4 位玩家", 4)
+	player_count_option.select(2)
+	new_game_box.add_child(player_count_option)
+	var new_game_actions := HBoxContainer.new()
+	new_game_actions.add_theme_constant_override("separation", 8)
+	new_game_box.add_child(new_game_actions)
+	var new_game_cancel := _make_button("取消", new_game_popup.hide)
+	new_game_cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	new_game_actions.add_child(new_game_cancel)
+	var new_game_confirm := _make_button("開始新局", _on_new_game_confirm, true)
+	new_game_confirm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	new_game_actions.add_child(new_game_confirm)
+
+	bank_popup = _make_popup(Vector2i(430, 276))
+	var bank_box := _popup_box(bank_popup)
+	bank_box.add_child(_make_label("銀行帳戶", 19, TEXT_MAIN))
+	var bank_description := _make_label("管理現金與存款。每次操作金額為 $500。", 11, TEXT_MUTED)
+	bank_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bank_box.add_child(bank_description)
+	var bank_balance := _make_label("", 14, TEXT_GOLD)
+	bank_balance.name = "Balance"
+	bank_box.add_child(bank_balance)
+	var bank_actions := HBoxContainer.new()
+	bank_actions.add_theme_constant_override("separation", 8)
+	bank_box.add_child(bank_actions)
+	bank_deposit_button = _make_button("存入 $500", _on_deposit_pressed, true)
+	var deposit := bank_deposit_button
+	deposit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bank_actions.add_child(deposit)
+	bank_withdraw_button = _make_button("提取 $500", _on_withdraw_pressed)
+	var withdraw := bank_withdraw_button
+	withdraw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bank_actions.add_child(withdraw)
+	var bank_close := _make_button("關閉", bank_popup.hide)
+	bank_box.add_child(bank_close)
+
+	cards_popup = _make_popup(Vector2i(560, 380))
+	var cards_box := _popup_box(cards_popup)
+	cards_box.add_child(_make_label("持有卡片", 19, TEXT_MAIN))
+	var cards_description := _make_label("選擇一張卡片使用；效果由模擬層判定。", 11, TEXT_MUTED)
+	cards_box.add_child(cards_description)
+	cards_popup_list = VBoxContainer.new()
+	cards_popup_list.add_theme_constant_override("separation", 7)
+	cards_box.add_child(cards_popup_list)
+	var cards_close := _make_button("關閉", cards_popup.hide)
+	cards_box.add_child(cards_close)
+
+	stocks_popup = _make_popup(Vector2i(500, 360))
+	var stocks_box := _popup_box(stocks_popup)
+	stocks_box.add_child(_make_label("股票市場", 19, TEXT_MAIN))
+	var stocks_description := _make_label("每次買賣一股；報價由目前市場快照提供。", 11, TEXT_MUTED)
+	stocks_box.add_child(stocks_description)
+	stocks_popup_list = VBoxContainer.new()
+	stocks_popup_list.add_theme_constant_override("separation", 7)
+	stocks_box.add_child(stocks_popup_list)
+	var stocks_close := _make_button("關閉", stocks_popup.hide)
+	stocks_box.add_child(stocks_close)
+
+	audio_folder_dialog = FileDialog.new()
+	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	audio_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	audio_folder_dialog.title = "選擇原版遊戲資料夾"
+	audio_folder_dialog.ok_button_text = "使用此資料夾"
+	audio_folder_dialog.dir_selected.connect(_on_audio_folder_selected)
+	add_child(audio_folder_dialog)
+
+func _build_end_overlay() -> void:
+	end_overlay = ColorRect.new()
+	end_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	end_overlay.color = Color(0.03, 0.08, 0.13, 0.84)
+	end_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(end_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	end_overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(430.0, 250.0)
+	_apply_panel_style(panel, Color("#20394b"), Color("#d9a958"), 18, 2)
+	center.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 28)
+	margin.add_theme_constant_override("margin_top", 26)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_bottom", 24)
+	panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.add_theme_constant_override("separation", 10)
+	margin.add_child(column)
+	end_title = _make_label("本局結算", 28, TEXT_GOLD)
+	end_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(end_title)
+	end_detail = _make_label("", 13, TEXT_MAIN)
+	end_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	end_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(end_detail)
+	var restart := _make_button("開始新局", _on_end_restart_pressed, true)
+	restart.custom_minimum_size = Vector2(0.0, 48.0)
+	column.add_child(restart)
+	var close := _make_button("返回棋盤", _close_end_overlay)
+	close.custom_minimum_size = Vector2(0.0, 38.0)
+	column.add_child(close)
+	end_overlay.hide()
+
+func _make_popup(size: Vector2i) -> PopupPanel:
+	var popup := PopupPanel.new()
+	popup.size = size
+	popup.add_theme_stylebox_override("panel", _style_box(Color("#203447"), Color("#54748a"), 16, 1))
+	add_child(popup)
+	return popup
+
+func _popup_box(popup: PopupPanel) -> VBoxContainer:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 22)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_right", 22)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	popup.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 9)
+	margin.add_child(box)
+	return box
+
+func _on_new_game_pressed() -> void:
+	if new_game_popup == null:
+		_new_game()
+		return
+	seed_input.text = ""
+	player_count_option.select(2)
+	new_game_popup.popup_centered()
+	seed_input.grab_focus()
+
+func _on_new_game_confirm() -> void:
+	var requested_seed := -1
+	if not seed_input.text.strip_edges().is_empty():
+		if not seed_input.text.strip_edges().is_valid_int():
+			_append_local_log("Seed 必須是整數，或留白自動產生。")
+			_refresh_log_only()
+			return
+		requested_seed = int(seed_input.text.strip_edges())
+	var requested_players := player_count_option.get_selected_id()
+	_new_game(requested_seed, requested_players)
+	new_game_popup.hide()
+
+func _new_game(seed_value: int = -1, player_count: int = PLAYER_COUNT) -> void:
+	var resolved_seed := seed_value
+	if resolved_seed < 0:
+		resolved_seed = int(Time.get_unix_time_from_system()) % 2147483647
+	var resolved_players: int = clampi(player_count, 2, 4)
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	var candidate: Variant = null
+	if state_script != null and state_script.has_method("new_game"):
+		candidate = state_script.new_game(resolved_seed, resolved_players)
+	if candidate == null:
+		game_state = null
+		state = _unavailable_state(resolved_seed)
+		_local_log.clear()
+		_append_local_log("模擬核心未載入；遊戲操作已停用。")
+	else:
+		game_state = candidate
+		_local_log.clear()
+		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
+	_refresh_from_state()
+	end_overlay.hide()
+	_ai_pending = false
+
+func _setup_audio() -> void:
+	var audio_script: Variant = load("res://game/platform/original_audio.gd")
+	if audio_script == null:
+		audio_button.disabled = true
+		audio_config_button.disabled = true
+		return
+	audio_controller = audio_script.new()
+	add_child(audio_controller)
+	if audio_controller.has_signal("playback_changed"):
+		audio_controller.playback_changed.connect(_on_audio_playback_changed)
+	_update_audio_button()
+
+func _on_audio_pressed() -> void:
+	if audio_controller == null:
+		_append_local_log("音樂模組尚未載入。")
+		_refresh_log_only()
+		return
+	var tracks: Variant = audio_controller.get("tracks")
+	if tracks is PackedStringArray and tracks.is_empty():
+		_on_audio_config_pressed()
+		return
+	var enabled := bool(audio_controller.get("enabled"))
+	audio_controller.call("set_enabled", not enabled)
+	_append_local_log("原版音樂已%s。" % ("開啟" if not enabled else "關閉"))
+	_update_audio_button()
+	_refresh_log_only()
+
+func _on_audio_config_pressed() -> void:
+	if audio_folder_dialog == null:
+		_append_local_log("音樂設定暫時無法使用。")
+		_refresh_log_only()
+		return
+	audio_folder_dialog.popup_centered_ratio(0.72)
+
+func _on_audio_folder_selected(path: String) -> void:
+	if audio_controller == null:
+		return
+	var configured: Variant = audio_controller.call("configure", path)
+	if bool(configured):
+		_append_local_log("已載入原版音樂資料夾，共 %d 首。" % int(audio_controller.get("tracks").size()))
+	else:
+		_append_local_log("選取的資料夾找不到 Media/Music/*.ogg。")
+	_update_audio_button()
+	_refresh_log_only()
+
+func _on_audio_playback_changed(track_name: String) -> void:
+	if event_status_label != null:
+		event_status_label.text = "播放：%s" % track_name
+
+func _update_audio_button() -> void:
+	if audio_button == null or audio_controller == null:
+		return
+	var enabled := bool(audio_controller.get("enabled"))
+	var tracks: Variant = audio_controller.get("tracks")
+	if tracks is PackedStringArray and tracks.is_empty():
+		audio_button.text = "音樂"
+	else:
+		audio_button.text = "音樂 開" if enabled else "音樂 關"
+
+func _save_game() -> void:
+	if game_state == null or not game_state.has_method("to_dict"):
+		_append_local_log("儲存失敗：模擬核心未載入。")
+		_refresh_log_only()
+		return
+	var serialized: Variant = game_state.call("to_dict")
+	if not serialized is Dictionary:
+		_append_local_log("儲存失敗：模擬核心未提供有效快照。")
+		_refresh_log_only()
+		return
+	var payload: Dictionary = serialized
+	var json_text := JSON.stringify(payload)
+	var parsed: Variant = JSON.parse_string(json_text)
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	if not parsed is Dictionary or state_script == null or not state_script.has_method("from_dict") or state_script.from_dict(parsed) == null:
+		_append_local_log("儲存失敗：快照驗證未通過，原有存檔保持不變。")
+		_refresh_log_only()
+		return
+	var temporary_path := SAVE_PATH + ".tmp"
+	var file := FileAccess.open(temporary_path, FileAccess.WRITE)
+	if file == null:
+		_append_local_log("儲存失敗：無法建立暫存檔。")
+		_refresh_log_only()
+		return
+	file.store_string(json_text)
+	file.close()
+	var verify_file := FileAccess.open(temporary_path, FileAccess.READ)
+	var verify_text := verify_file.get_as_text() if verify_file != null else ""
+	if verify_file != null:
+		verify_file.close()
+	var verify_payload: Variant = JSON.parse_string(verify_text)
+	if not verify_payload is Dictionary or state_script.from_dict(verify_payload) == null:
+		DirAccess.remove_absolute(temporary_path)
+		_append_local_log("儲存失敗：暫存檔驗證未通過，原有存檔保持不變。")
+		_refresh_log_only()
+		return
+	if DirAccess.rename_absolute(temporary_path, SAVE_PATH) != OK:
+		DirAccess.remove_absolute(temporary_path)
+		_append_local_log("儲存失敗：無法安全替換存檔，原有存檔保持不變。")
+		_refresh_log_only()
+		return
+	_append_local_log("已安全儲存棋局 · seed %s。" % str(payload.get("seed", "?")))
+	_refresh_log_only()
+
+func _load_game() -> void:
+	if not FileAccess.file_exists(SAVE_PATH):
+		_append_local_log("找不到存檔；先建立一局再儲存即可。")
+		_refresh_log_only()
+		return
+	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if file == null:
+		_append_local_log("讀取失敗：無法開啟本機存檔。")
+		_refresh_log_only()
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not parsed is Dictionary:
+		_append_local_log("讀取失敗：存檔格式無效。")
+		_refresh_log_only()
+		return
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	if state_script == null:
+		_append_local_log("讀取失敗：模擬核心未載入，目前棋局保持不變。")
+		_refresh_log_only()
+		return
+	if not state_script.has_method("from_dict"):
+		_append_local_log("讀取失敗：模擬核心缺少存檔介面，目前棋局保持不變。")
+		_refresh_log_only()
+		return
+	var restored: Variant = state_script.from_dict(parsed)
+	if restored == null:
+		_append_local_log("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
+		_refresh_log_only()
+		return
+	game_state = restored
+	_local_log.clear()
+	_append_local_log("已讀取棋局 · seed %s。" % str(parsed.get("seed", "?")))
+	_refresh_from_state()
+	end_overlay.hide()
+	_ai_pending = false
+
+func _on_roll_pressed() -> void:
+	if roll_button.disabled:
+		return
+	var result := _invoke_game("roll")
+	_append_local_log("你擲出 %s。" % _roll_text(result))
+	_handle_result(result)
+
+func _on_buy_pressed() -> void:
+	if buy_button.disabled:
+		return
+	var result := _invoke_game("choose_action", ["buy", {}])
+	_append_local_log("購買地產：%s" % _result_text(result, "已送出購買指令。"))
+	_handle_result(result)
+
+func _on_upgrade_pressed() -> void:
+	if upgrade_button.disabled:
+		return
+	var result := _invoke_game("choose_action", ["upgrade", {}])
+	_append_local_log("升級建設：%s" % _result_text(result, "已送出升級指令。"))
+	_handle_result(result)
+
+func _on_end_turn_pressed() -> void:
+	if end_turn_button.disabled:
+		return
+	var result := _invoke_game("end_turn")
+	_append_local_log("你結束了回合。")
+	_handle_result(result)
+
+func _on_deposit_pressed() -> void:
+	var result := _invoke_game("choose_action", ["deposit", {"amount": 500}])
+	_append_local_log("銀行存入 $500：%s" % _result_text(result, "已送出存款指令。"))
+	_handle_result(result)
+
+func _on_withdraw_pressed() -> void:
+	var result := _invoke_game("choose_action", ["withdraw", {"amount": 500}])
+	_append_local_log("銀行提取 $500：%s" % _result_text(result, "已送出提款指令。"))
+	_handle_result(result)
+
+func _on_cards_pressed() -> void:
+	_update_cards_popup()
+	cards_popup.popup_centered()
+
+func _on_stocks_pressed() -> void:
+	_update_stocks_popup()
+	stocks_popup.popup_centered()
+
+func _on_bank_pressed() -> void:
+	var balance: Label = bank_popup.get_node_or_null("MarginContainer/VBoxContainer/Balance")
+	var player := _current_player()
+	if balance != null:
+		balance.text = "現金 %s　·　存款 %s" % [_format_money(int(player.get("cash", 0))), _format_money(int(player.get("deposit", 0)))]
+	var options: Array = _as_array(state.get("action_options", []))
+	bank_deposit_button.disabled = not _has_action_option(options, "deposit")
+	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw")
+	bank_popup.popup_centered()
+
+func _on_tile_selected(index: int) -> void:
+	_selected_tile = index
+	var board: Array = state.get("board", [])
+	if index >= 0 and index < board.size() and board[index] is Dictionary:
+		_update_property_card(board[index])
+
+func _on_end_restart_pressed() -> void:
+	_new_game()
+
+func _close_end_overlay() -> void:
+	end_overlay.hide()
+
+func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if game_state != null and game_state.has_method(method):
+		var result: Variant = game_state.callv(method, args)
+		return result if result is Dictionary else {}
+	return {"ok": false, "message": "模擬核心未載入；目前無法執行此操作。"}
+
+func _handle_result(result: Dictionary) -> void:
+	if result.is_empty():
+		_append_local_log("模擬層未回傳事件；請查看目前回合狀態。")
+	_refresh_from_state(result)
+
+func _refresh_from_state(result: Dictionary = {}) -> void:
+	var snapshot := _read_snapshot()
+	if result.has("snapshot") and result["snapshot"] is Dictionary:
+		snapshot = result["snapshot"]
+	elif result.has("state") and result["state"] is Dictionary:
+		snapshot = result["state"]
+	if not snapshot.is_empty():
+		state = snapshot.duplicate(true)
+	_update_all()
+
+func _read_snapshot() -> Dictionary:
+	if game_state == null:
+		return state
+	if game_state.has_method("get_snapshot"):
+		var snapshot: Variant = game_state.call("get_snapshot")
+		if snapshot is Dictionary:
+			return snapshot
+	var public_state: Variant = game_state.get("state")
+	if public_state is Dictionary:
+		return public_state
+	return state
+
+func _update_all() -> void:
+	var phase := String(state.get("phase", "await_roll"))
+	var current_index := int(state.get("current_player", 0))
+	var players: Array = state.get("players", [])
+	var board: Array = state.get("board", [])
+	if board_view != null and board_view.has_method("set_game_data"):
+		board_view.call("set_game_data", board, players, current_index)
+	_update_header(phase, current_index)
+	_update_players(players, current_index)
+	_update_property_card(_current_tile())
+	_update_actions(phase, current_index)
+	_update_event_log()
+	_update_end_overlay(phase)
+	_last_rendered_phase = phase
+
+func _update_header(phase: String, current_index: int) -> void:
+	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
+	turn_label.text = "第 %d 回合 · 第 %d 輪" % [int(state.get("turn", 1)), int(state.get("round", 1))]
+	phase_label.text = _phase_text(phase)
+	var player := _current_player()
+	var is_human := bool(player.get("is_human", true))
+	current_player_label.text = "你的回合" if is_human else "%s 的回合" % str(player.get("name", "AI"))
+
+func _update_players(players: Array, current_index: int) -> void:
+	for child in players_list.get_children():
+		child.free()
+	for index in range(players.size()):
+		var player: Dictionary = players[index] if players[index] is Dictionary else {}
+		var row := PanelContainer.new()
+		var active := index == current_index
+		_apply_panel_style(row, Color("#2a4355") if active else Color("#203447"), Color("#d9a958") if active else Color("#314e62"), 9, 1)
+		var margin := MarginContainer.new()
+		margin.add_theme_constant_override("margin_left", 9)
+		margin.add_theme_constant_override("margin_top", 6)
+		margin.add_theme_constant_override("margin_right", 9)
+		margin.add_theme_constant_override("margin_bottom", 6)
+		row.add_child(margin)
+		var content := HBoxContainer.new()
+		content.add_theme_constant_override("separation", 8)
+		margin.add_child(content)
+		var dot := ColorRect.new()
+		dot.color = PLAYER_COLORS[index % PLAYER_COLORS.size()]
+		dot.custom_minimum_size = Vector2(9.0, 9.0)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		content.add_child(dot)
+		var name_column := VBoxContainer.new()
+		name_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		content.add_child(name_column)
+		var player_name := _make_label(str(player.get("name", "玩家 %d" % (index + 1))), 12, TEXT_MAIN)
+		name_column.add_child(player_name)
+		var property_count := _make_label("%d 筆地產 · 位於 %02d" % [(_as_array(player.get("properties", []))).size(), int(player.get("position", 0)) + 1], 10, TEXT_MUTED)
+		name_column.add_child(property_count)
+		var money := _make_label(_format_money(int(player.get("cash", 0))), 12, TEXT_GOLD)
+		money.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		money.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		content.add_child(money)
+		players_list.add_child(row)
+
+func _update_property_card(tile: Dictionary) -> void:
+	if tile.is_empty():
+		current_property_label.text = "尚未定位"
+		current_property_detail.text = "等待棋局資料。"
+		return
+	var kind := String(tile.get("kind", "property"))
+	current_property_label.text = str(tile.get("name", "街區 %02d" % (int(tile.get("index", 0)) + 1)))
+	var details := "%s　·　格位 %02d" % [_kind_label(kind), int(tile.get("index", 0)) + 1]
+	if kind == "property":
+		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
+		var owner := int(tile.get("owner", -1))
+		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
+	else:
+		details += "\n此格的效果由模擬層處理。"
+	current_property_detail.text = details
+
+func _update_actions(phase: String, current_index: int) -> void:
+	var player := _current_player()
+	var game_over := phase == "game_over"
+	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var action_options: Array = _as_array(state.get("action_options", []))
+	roll_button.disabled = not (human_turn and phase == "await_roll")
+	buy_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "buy"))
+	upgrade_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "upgrade"))
+	end_turn_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "end_turn"))
+	bank_button.disabled = not human_turn
+	cards_button.disabled = not human_turn
+	stocks_button.disabled = not (human_turn and bool(state.get("market", {}).get("open", true)))
+	if game_over:
+		action_hint_label.text = "本局已結束"
+	elif not human_turn:
+		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
+	elif phase == "await_roll":
+		action_hint_label.text = "輪到你了，請擲骰"
+	else:
+		action_hint_label.text = "請處理目前格位"
+
+func _update_event_log() -> void:
+	var lines: Array[String] = []
+	var entries: Array = _as_array(state.get("event_log", []))
+	var start_index: int = max(0, entries.size() - 26)
+	for index in range(start_index, entries.size()):
+		lines.append(_format_event(entries[index]))
+	for local_entry in _local_log:
+		lines.append("· " + local_entry)
+	if lines.is_empty():
+		lines.append("· 等待第一個行動。")
+	event_log_view.text = "\n".join(lines)
+	event_status_label.text = "%d 筆事件" % entries.size()
+
+func _refresh_log_only() -> void:
+	_update_event_log()
+
+func _update_end_overlay(phase: String) -> void:
+	if phase != "game_over":
+		end_overlay.hide()
+		return
+	var winner_index := int(state.get("winner", -1))
+	var players: Array = state.get("players", [])
+	var winner_name := "尚未公布"
+	if winner_index >= 0 and winner_index < players.size() and players[winner_index] is Dictionary:
+		winner_name = str(players[winner_index].get("name", "玩家 %d" % (winner_index + 1)))
+	end_title.text = "本局結算"
+	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
+	end_overlay.show()
+
+func _maybe_schedule_ai_turn() -> void:
+	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over":
+		return
+	var player := _current_player()
+	if bool(player.get("is_human", true)) or bool(player.get("bankrupt", false)):
+		return
+	_ai_pending = true
+	var timer := get_tree().create_timer(0.82)
+	timer.timeout.connect(_on_ai_timer_timeout)
+
+func _on_ai_timer_timeout() -> void:
+	_ai_pending = false
+	if String(state.get("phase", "")) == "game_over":
+		return
+	var player := _current_player()
+	if bool(player.get("is_human", true)):
+		return
+	var result := _invoke_game("run_ai_turn")
+	_append_local_log("%s 完成了自動回合。" % str(player.get("name", "AI")))
+	_handle_result(result)
+
+func _update_cards_popup() -> void:
+	for child in cards_popup_list.get_children():
+		child.free()
+	var cards := _as_array(_current_player().get("cards", []))
+	var options: Array = _as_array(state.get("action_options", []))
+	if cards.is_empty():
+		var empty := _make_label("目前沒有可用卡片。", 12, TEXT_MUTED)
+		cards_popup_list.add_child(empty)
+	else:
+		for card_index in range(cards.size()):
+			var card_id := str(cards[card_index])
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			var label := _make_label("卡片 %s" % card_id, 12, TEXT_MAIN)
+			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(label)
+			var symbol_option: OptionButton = null
+			if card_id == "紅" or card_id == "黑":
+				symbol_option = OptionButton.new()
+				symbol_option.custom_minimum_size = Vector2(112.0, 34.0)
+				symbol_option.add_theme_font_size_override("font_size", 11)
+				symbol_option.add_item("科技股", 0)
+				symbol_option.add_item("運輸股", 1)
+				symbol_option.add_item("能源股", 2)
+				row.add_child(symbol_option)
+			var target_option: OptionButton = null
+			if card_id == "停留" or card_id == "烏龜":
+				target_option = OptionButton.new()
+				target_option.custom_minimum_size = Vector2(120.0, 34.0)
+				target_option.add_theme_font_size_override("font_size", 11)
+				var target_players: Array = state.get("players", [])
+				for target_index in range(target_players.size()):
+					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
+					if bool(target_player.get("alive", false)):
+						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
+				row.add_child(target_option)
+			var use := _make_button("使用", func() -> void:
+				var params: Dictionary = {"card_id": card_id}
+				if symbol_option != null:
+					var symbol_names := ["tech", "transport", "energy"]
+					params["symbol"] = symbol_names[symbol_option.get_selected_id()]
+				if target_option != null:
+					params["target_id"] = target_option.get_selected_id()
+				var result := _invoke_game("choose_action", ["use_card", params])
+				_append_local_log("使用卡片 %s：%s" % [card_id, _result_text(result, "已送出卡片指令。")])
+				_handle_result(result)
+				cards_popup.hide()
+			)
+			use.disabled = not _has_action_option(options, "use_card")
+			row.add_child(use)
+			cards_popup_list.add_child(row)
+
+func _update_stocks_popup() -> void:
+	for child in stocks_popup_list.get_children():
+		child.free()
+	var market: Dictionary = state.get("market", {})
+	var prices: Dictionary = market.get("prices", market)
+	var options: Array = _as_array(state.get("action_options", []))
+	var symbols: Array[String] = []
+	for key in prices.keys():
+		symbols.append(str(key))
+	if symbols.is_empty():
+		symbols = ["RICH", "CITY", "TRVL"]
+	for symbol in symbols:
+		var quote: Variant = prices.get(symbol, prices.get(StringName(symbol), {}))
+		var price := 100
+		if quote is Dictionary:
+			price = int(quote.get("price", quote.get("value", 100)))
+		elif quote is int or quote is float:
+			price = int(quote)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 7)
+		var label := _make_label("%s　%s" % [symbol, _format_money(price)], 12, TEXT_MAIN)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(label)
+		var buy := _make_button("買入", func() -> void:
+			var result := _invoke_game("choose_action", ["buy_stock", {"symbol": symbol, "quantity": 1}])
+			_append_local_log("買入 %s：%s" % [symbol, _result_text(result, "已送出買股指令。")])
+			_handle_result(result)
+		)
+		buy.disabled = not _has_action_option(options, "buy_stock") or not bool(market.get("open", true))
+		row.add_child(buy)
+		var sell := _make_button("賣出", func() -> void:
+			var result := _invoke_game("choose_action", ["sell_stock", {"symbol": symbol, "quantity": 1}])
+			_append_local_log("賣出 %s：%s" % [symbol, _result_text(result, "已送出賣股指令。")])
+			_handle_result(result)
+		)
+		sell.disabled = not _has_action_option(options, "sell_stock") or not bool(market.get("open", true))
+		row.add_child(sell)
+		stocks_popup_list.add_child(row)
+
+func _unavailable_state(seed_value: int) -> Dictionary:
+	return {
+		"version": 0,
+		"seed": seed_value,
+		"phase": "unavailable",
+		"turn": 0,
+		"round": 0,
+		"current_player": 0,
+		"winner": -1,
+		"last_roll": [],
+		"event_log": [],
+		"board": [],
+		"players": [],
+		"bank": {},
+		"market": {},
+	}
+
+func _current_player() -> Dictionary:
+	var players: Array = state.get("players", [])
+	var index := int(state.get("current_player", 0))
+	if index >= 0 and index < players.size() and players[index] is Dictionary:
+		return players[index]
+	return {"name": "玩家", "is_human": true, "cash": 0, "position": 0, "properties": [], "cards": []}
+
+func _current_tile() -> Dictionary:
+	var board: Array = state.get("board", [])
+	var position := int(_current_player().get("position", 0))
+	if position >= 0 and position < board.size() and board[position] is Dictionary:
+		return board[position]
+	return {}
+
+func _phase_text(phase: String) -> String:
+	match phase:
+		"await_roll":
+			return "等待擲骰"
+		"await_action":
+			return "等待行動"
+		"game_over":
+			return "本局結束"
+		_:
+			return phase
+
+func _kind_label(kind: String) -> String:
+	match kind:
+		"start":
+			return "起點"
+		"event":
+			return "事件"
+		"tax":
+			return "稅務"
+		"bank":
+			return "銀行"
+		"stock":
+			return "股市"
+		"rest":
+			return "休息"
+		_:
+			return "地產"
+
+func _format_event(event: Variant) -> String:
+	if event is Dictionary:
+		var event_type := str(event.get("type", "event"))
+		var message := str(event.get("message", event.get("text", event.get("description", ""))))
+		if message.is_empty():
+			message = _event_detail(event_type, event)
+		var actor := _event_actor(event)
+		return "· %s　%s" % [actor, message]
+	return "· " + str(event)
+
+func _event_actor(event: Dictionary) -> String:
+	if event.has("actor") or event.has("player_name"):
+		return str(event.get("actor", event.get("player_name", "系統")))
+	if event.has("player_id"):
+		var players: Array = state.get("players", [])
+		var player_id := int(event.get("player_id", -1))
+		if player_id >= 0 and player_id < players.size() and players[player_id] is Dictionary:
+			return str(players[player_id].get("name", "玩家 %d" % (player_id + 1)))
+	return "系統"
+
+func _event_detail(event_type: String, event: Dictionary) -> String:
+	match event_type:
+		"new_game":
+			return "新局開始 · %d 位玩家" % int(event.get("player_count", 0))
+		"roll":
+			return "擲骰：%s（合計 %d）" % [_roll_text(event), int(event.get("total", 0))]
+		"move":
+			return "移動至第 %02d 格" % (int(event.get("to", 0)) + 1)
+		"property_bought":
+			return "購買地產 · %s" % _tile_name(int(event.get("property_id", -1)))
+		"property_upgraded":
+			return "升級 %s 至第 %d 級" % [_tile_name(int(event.get("property_id", -1))), int(event.get("level", 0))]
+		"payment":
+			return "支付 %s" % _format_money(int(event.get("amount", 0)))
+		"deposit":
+			return "存入銀行 %s" % _format_money(int(event.get("amount", 0)))
+		"withdraw":
+			return "從銀行提取 %s" % _format_money(int(event.get("amount", 0)))
+		"stock_bought":
+			return "買入 %s × %d" % [str(event.get("symbol", "")), int(event.get("quantity", 0))]
+		"stock_sold":
+			return "賣出 %s × %d" % [str(event.get("symbol", "")), int(event.get("quantity", 0))]
+		"card_used":
+			return "使用卡片：%s" % str(event.get("card_id", ""))
+		"game_over":
+			return "本局結束"
+		"turn_started":
+			return "回合開始"
+		_:
+			return event_type
+
+func _tile_name(index: int) -> String:
+	var board: Array = state.get("board", [])
+	if index >= 0 and index < board.size() and board[index] is Dictionary:
+		return str(board[index].get("name", "格位 %02d" % (index + 1)))
+	return "格位 %02d" % (index + 1)
+
+func _roll_text(result: Dictionary) -> String:
+	var dice: Array = _as_array(result.get("last_roll", result.get("dice", state.get("last_roll", []))))
+	if dice.is_empty():
+		return "完成"
+	return "、".join(dice.map(func(value: Variant) -> String: return str(value)))
+
+func _result_text(result: Dictionary, fallback: String) -> String:
+	return str(result.get("message", fallback))
+
+func _append_local_log(message: String) -> void:
+	_local_log.append(message)
+	if _local_log.size() > 8:
+		_local_log.pop_front()
+
+func _as_array(value: Variant) -> Array:
+	return value if value is Array else []
+
+func _has_action_option(options: Array, action: String) -> bool:
+	for option in options:
+		if str(option) == action:
+			return true
+	return false
+
+func _format_money(amount: int) -> String:
+	var negative := amount < 0
+	var digits := str(abs(amount))
+	var grouped := ""
+	while digits.length() > 3:
+		grouped = "," + digits.substr(digits.length() - 3) + grouped
+		digits = digits.substr(0, digits.length() - 3)
+	grouped = digits + grouped
+	return ("-" if negative else "") + "$" + grouped
+
+func _make_label(text: String, font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	return label
+
+func _make_button(text: String, action: Callable, accent := false) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0.0, 38.0)
+	button.focus_mode = Control.FOCUS_ALL
+	button.add_theme_font_size_override("font_size", 12)
+	button.add_theme_color_override("font_color", TEXT_MAIN)
+	button.add_theme_color_override("font_hover_color", Color("#fff4d3"))
+	button.add_theme_color_override("font_disabled_color", Color("#637b89"))
+	button.add_theme_stylebox_override("normal", _style_box(ACCENT_DARK if accent else Color("#29475b"), Color("#d3a356") if accent else Color("#45687b"), 9, 1))
+	button.add_theme_stylebox_override("hover", _style_box(Color("#bb7c3d") if accent else Color("#345b71"), Color("#f1d28a"), 9, 1))
+	button.add_theme_stylebox_override("pressed", _style_box(Color("#8c572f") if accent else Color("#1d3547"), Color("#f1d28a"), 9, 1))
+	button.add_theme_stylebox_override("disabled", _style_box(Color("#1b2d3c"), Color("#263f51"), 9, 1))
+	button.pressed.connect(action)
+	return button
+
+func _apply_panel_style(panel: PanelContainer, background: Color, border: Color, radius: int, border_width: int) -> void:
+	panel.add_theme_stylebox_override("panel", _style_box(background, border, radius, border_width))
+
+func _style_box(background: Color, border: Color, radius: int, border_width: int) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = border
+	style.set_border_width_all(border_width)
+	style.set_corner_radius_all(radius)
+	return style

@@ -57,5 +57,23 @@ func _initialize() -> void:
 		var broken: Dictionary = game.to_dict()
 		broken.players[0].insurance_status=value
 		expect(not Game.validate_save(broken).get("ok",false),"malformed insurance rejected")
+	game.state.companies[0].monthly_profit=1000000000000
+	game.state.companies[0].cumulative_profit=1000000000000
+	game.state.current_player=2
+	game.state.players[2].position=5
+	game.state.players[2].previous_position=4
+	game.state.phase="await_action"
+	game._set_action_options(2)
+	expect(Game.validate_save(game.to_dict()).get("ok",false),"insurance boundary prestate is legal")
+	var previous_rng: String = game.to_dict().rng_state_text
+	cash=game.state.players[2].cash
+	var previous_events: int = game.state.event_log.size()
+	game._resolve_company_visit(2,game.state.board[5])
+	expect(game.state.players[2].insurance_status==0 and game.state.players[2].cash==cash,"unavailable insurance service grants no coverage and takes no premium")
+	expect(game.to_dict().rng_state_text==previous_rng,"unavailable insurance service preserves RNG")
+	var granted := false
+	for event in game.state.event_log.slice(previous_events):
+		if event.type=="company_insurance_granted": granted=true
+	expect(not granted and game.state.last_event.type=="company_service_unavailable","unavailable insurance emits no grant event")
 	print("Company insurance checks: %d, failures: %d"%[checks,failures])
 	quit(1 if failures else 0)

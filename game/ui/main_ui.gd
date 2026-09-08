@@ -26,6 +26,7 @@ const CHARACTER_NAMES := [
 ]
 const MIN_START_YEAR := 1998
 const MAX_START_YEAR := 9999
+const COMPANY_SAVE_VERSION := 7
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -106,12 +107,14 @@ var shop_balance_label: Label
 var shop_popup_list: VBoxContainer
 var shop_scroll: ScrollContainer
 var stocks_popup: PopupPanel
+var company_popup: PopupPanel
 var audio_controller: Object
 var audio_button: Button
 var audio_config_button: Button
 var audio_folder_dialog: FileDialog
 var cards_popup_list: VBoxContainer
 var stocks_popup_list: VBoxContainer
+var company_popup_list: VBoxContainer
 var end_overlay: ColorRect
 var end_title: Label
 var end_detail: Label
@@ -128,6 +131,11 @@ var _map_catalog_error := ""
 var _map_catalog_ok := false
 var _selected_map_definition: Dictionary = {}
 var _active_map_definition: Dictionary = {}
+var _company_purchase_quantity: SpinBox
+var _company_purchase_button: Button
+var _company_service_target: OptionButton
+var _company_service_type: OptionButton
+var _company_service_button: Button
 
 func _ready() -> void:
 	_build_interface()
@@ -646,16 +654,43 @@ func _build_popups() -> void:
 	shop_scroll.add_child(shop_popup_list)
 	shop_box.add_child(_make_button("關閉", shop_popup.hide))
 
-	stocks_popup = _make_popup(Vector2i(500, 360))
+	stocks_popup = _make_popup(Vector2i(760, 610))
+	stocks_popup.min_size = Vector2i(760, 610)
 	var stocks_box := _popup_box(stocks_popup)
 	stocks_box.add_child(_make_label("股票市場", 19, TEXT_MAIN))
-	var stocks_description := _make_label("每次買賣一股；報價由目前市場快照提供。", 11, TEXT_MUTED)
+	var stocks_description := _make_label("選擇股數後交易；公司市場從銀行存款扣款，市場供給與暫停狀態會限制買入。", 11, TEXT_MUTED)
+	stocks_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stocks_box.add_child(stocks_description)
+	var stocks_scroll := ScrollContainer.new()
+	stocks_scroll.name = "StocksScroll"
+	stocks_scroll.custom_minimum_size = Vector2(0.0, 470.0)
+	stocks_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stocks_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	stocks_box.add_child(stocks_scroll)
 	stocks_popup_list = VBoxContainer.new()
+	stocks_popup_list.name = "StocksList"
+	stocks_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stocks_popup_list.add_theme_constant_override("separation", 7)
-	stocks_box.add_child(stocks_popup_list)
+	stocks_scroll.add_child(stocks_popup_list)
 	var stocks_close := _make_button("關閉", stocks_popup.hide)
 	stocks_box.add_child(stocks_close)
+
+	company_popup = _make_popup(Vector2i(650, 590))
+	company_popup.min_size = Vector2i(650, 590)
+	var company_box := _popup_box(company_popup)
+	company_box.add_child(_make_label("企業股份", 19, TEXT_MAIN))
+	var company_scroll := ScrollContainer.new()
+	company_scroll.name = "CompanyScroll"
+	company_scroll.custom_minimum_size = Vector2(0.0, 445.0)
+	company_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	company_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	company_box.add_child(company_scroll)
+	company_popup_list = VBoxContainer.new()
+	company_popup_list.name = "CompanyList"
+	company_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	company_popup_list.add_theme_constant_override("separation", 8)
+	company_scroll.add_child(company_popup_list)
+	company_box.add_child(_make_button("關閉", company_popup.hide))
 
 	audio_folder_dialog = FileDialog.new()
 	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
@@ -721,17 +756,21 @@ func _system_start_date() -> Dictionary:
 		return {"year": int(system_date.get("year", 0)), "month": int(system_date.get("month", 0)), "day": int(system_date.get("day", 0))}
 	return {}
 
-func _default_setup_options(player_count: int) -> Dictionary:
+func _default_setup_options(player_count: int, map_definition: Dictionary = {}) -> Dictionary:
 	var date := _system_start_date()
 	if date.is_empty():
 		date = {"year": 1998, "month": 1, "day": 1}
 	var character_ids: Array = []
 	for player_id in range(player_count):
 		character_ids.append(player_id)
+	var capability_definition: Dictionary = map_definition if not map_definition.is_empty() else _selected_map_definition
+	var supports_companies := bool(capability_definition.get("supports_original_companies", false))
+	var supports_facilities := bool(capability_definition.get("original_facilities", false)) or supports_companies
 	return {
 		"original_inventory": true,
-		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
-		"original_gods": bool(_selected_map_definition.get("original_facilities", false)),
+		"original_facilities": supports_facilities,
+		"original_gods": supports_facilities,
+		"original_companies": supports_companies,
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -806,9 +845,10 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) >= 4,
-		"original_facilities": int(state.get("version", 0)) >= 5,
-		"original_gods": int(state.get("version", 0)) >= 6,
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false)),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -877,10 +917,13 @@ func _collect_setup_options() -> Dictionary:
 		if seen.has(character_id):
 			return {"ok": false, "message": "每位玩家必須選擇不同角色。"}
 		seen[character_id] = true
+	var supports_companies := bool(_selected_map_definition.get("supports_original_companies", false))
+	var supports_facilities := bool(_selected_map_definition.get("original_facilities", false)) or supports_companies
 	return {"ok": true, "options": {
 		"original_inventory": true,
-		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
-		"original_gods": bool(_selected_map_definition.get("original_facilities", false)),
+		"original_facilities": supports_facilities,
+		"original_gods": supports_facilities,
+		"original_companies": supports_companies,
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1227,8 +1270,8 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_refresh_log_only()
 		return false
 	var effective_setup := setup_options.duplicate(true)
-	if effective_setup.is_empty() and bool(selected_definition.get("original_facilities", false)):
-		effective_setup = _default_setup_options(resolved_players)
+	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
+		effective_setup = _default_setup_options(resolved_players, selected_definition)
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
@@ -1406,6 +1449,9 @@ func _on_roll_pressed() -> void:
 func _on_buy_pressed() -> void:
 	if buy_button.disabled:
 		return
+	if _has_action_option(_as_array(state.get("action_options", [])), "buy_company"):
+		_open_company_popup()
+		return
 	var tile := _current_tile()
 	if _has_original_gods() and int(_current_player().get("god_id", 0)) in [3, 4] and tile.get("kind", "") == "facility" and int(tile.get("building_level", 0)) == 0:
 		_open_facility_builder("buy")
@@ -1416,6 +1462,9 @@ func _on_buy_pressed() -> void:
 
 func _on_upgrade_pressed() -> void:
 	if upgrade_button.disabled:
+		return
+	if _has_action_option(_as_array(state.get("action_options", [])), "company_upgrade"):
+		_open_company_popup()
 		return
 	if _has_action_option(_as_array(state.get("action_options", [])), "build_facility"):
 		_open_facility_builder()
@@ -1483,6 +1532,17 @@ func _on_cards_pressed() -> void:
 	cards_popup.popup_centered(Vector2i(640, 540))
 	_settle_inventory_popup(cards_popup, Vector2i(640, 540))
 
+
+func _open_company_popup() -> void:
+	if not _is_human_turn() or not _has_original_companies():
+		return
+	_update_company_popup()
+	# Rebuild the rows before opening.  The popup starts hidden, so checking
+	# `visible` here would make the first visit a no-op.
+	if company_popup_list != null and company_popup_list.get_child_count() > 0:
+		company_popup.popup_centered(Vector2i(650, 590))
+		_settle_inventory_popup(company_popup, Vector2i(650, 590))
+
 func _settle_inventory_popup(popup: PopupPanel, desired_size: Vector2i) -> void:
 	# Newly rebuilt rows need a layout frame before their wrapped minimum height
 	# is valid. Refit after that frame so the close button remains on screen.
@@ -1495,7 +1555,8 @@ func _on_stocks_pressed() -> void:
 	if not _is_human_turn():
 		return
 	_update_stocks_popup()
-	stocks_popup.popup_centered()
+	stocks_popup.popup_centered(Vector2i(760, 610))
+	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
 	if not _is_human_turn():
@@ -1599,6 +1660,10 @@ func _update_all() -> void:
 	_update_route_choices(phase, current_index)
 	if bank_popup.visible:
 		_update_bank_popup()
+	if stocks_popup.visible:
+		_update_stocks_popup()
+	if company_popup.visible:
+		_update_company_popup()
 	_update_event_log()
 	_update_end_overlay(phase)
 	_last_rendered_phase = phase
@@ -1679,6 +1744,12 @@ func _update_players(players: Array, current_index: int) -> void:
 			name_column.add_child(_make_label("%s · %d 天" % [OriginalGods.name_for(god_id), days], 10, TEXT_GOLD))
 		if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
 			name_column.add_child(_make_label("住院 · %d 天" % int(player.hospital_days), 10, TEXT_GOLD))
+		if _has_original_companies() and player.has("insurance_status"):
+			var insurance_status := int(player.get("insurance_status", 0))
+			if insurance_status == 128:
+				name_column.add_child(_make_label("保險：128（到期當日仍有效）", 10, TEXT_GOLD))
+			elif insurance_status > 0:
+				name_column.add_child(_make_label("保險：%d 天" % insurance_status, 10, TEXT_GOLD))
 		var money := _make_label(_format_money(int(player.get("cash", 0))), 12, TEXT_GOLD)
 		money.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		money.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1693,6 +1764,29 @@ func _update_property_card(tile: Dictionary) -> void:
 	var kind := String(tile.get("kind", "property"))
 	current_property_label.text = str(tile.get("name", "街區 %02d" % (int(tile.get("index", 0)) + 1)))
 	var details := "%s　·　格位 %02d" % [_kind_label(kind), int(tile.get("index", 0)) + 1]
+	var company := _company_at_tile(tile)
+	if not company.is_empty():
+		var stock_symbol := _company_stock_symbol(company)
+		var stock_name := _stock_name_for_ui(stock_symbol)
+		var row := _stock_row_for_ui(stock_symbol)
+		var stock_price := _stock_price_for_ui(stock_symbol)
+		var owner_id := int(company.get("owner", -1))
+		var owner_text := "無" if owner_id < 0 else _player_name(owner_id)
+		var player_shares := _stock_holding(_current_player(), stock_symbol)
+		var market_supply := int(row.get("market_supply", -1)) if not row.is_empty() else -1
+		var suspension := int(row.get("suspension", 0)) if not row.is_empty() else 0
+		current_property_label.text = str(company.get("display_name", tile.get("name", "企業")))
+		details = "企業　·　格位 %02d" % (int(tile.get("index", 0)) + 1)
+		details += "\n股票：%s（%s）　·　市價 %s" % [stock_name, stock_symbol, _format_price(stock_price)]
+		details += "\n你的持股：%d 股　·　經營者：%s" % [player_shares, owner_text]
+		details += "\n企業庫存：%d 股　·　本回合可購買：%d 股" % [int(company.get("treasury", 0)), int(state.get("company_purchase_remaining", 0))]
+		details += "\n本月盈餘：%s　·　累計盈餘：%s　·　平均盈餘：%s" % [_format_money(int(company.get("monthly_profit", 0))), _format_money(int(company.get("cumulative_profit", 0))), _format_money(_company_average_earnings(company))]
+		if market_supply >= 0:
+			details += "\n市場供給：%d 股" % market_supply
+		if suspension > 0:
+			details += "　·　暫停交易 %d 天" % suspension
+		current_property_detail.text = details
+		return
 	if kind == "property":
 		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
@@ -1730,10 +1824,14 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var action_options: Array = _as_array(state.get("action_options", []))
 	roll_button.text = "休養" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "擲骰"
 	roll_button.disabled = not (human_turn and phase == "await_roll")
-	buy_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "buy"))
+	var can_buy_company := _has_action_option(action_options, "buy_company")
+	var can_buy_property := _has_action_option(action_options, "buy")
+	buy_button.text = "購買企業股份" if can_buy_company else "購買地產"
+	buy_button.disabled = not (human_turn and phase == "await_action" and (can_buy_property or can_buy_company))
 	var can_build := _has_action_option(action_options, "build_facility")
-	upgrade_button.text = "建造設施" if can_build else "升級"
-	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build))
+	var can_company_upgrade := _has_action_option(action_options, "company_upgrade")
+	upgrade_button.text = "企業建設" if can_company_upgrade else "建造設施" if can_build else "升級"
+	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build or can_company_upgrade))
 	end_turn_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "end_turn"))
 	bank_button.disabled = not human_turn
 	cards_button.disabled = not human_turn
@@ -1749,6 +1847,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		shop_popup.hide()
 	if not human_turn or phase != "await_action" or not _has_action_option(action_options, facility_popup_action):
 		facility_popup.hide()
+	if not human_turn or phase != "await_action" or (not can_buy_company and not can_company_upgrade):
+		company_popup.hide()
 	if not human_turn:
 		bank_popup.hide()
 		cards_popup.hide()
@@ -1761,6 +1861,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
 		action_hint_label.text = "住院休養中，按休養推進回合" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "輪到你了，請擲骰"
+	elif can_company_upgrade:
+		action_hint_label.text = "請先完成企業建設服務"
 	elif _has_original_gods() and phase == "await_action" and (int(player.get("hospital_days", 0)) > 0 or _as_array(state.get("last_roll", [])).is_empty()):
 		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
@@ -1846,6 +1948,7 @@ func _update_cards_popup() -> void:
 	var cards := _as_array(_current_player().get("cards", []))
 	inventory_balance_label.text = "點券 %d · 卡片 %d/15" % [int(_current_player().get("points", 0)), cards.size()] if _has_original_inventory() else "卡片 %d/15" % cards.size()
 	var options: Array = _as_array(state.get("action_options", []))
+	var card_stock_symbols := _stock_symbols_for_ui()
 	if cards.is_empty():
 		var empty := _make_label("目前沒有可用卡片。", 12, TEXT_MUTED)
 		cards_popup_list.add_child(empty)
@@ -1861,11 +1964,12 @@ func _update_cards_popup() -> void:
 			var symbol_option: OptionButton = null
 			if card_id == "紅" or card_id == "黑":
 				symbol_option = OptionButton.new()
+				symbol_option.name = "StockSymbol_" + card_id
 				symbol_option.custom_minimum_size = Vector2(112.0, 34.0)
 				symbol_option.add_theme_font_size_override("font_size", 11)
-				symbol_option.add_item("科技股", 0)
-				symbol_option.add_item("運輸股", 1)
-				symbol_option.add_item("能源股", 2)
+				for stock_index in range(card_stock_symbols.size()):
+					var card_symbol := str(card_stock_symbols[stock_index])
+					symbol_option.add_item("%s · %s" % [card_symbol, _stock_name_for_ui(card_symbol)], stock_index)
 				row.add_child(symbol_option)
 			var target_option: OptionButton = null
 			if ["停留", "烏龜", "轉向", "均貧"].has(card_id):
@@ -1888,8 +1992,9 @@ func _update_cards_popup() -> void:
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
 				if symbol_option != null:
-					var symbol_names := ["tech", "transport", "energy"]
-					params["symbol"] = symbol_names[symbol_option.get_selected_id()]
+					var selected_stock_index := symbol_option.get_selected_id()
+					if selected_stock_index >= 0 and selected_stock_index < card_stock_symbols.size():
+						params["symbol"] = str(card_stock_symbols[selected_stock_index])
 				if target_option != null:
 					params["target_id"] = target_option.get_selected_id()
 				if tile_option != null:
@@ -1917,44 +2022,367 @@ func _update_cards_popup() -> void:
 	if _has_original_inventory():
 		_append_tool_inventory()
 
+func _stock_symbols_for_ui() -> Array:
+	var symbols: Array = []
+	if game_state != null and game_state.has_method("get_stock_symbols"):
+		var source: Variant = game_state.call("get_stock_symbols")
+		if source is Array:
+			for value in source:
+				var symbol := str(value).to_lower()
+				if not symbol.is_empty() and not symbols.has(symbol):
+					symbols.append(symbol)
+	if not symbols.is_empty():
+		return symbols
+	var market: Dictionary = state.get("market", {})
+	var rows: Variant = market.get("rows", {})
+	if not rows is Dictionary or rows.is_empty():
+		rows = market.get("prices", {})
+	if rows is Dictionary:
+		for key in rows.keys():
+			var symbol := str(key).to_lower()
+			if not symbol.is_empty() and not symbols.has(symbol):
+				symbols.append(symbol)
+	return symbols if not symbols.is_empty() else ["tech", "transport", "energy"]
+
+
+func _stock_name_for_ui(symbol: String) -> String:
+	if game_state != null and game_state.has_method("get_stock_name"):
+		var value: Variant = game_state.call("get_stock_name", symbol)
+		if value is String and not value.is_empty():
+			return value
+	return {"tech": "科技", "transport": "運輸", "energy": "能源"}.get(symbol, symbol)
+
+
+func _stock_row_for_ui(symbol: String) -> Dictionary:
+	var market: Dictionary = state.get("market", {})
+	var rows: Variant = market.get("rows", {})
+	if rows is Dictionary:
+		var row: Variant = rows.get(symbol, rows.get(StringName(symbol), {}))
+		if row is Dictionary:
+			return row
+	return {}
+
+
+func _stock_price_for_ui(symbol: String) -> float:
+	var row := _stock_row_for_ui(symbol)
+	if not row.is_empty():
+		return float(row.get("price", row.get("value", 0.0)))
+	var market: Dictionary = state.get("market", {})
+	var prices: Variant = market.get("prices", {})
+	if prices is Dictionary:
+		var quote: Variant = prices.get(symbol, prices.get(StringName(symbol), 0.0))
+		if quote is Dictionary:
+			return float(quote.get("price", quote.get("value", 0.0)))
+		if quote is int or quote is float:
+			return float(quote)
+	return 0.0
+
+
+func _stock_holding(player: Dictionary, symbol: String) -> int:
+	var holdings: Variant = player.get("stocks", {})
+	if holdings is Dictionary:
+		return int(holdings.get(symbol, 0))
+	return 0
+
+
+func _format_price(price: float) -> String:
+	return "$%.2f" % price
+
+
 func _update_stocks_popup() -> void:
 	for child in stocks_popup_list.get_children():
 		child.free()
 	var market: Dictionary = state.get("market", {})
-	var prices: Dictionary = market.get("prices", market)
 	var options: Array = _as_array(state.get("action_options", []))
-	var symbols: Array[String] = []
-	for key in prices.keys():
-		symbols.append(str(key))
-	if symbols.is_empty():
-		symbols = ["RICH", "CITY", "TRVL"]
-	for symbol in symbols:
-		var quote: Variant = prices.get(symbol, prices.get(StringName(symbol), {}))
-		var price := 100
-		if quote is Dictionary:
-			price = int(quote.get("price", quote.get("value", 100)))
-		elif quote is int or quote is float:
-			price = int(quote)
+	var player := _current_player()
+	var symbols := _stock_symbols_for_ui()
+	var market_open := bool(market.get("open", true))
+	var is_company_market := _has_original_companies()
+	var account := int(player.get("deposit" if is_company_market else "cash", 0))
+	var account_name := "存款" if is_company_market else "現金"
+	var account_label := _make_label("%s：%s　·　持股為每檔獨立計算" % [account_name, _format_money(account)], 12, TEXT_GOLD)
+	stocks_popup_list.add_child(account_label)
+	for value in symbols:
+		var symbol := str(value)
+		var stock_row := _stock_row_for_ui(symbol)
+		var price := _stock_price_for_ui(symbol)
+		var holdings := _stock_holding(player, symbol)
+		var market_supply := int(stock_row.get("market_supply", -1)) if not stock_row.is_empty() else -1
+		var turn_supply := int(stock_row.get("turn_supply", market_supply)) if not stock_row.is_empty() else -1
+		var available := mini(market_supply, turn_supply) if market_supply >= 0 and turn_supply >= 0 else -1
+		var suspension := int(stock_row.get("suspension", 0)) if not stock_row.is_empty() else 0
 		var row := HBoxContainer.new()
+		row.name = "StockRow_" + symbol
 		row.add_theme_constant_override("separation", 7)
-		var label := _make_label("%s　%s" % [symbol, _format_money(price)], 12, TEXT_MAIN)
+		var detail := "%s（%s）　·　價格 %s" % [_stock_name_for_ui(symbol), symbol, _format_price(price)]
+		if available >= 0:
+			detail += "\n市場 %d 股　·　本回合 %d 股　·　持有 %d 股" % [market_supply, turn_supply, holdings]
+		else:
+			detail += "\n持有 %d 股" % holdings
+		if suspension > 0:
+			detail += "　·　暫停交易 %d 天" % suspension
+		var label := _make_label(detail, 11, Color("#f28d83") if suspension > 0 else TEXT_MAIN)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.custom_minimum_size.x = 250.0
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		row.add_child(label)
+		var quantity := SpinBox.new()
+		quantity.name = "StockQuantity_" + symbol
+		quantity.min_value = 1
+		quantity.max_value = max(1, max(available, holdings))
+		quantity.step = 1
+		quantity.value = 1
+		quantity.custom_minimum_size.x = 72.0
+		quantity.add_theme_font_size_override("font_size", 11)
+		row.add_child(quantity)
 		var buy := _make_button("買入", func() -> void:
-			var result := _invoke_game("choose_action", ["buy_stock", {"symbol": symbol, "quantity": 1}])
-			_append_local_log("買入 %s：%s" % [symbol, _result_text(result, "已送出買股指令。")])
-			_handle_result(result)
+			var result := _invoke_game("choose_action", ["buy_stock", {"symbol": symbol, "quantity": int(quantity.value)}])
+			_append_local_log("買入 %s × %d：%s" % [symbol, int(quantity.value), _result_text(result, "已送出買股指令。")])
+			call_deferred("_handle_result", result)
 		)
-		buy.disabled = not _has_action_option(options, "buy_stock") or not bool(market.get("open", true))
+		buy.name = "BuyStock_" + symbol
+		buy.custom_minimum_size.x = 118.0
 		row.add_child(buy)
 		var sell := _make_button("賣出", func() -> void:
-			var result := _invoke_game("choose_action", ["sell_stock", {"symbol": symbol, "quantity": 1}])
-			_append_local_log("賣出 %s：%s" % [symbol, _result_text(result, "已送出賣股指令。")])
-			_handle_result(result)
+			var result := _invoke_game("choose_action", ["sell_stock", {"symbol": symbol, "quantity": int(quantity.value)}])
+			_append_local_log("賣出 %s × %d：%s" % [symbol, int(quantity.value), _result_text(result, "已送出賣股指令。")])
+			call_deferred("_handle_result", result)
 		)
-		sell.disabled = not _has_action_option(options, "sell_stock") or not bool(market.get("open", true))
+		sell.name = "SellStock_" + symbol
+		sell.custom_minimum_size.x = 118.0
 		row.add_child(sell)
+		var update_quote := func(_value: float = 1.0) -> void:
+			var count := int(quantity.value)
+			var amount := int(price * count)
+			buy.text = "買入 %s" % _format_money(amount)
+			sell.text = "賣出 %s" % _format_money(amount)
+			var valid_market := _is_human_turn() and market_open and suspension == 0
+			var buy_supply_ok := available < 0 or count <= available
+			var sell_holding_ok := count <= holdings
+			buy.disabled = not (valid_market and _has_action_option(options, "buy_stock") and buy_supply_ok and account >= amount)
+			sell.disabled = not (valid_market and _has_action_option(options, "sell_stock") and sell_holding_ok)
+		quantity.tooltip_text = "每次交易股數；公司市場買入使用銀行存款。"
+		quantity.value_changed.connect(update_quote)
+		update_quote.call()
 		stocks_popup_list.add_child(row)
+
+
+func _company_at_tile(tile: Dictionary) -> Dictionary:
+	if not _has_original_companies():
+		return {}
+	var tile_index := int(tile.get("index", -1))
+	if game_state != null and game_state.has_method("get_company_at"):
+		var company: Variant = game_state.call("get_company_at", tile_index)
+		if company is Dictionary:
+			return company
+	var fallback: Variant = tile.get("company_state", {})
+	return fallback if fallback is Dictionary else {}
+
+
+func _company_stock_symbol(company: Dictionary) -> String:
+	var stock_index := int(company.get("stock_index", -1))
+	var symbols := _stock_symbols_for_ui()
+	if stock_index >= 0 and stock_index < symbols.size():
+		return str(symbols[stock_index])
+	return "s%02d" % (stock_index + 1) if stock_index >= 0 else ""
+
+
+func _player_name(player_id: int) -> String:
+	var players: Array = _as_array(state.get("players", []))
+	if player_id >= 0 and player_id < players.size() and players[player_id] is Dictionary:
+		return str(players[player_id].get("name", "玩家 %d" % (player_id + 1)))
+	return "玩家 %d" % (player_id + 1)
+
+
+func _company_face_price(company: Dictionary) -> int:
+	return int(int(company.get("stock_value", 0)) / 10000)
+
+
+func _company_average_earnings(company: Dictionary) -> int:
+	var cumulative := int(company.get("cumulative_profit", 0))
+	var months := int(state.get("company_months", 0))
+	return cumulative if months <= 0 else int(float(cumulative) / float(months))
+
+
+func _company_purchase_cap(company: Dictionary, player: Dictionary) -> int:
+	var face_price := _company_face_price(company)
+	if face_price <= 0:
+		return 0
+	return mini(1000, mini(int(state.get("company_purchase_remaining", 0)), mini(int(company.get("treasury", 0)), int(player.get("cash", 0)) / face_price)))
+
+
+func _company_upgrade_targets(player_id: int) -> Array:
+	if game_state != null and game_state.has_method("get_company_upgrade_targets"):
+		return _as_array(game_state.call("get_company_upgrade_targets", player_id))
+	return []
+
+
+func _company_upgrade_fee(tile: Dictionary, player_id: int, company_owner_id: int = -1) -> int:
+	if game_state != null and game_state.has_method("get_company_upgrade_fee"):
+		return int(game_state.call("get_company_upgrade_fee", player_id, int(tile.get("index", -1)), company_owner_id))
+	if company_owner_id == player_id:
+		return 0
+	var land_price := int(tile.get("land_price", tile.get("cost", 0)))
+	return land_price * int(state.get("price_index", 1))
+
+
+func _ensure_company_facility_type_picker(tile: Dictionary) -> void:
+	var needs_picker: bool = str(tile.get("kind", "")) == "facility" and int(tile.get("building_level", 0)) == 0
+	if _company_service_type != null and not is_instance_valid(_company_service_type):
+		_company_service_type = null
+	if needs_picker:
+		if _company_service_type != null:
+			return
+		_company_service_type = OptionButton.new()
+		_company_service_type.name = "CompanyFacilityType"
+		_company_service_type.custom_minimum_size = Vector2(0.0, 36.0)
+		_company_service_type.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_company_service_type.add_theme_font_size_override("font_size", 11)
+		for facility_type in range(4):
+			_company_service_type.add_item(_facility_name(facility_type), facility_type)
+		company_popup_list.add_child(_company_service_type)
+		if _company_service_target != null:
+			company_popup_list.move_child(_company_service_type, company_popup_list.get_children().find(_company_service_target) + 1)
+		return
+	if _company_service_type != null:
+		_company_service_type.free()
+		_company_service_type = null
+
+
+func _update_company_popup() -> void:
+	if company_popup_list == null:
+		return
+	for child in company_popup_list.get_children():
+		child.free()
+	_company_purchase_quantity = null
+	_company_purchase_button = null
+	_company_service_target = null
+	_company_service_type = null
+	_company_service_button = null
+	var tile := _current_tile()
+	var company := _company_at_tile(tile)
+	if company.is_empty():
+		company_popup.hide()
+		return
+	var player := _current_player()
+	var player_id := int(state.get("current_player", -1))
+	var stock_symbol := _company_stock_symbol(company)
+	var stock_name := _stock_name_for_ui(stock_symbol)
+	var owner_id := int(company.get("owner", -1))
+	var owner_text := "無" if owner_id < 0 else _player_name(owner_id)
+	var stock_row := _stock_row_for_ui(stock_symbol)
+	var stock_price := _stock_price_for_ui(stock_symbol)
+	company_popup_list.add_child(_make_label("%s　·　%s（%s）" % [str(company.get("display_name", "企業")), stock_name, stock_symbol], 15, TEXT_MAIN))
+	company_popup_list.add_child(_make_label("市價 %s　·　面額 %s　·　經營者 %s" % [_format_price(stock_price), _format_price(float(_company_face_price(company))), owner_text], 11, TEXT_MUTED))
+	company_popup_list.add_child(_make_label("你的持股 %d 股　·　企業庫存 %d 股　·　本回合可購買額度 %d 股" % [_stock_holding(player, stock_symbol), int(company.get("treasury", 0)), int(state.get("company_purchase_remaining", 0))], 11, TEXT_MAIN))
+	company_popup_list.add_child(_make_label("本月盈餘 %s　·　累計盈餘 %s　·　平均盈餘 %s" % [_format_money(int(company.get("monthly_profit", 0))), _format_money(int(company.get("cumulative_profit", 0))), _format_money(_company_average_earnings(company))], 11, TEXT_GOLD))
+	var suspension := int(stock_row.get("suspension", 0)) if not stock_row.is_empty() else 0
+	if suspension > 0:
+		company_popup_list.add_child(_make_label("關聯股票暫停交易 %d 天。" % suspension, 11, Color("#f28d83")))
+	var pending_company := int(state.get("company_service_pending", 0))
+	var options := _as_array(state.get("action_options", []))
+	var can_buy_company := _has_action_option(options, "buy_company") and pending_company == 0
+	var purchase_cap := _company_purchase_cap(company, player)
+	var purchase_heading := _make_label("直接用現金購買企業股份", 13, TEXT_GOLD)
+	company_popup_list.add_child(purchase_heading)
+	var purchase_row := HBoxContainer.new()
+	purchase_row.name = "CompanyPurchaseRow"
+	purchase_row.add_theme_constant_override("separation", 7)
+	_company_purchase_quantity = SpinBox.new()
+	_company_purchase_quantity.name = "CompanyPurchaseQuantity"
+	_company_purchase_quantity.min_value = 1
+	_company_purchase_quantity.max_value = max(1, purchase_cap)
+	_company_purchase_quantity.step = 1
+	_company_purchase_quantity.value = 1
+	_company_purchase_quantity.custom_minimum_size.x = 88.0
+	_company_purchase_quantity.add_theme_font_size_override("font_size", 11)
+	purchase_row.add_child(_company_purchase_quantity)
+	_company_purchase_button = _make_button("購入", func() -> void:
+		var current_company := _company_at_tile(_current_tile())
+		if current_company.is_empty() or int(current_company.get("id", -1)) != int(company.get("id", -2)):
+			company_popup.hide()
+			return
+		var result := _invoke_game("choose_action", ["buy_company", {"quantity": int(_company_purchase_quantity.value)}])
+		_append_local_log("購入%s股份 × %d：%s" % [str(company.get("display_name", "企業")), int(_company_purchase_quantity.value), _result_text(result, "已送出企業股份指令。")])
+		call_deferred("_handle_result", result)
+		if bool(result.get("ok", false)):
+			company_popup.hide()
+	)
+	_company_purchase_button.name = "BuyCompanyShares"
+	_company_purchase_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	purchase_row.add_child(_company_purchase_button)
+	company_popup_list.add_child(purchase_row)
+	var purchase_quote := _make_label("", 11, TEXT_MUTED)
+	purchase_quote.name = "CompanyPurchaseQuote"
+	purchase_quote.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	company_popup_list.add_child(purchase_quote)
+	var update_purchase_quote := func(_value: float = 1.0) -> void:
+		var count := int(_company_purchase_quantity.value)
+		var amount := _company_face_price(company) * count
+		_company_purchase_button.text = "購入 %d 股 · %s" % [count, _format_money(amount)]
+		purchase_quote.text = "每股面額 %s · 可購買上限 %d 股" % [_format_price(float(_company_face_price(company))), purchase_cap]
+		_company_purchase_button.disabled = not (_is_human_turn() and _phase_is_action() and can_buy_company and purchase_cap > 0 and count <= purchase_cap)
+	_company_purchase_quantity.value_changed.connect(update_purchase_quote)
+	update_purchase_quote.call()
+	if not can_buy_company:
+		purchase_quote.text += "\n" + ("請先完成企業建設服務。" if pending_company != 0 else "目前無法在此造訪購買股份。")
+
+	if _has_action_option(options, "company_upgrade") or pending_company != 0:
+		company_popup_list.add_child(HSeparator.new())
+		company_popup_list.add_child(_make_label("企業建設服務", 13, TEXT_GOLD))
+		if pending_company != 0:
+			company_popup_list.add_child(_make_label("請先選擇一個自己的地產或設施完成本次建設服務。", 11, TEXT_MUTED))
+		var targets := _company_upgrade_targets(player_id)
+		if targets.is_empty():
+			company_popup_list.add_child(_make_label("目前沒有可選的自有地產或設施。", 11, TEXT_MUTED))
+		else:
+			_company_service_target = OptionButton.new()
+			_company_service_target.name = "CompanyUpgradeTarget"
+			_company_service_target.custom_minimum_size = Vector2(0.0, 36.0)
+			_company_service_target.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_company_service_target.add_theme_font_size_override("font_size", 11)
+			for target_value in targets:
+				var target_id := int(target_value)
+				var target_tile := _tile_for_index(target_id)
+				var target_level := int(target_tile.get("building_level", 0))
+				var fee := _company_upgrade_fee(target_tile, player_id, owner_id)
+				var target_text := "%s · 第 %d 級" % [str(target_tile.get("name", "格位 %02d" % (target_id + 1))), target_level]
+				if owner_id == player_id:
+					target_text += " · 免費（經營者服務，最多提升 2 級）"
+				else:
+					target_text += " · 費用 %s" % _format_money(fee)
+				_company_service_target.add_item(target_text, target_id)
+			company_popup_list.add_child(_company_service_target)
+			var selected_tile := _tile_for_index(_company_service_target.get_selected_id())
+			_ensure_company_facility_type_picker(selected_tile)
+			var service_quote := _make_label("", 11, TEXT_MUTED)
+			service_quote.name = "CompanyUpgradeQuote"
+			company_popup_list.add_child(service_quote)
+			_company_service_button = _make_button("建設服務", func() -> void:
+				if _company_service_target == null or _company_service_target.item_count == 0:
+					return
+				var params: Dictionary = {"tile_id": _company_service_target.get_selected_id()}
+				if _company_service_type != null:
+					params["facility_type"] = _company_service_type.get_selected_id()
+				var result := _invoke_game("choose_action", ["company_upgrade", params])
+				_append_local_log("企業建設：%s" % _result_text(result, "已送出企業建設指令。"))
+				call_deferred("_handle_result", result)
+				if bool(result.get("ok", false)):
+					company_popup.hide()
+			)
+			_company_service_button.name = "CompanyUpgrade"
+			company_popup_list.add_child(_company_service_button)
+			var update_service_quote := func(_index: int = 0) -> void:
+				var selected_id := _company_service_target.get_selected_id()
+				var selected := _tile_for_index(selected_id)
+				_ensure_company_facility_type_picker(selected)
+				var fee := _company_upgrade_fee(selected, player_id, owner_id)
+				var owner_service := owner_id == player_id
+				service_quote.text = "目標：%s　·　%s" % [str(selected.get("name", "格位")), "免費（經營者服務，最多提升 2 級）" if owner_service else "服務費 " + _format_money(fee)]
+				_company_service_button.disabled = not (_is_human_turn() and _phase_is_action() and _has_action_option(_as_array(state.get("action_options", [])), "company_upgrade"))
+				_company_service_button.text = "免費建設" if owner_service else "支付 %s 建設" % _format_money(fee)
+			_company_service_target.item_selected.connect(update_service_quote)
+			update_service_quote.call()
 
 func _unavailable_state(seed_value: int) -> Dictionary:
 	return {
@@ -2010,6 +2438,10 @@ func _phase_text(phase: String) -> String:
 			return "本局結束"
 		_:
 			return phase
+
+
+func _phase_is_action() -> bool:
+	return str(state.get("phase", "")) == "await_action"
 
 func _kind_label(kind: String) -> String:
 	match kind:
@@ -2134,9 +2566,33 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 		"withdraw":
 			return "從銀行提取 %s" % _format_money(int(event.get("amount", 0)))
 		"stock_bought":
-			return "買入 %s × %d" % [str(event.get("symbol", "")), int(event.get("quantity", 0))]
+			return "買入 %s（%s）× %d · %s" % [str(event.get("stock_name", _stock_name_for_ui(str(event.get("symbol", ""))))), str(event.get("symbol", "")), int(event.get("quantity", 0)), _format_price(float(event.get("price", 0.0)))]
 		"stock_sold":
-			return "賣出 %s × %d" % [str(event.get("symbol", "")), int(event.get("quantity", 0))]
+			return "賣出 %s（%s）× %d · %s" % [str(event.get("stock_name", _stock_name_for_ui(str(event.get("symbol", ""))))), str(event.get("symbol", "")), int(event.get("quantity", 0)), _format_price(float(event.get("price", 0.0)))]
+		"company_visited":
+			var visited_name := str(event.get("company_name", "企業"))
+			var visited_fee := int(event.get("base_fee", 0))
+			return "到訪企業 %s · %s" % [visited_name, "服務費 %s" % _format_money(visited_fee) if visited_fee > 0 else "本次未收費"]
+		"company_shares_bought":
+			return "購入企業股份 %s × %d · 現金 %s" % [str(event.get("company_name", "企業")), int(event.get("quantity", 0)), _format_money(int(event.get("amount", 0)))]
+		"company_owner_changed":
+			var owner_value := int(event.get("owner_id", -1))
+			return "企業 %s 經營者改為 %s" % [str(event.get("company_name", "企業")), "無" if owner_value < 0 else _player_name(owner_value)]
+		"company_insurance_granted":
+			var granted_status := int(event.get("insurance_status", 0))
+			return "企業 %s 提供保險 %d 天 · 狀態 %d" % [str(event.get("company_name", "保險公司")), int(event.get("days", 0)), granted_status]
+		"company_insurance_paid":
+			return "保險公司理賠 %s · 增加住院 %d 天" % [_format_money(int(event.get("amount", 0))), int(event.get("days", 0))]
+		"company_service_unavailable":
+			return "企業服務暫不可用 · %s" % str(event.get("reason", "來源限制"))
+		"company_dividend_unavailable":
+			return "企業分紅暫不可用 · %s" % str(event.get("reason", "餘額上限"))
+		"company_dividend":
+			return "企業 %s 發放股利 %s · 實發 %s" % [str(event.get("company_name", "企業")), _format_money(int(event.get("pool", 0))), _format_money(int(event.get("distributed", 0)))]
+		"company_dividend_paid":
+			return "取得企業股利 %s" % _format_money(int(event.get("amount", 0)))
+		"company_upgrade", "company_construction":
+			return "企業建設 %s · %s" % [str(event.get("company_name", "企業")), _tile_name(int(event.get("tile_id", -1)))]
 		"card_used":
 			var card_name := _inventory_item_name("card", str(event.get("card_id", "")))
 			if event.has("tile_id") or event.has("property_id"):
@@ -2173,6 +2629,8 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 		"roadblock_hit":
 			return "遇到路障，停在%s並移除路障" % _tile_name(int(event.get("tile_id", -1)))
 		"game_over":
+			if str(event.get("reason", "")) == "company_dividend_no_survivors":
+				return "企業分紅結算後已無存活股東，本局結束"
 			return "本局結束"
 		"turn_started":
 			return "回合開始"
@@ -2267,10 +2725,13 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) >= 6 and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) >= 4
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION]
+
+func _has_original_companies() -> bool:
+	return int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false))
 
 func _item_implemented(item_kind: String, item_id: String) -> bool:
 	if not _has_original_inventory():

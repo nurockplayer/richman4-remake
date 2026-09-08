@@ -177,6 +177,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		if not _integer(row.get("index"),stock_index,stock_index) or typeof(row.get("name"))!=TYPE_STRING or row.get("name","").is_empty() or row.get("name","").length()>128:
 			errors.append("invalid company stock identity %s" % stock_symbol)
 		for field in ["base_price","previous_price","price"]:
+			if _number(row.get(field),1.0,9999.0) and absf(float(row[field])-snappedf(float(row[field]),0.01))>0.000000001: errors.append("non-cent company stock price")
 			if not _number(row.get(field),1.0,9999.0): errors.append("invalid company stock %s" % field)
 		if not _number(row.get("volatility"),0.0,1000.0) or not _number(row.get("momentum"),-10.0,10.0) or not _number(row.get("shock"),-100.0,100.0):
 			errors.append("invalid company stock dynamics")
@@ -195,6 +196,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		else:
 			for price in history:
 				if not _number(price,1.0,9999.0): errors.append("invalid company stock history price")
+				elif absf(float(price)-snappedf(float(price),0.01))>0.000000001: errors.append("non-cent company stock history price")
 			if not _number(history.back(),1.0,9999.0) or not _number(row.get("price"),1.0,9999.0) or float(history.back())!=float(row.price): errors.append("company stock history tail mismatch")
 		var treasury := 0
 		if not _integer(row.get("company_id"),0,1999):

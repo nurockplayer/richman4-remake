@@ -733,14 +733,19 @@ func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
 	var owner := int(company.get("owner", -1))
 	var company_type := int(company.company_type)
 	var base := 0
+	var insurance_days := 0
+	var insurance_rng_before := _rng.state
 	var supported := company_type in [3, 4, 5, 6, 11, 12]
 	if company_type == 11 and owner >= 0:
 		if not get_company_upgrade_targets(player_id).is_empty():
+			if _company_payable_upgrade_targets(player_id, company).is_empty():
+				_record_event("company_service_unavailable", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"reason":"earnings_limit"})
+				return
 			state.company_service_pending = int(company.id)
 		elif owner != player_id:
 			base = 1000 * _facility_price_index()
 	if company_type == 4 and owner >= 0:
-		var insurance_days := _grant_company_insurance(player_id, company)
+		insurance_days = _roll_company_insurance_days()
 		if owner != player_id: base = insurance_days * int(company.toll_fee) * _facility_price_index()
 	if owner >= 0 and owner != player_id:
 		match company_type:
@@ -752,15 +757,18 @@ func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
 					base = (700 if company_type == 5 else 500) * int(state.get("last_roll_total", 0)) * _facility_price_index() * (2 if vehicle == "car" else 1)
 			12:
 				base = int(company.toll_fee) * int(state.get("last_roll_total", 0)) * _facility_price_index()
+	var amount := _god_charge_amount_value(player_id, base, "company")
+	var payable := mini(amount, int(player.cash)+int(player.deposit))
+	if payable>0 and (int(company.monthly_profit)>1000000000000-payable or int(company.cumulative_profit)>1000000000000-payable):
+		if insurance_days>0: _rng.state=insurance_rng_before
+		_record_event("company_service_unavailable", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"reason":"earnings_limit"})
+		return
 	_record_event("company_visited", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"company_type":company_type,"owner_id":owner,"base_fee":base,"service_supported":supported})
+	if insurance_days>0: _grant_company_insurance(player_id, company, insurance_days)
 	if base > 0:
-		var amount := _god_adjust_charge_amount(player_id, base, "company")
+		amount = _god_adjust_charge_amount(player_id, base, "company")
 		if amount <= 0:
 			_record_event("god_charge_waived", {"player_id":player_id,"god_id":_player_god_id(player_id),"reason":"company","amount":base})
-			return
-		var payable := mini(amount, int(player.cash)+int(player.deposit))
-		if int(company.monthly_profit)>1000000000000-payable or int(company.cumulative_profit)>1000000000000-payable:
-			_record_event("company_service_unavailable", {"company_id":int(company.id),"reason":"earnings_limit"})
 			return
 		# Negative IDs below -1 identify a corporate creditor. The generic
 		# cash/deposit/bankruptcy path then credits only actual payments.
@@ -793,6 +801,22 @@ func get_company_upgrade_targets(player_id: int) -> Array:
 	return _company_upgrade_target_ids(state.board, player_id)
 
 
+func get_company_upgrade_fee(player_id: int, tile_id: int, company_owner_id: int) -> int:
+	if company_owner_id == player_id: return 0
+	var tile := _tile_at(tile_id)
+	return _god_charge_amount_value(player_id, int(tile.get("land_price", tile.get("cost", 0))) * _facility_price_index(), "company")
+
+
+func _company_payable_upgrade_targets(player_id: int, company: Dictionary) -> Array:
+	var targets: Array = []
+	var funds := int(_player(player_id).cash)+int(_player(player_id).deposit)
+	for tile_id in get_company_upgrade_targets(player_id):
+		var payable := mini(get_company_upgrade_fee(player_id, int(tile_id), int(company.owner)), funds)
+		if int(company.monthly_profit)<=1000000000000-payable and int(company.cumulative_profit)<=1000000000000-payable:
+			targets.append(tile_id)
+	return targets
+
+
 func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
 	var company := get_company_at(int(_player(player_id).get("position", -1)))
 	if company.is_empty() or int(company.company_type) != 11 or int(state.company_service_pending) != int(company.id):
@@ -814,7 +838,7 @@ func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
 		cap = _facility_type_cap(facility_type)
 	var free_service := int(company.owner) == player_id
 	var amount := 0 if free_service else int(tile.get("land_price", tile.get("cost", 0))) * _facility_price_index()
-	var payable := mini(amount*2, int(_player(player_id).cash)+int(_player(player_id).deposit))
+	var payable := mini(get_company_upgrade_fee(player_id, int(target_value), int(company.owner)), int(_player(player_id).cash)+int(_player(player_id).deposit))
 	if int(company.monthly_profit)>1000000000000-payable or int(company.cumulative_profit)>1000000000000-payable:
 		return _error("企業收益已達可處理上限")
 	var next_level := mini(cap,level+(2 if free_service else 1))
@@ -827,6 +851,8 @@ func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
 	state.company_service_pending = 0
 	_record_event("company_construction", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"tile_id":int(target_value),"from_level":level,"to_level":next_level,"base_fee":amount})
 	if amount>0: _charge_amount(player_id,amount,-int(company.id)-2,"company")
+	if not bool(_player(player_id).alive) and state.phase != "game_over" and int(state.current_player) == player_id:
+		_advance_to_next_alive(player_id)
 	_set_action_options(int(state.current_player))
 	return _result(true,"企業建設服務完成")
 
@@ -838,15 +864,17 @@ func _tick_company_insurance() -> void:
 		player.insurance_status = 0 if status == 128 else 128 if status == 1 else maxi(0, status - 1)
 
 
-func _grant_company_insurance(player_id: int, company: Dictionary) -> int:
-	var player := _player(player_id)
+func _roll_company_insurance_days() -> int:
 	# Source mode-3 roulette has six equally likely nonblank outcomes. The
 	# replayable remake RNG does not attempt the original wall-clock trace.
 	var outcomes: Array = [5, 3, 30, 20, 15, 10]
-	var days := int(outcomes[_rng.randi_range(0, outcomes.size()-1)])
+	return int(outcomes[_rng.randi_range(0, outcomes.size()-1)])
+
+
+func _grant_company_insurance(player_id: int, company: Dictionary, days: int) -> void:
+	var player := _player(player_id)
 	player.insurance_status = (int(player.get("insurance_status", 0)) + days) & 0x7f
 	_record_event("company_insurance_granted", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"days":days,"insurance_status":int(player.insurance_status)})
-	return days
 
 
 func _pay_company_insurance(player_id: int, added_days: int) -> void:
@@ -2789,7 +2817,7 @@ func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 	_charge_amount(debtor_id, adjusted_amount, creditor_id, "rent", false)
 
 
-func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> int:
+func _god_charge_amount_value(debtor_id: int, amount: int, reason: String) -> int:
 	if amount <= 0 or not _is_gods() or (not ["rent", "facility"].has(reason) and not (_is_companies() and reason == "company")):
 		return amount
 	var adjusted_amount: int = amount
@@ -2802,6 +2830,11 @@ func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> i
 			adjusted_amount += int(floor(float(amount) / 2.0))
 		6:
 			adjusted_amount *= 2
+	return adjusted_amount
+
+
+func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> int:
+	var adjusted_amount := _god_charge_amount_value(debtor_id, amount, reason)
 	if adjusted_amount != amount:
 		_record_event("god_charge_modifier", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "from_amount": amount, "to_amount": adjusted_amount})
 	return adjusted_amount
@@ -5971,6 +6004,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		errors.append("winner set before game over")
 
 	if companies_save:
+		errors.append_array(OriginalStockMarket.validate(data.get("market"), data.get("players"), data.get("companies")))
+		errors.append_array(_validate_companies(data.get("companies"), data.get("players"), data.get("board")))
 		var pending_company: Variant = data.get("company_service_pending")
 		if not _valid_int(pending_company,0,1999):
 			errors.append("invalid pending company service")
@@ -5984,9 +6019,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						for company in data.companies:
 							if typeof(company)==TYPE_DICTIONARY and _valid_int(company.get("id"),int(pending_company),int(pending_company)) and _valid_int(company.get("company_type"),11,11) and _valid_int(company.get("owner"),0,players.size()-1):
 								pending_valid=data.get("phase","")=="await_action" and not _company_upgrade_target_ids(board,int(data.current_player)).is_empty()
+			if pending_valid and errors.is_empty():
+				var pending_game = new()
+				pending_game.state = data
+				pending_valid = not pending_game._company_payable_upgrade_targets(int(data.current_player), pending_game.get_company_at(int(players[int(data.current_player)].position))).is_empty()
 			if not pending_valid: errors.append("pending company service context mismatch")
-		errors.append_array(OriginalStockMarket.validate(data.get("market"), data.get("players"), data.get("companies")))
-		errors.append_array(_validate_companies(data.get("companies"), data.get("players"), data.get("board")))
 	var auctions: Variant = data.get("bankruptcy_auctions", null)
 	if typeof(auctions) != TYPE_ARRAY:
 		errors.append("invalid bankruptcy auctions")
@@ -6037,6 +6074,7 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		OriginalStockMarket.normalize_numbers(game.state.market)
 		OriginalStockMarket.normalize_price_events(game.state.event_log)
 		OriginalStockMarket.normalize_price_events(game.state.last_event)
+		if not bool(validate_save(game.state).get("ok", false)): return null
 	game._rng = RandomNumberGenerator.new()
 	game._rng.seed = int(game.state.get("seed", 0))
 	var rng_text: String = str(game.state.get("rng_state_text", ""))

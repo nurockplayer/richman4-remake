@@ -87,5 +87,35 @@ func _initialize() -> void:
 		expect(game.choose_action("company_upgrade",{"tile_id":1,"facility_type":1}).get("ok",false),"company owner builds chosen facility type")
 		expect(game.state.board[1].building_level==2 and game.state.board[4].building_level==2 and game.state.board[4].facility_type==1,"two-level construction syncs all facility nodes")
 		valid(game)
+	game=make_game()
+	visit(game,1)
+	game.state.companies[0].monthly_profit=999999998500
+	game.state.companies[0].cumulative_profit=999999998500
+	valid(game)
+	expect(game.choose_action("company_upgrade",{"tile_id":2}).get("ok",false),"construction preflight uses actual fee instead of hypothetical double fee")
+	expect(game.state.board[2].building_level==1 and game.state.companies[0].monthly_profit==999999999500 and game.state.company_service_pending==0,"within-limit construction completes and credits exact fee")
+	valid(game)
+	game=make_game()
+	visit(game,1)
+	game.state.bank.deposits-=int(game.state.players[1].deposit)
+	game.state.players[1].deposit=0
+	game.state.players[1].cash=0
+	valid(game)
+	expect(game.choose_action("company_upgrade",{"tile_id":2}).get("ok",false),"unaffordable mandatory construction settles bankruptcy")
+	expect(not game.state.players[1].alive and game.state.current_player==2 and game.state.phase=="await_roll","deferred service bankruptcy advances to next living player")
+	valid(game)
+	game=make_game()
+	game.state.companies[0].monthly_profit=1000000000000
+	game.state.companies[0].cumulative_profit=1000000000000
+	visit(game,1)
+	expect(game.state.company_service_pending==0,"unpayable construction consumes unavailable visit instead of trapping turn")
+	expect(game.end_turn().get("ok",false),"unavailable construction can end turn")
+	valid(game)
+	game=make_game()
+	visit(game,1)
+	var blocked_save: Dictionary = game.to_dict()
+	blocked_save.companies[0].monthly_profit=1000000000000
+	blocked_save.companies[0].cumulative_profit=1000000000000
+	expect(not Game.validate_save(blocked_save).get("ok",false) and Game.from_dict(blocked_save)==null,"impossible pending construction save rejected")
 	print("Company construction checks: %d, failures: %d"%[checks,failures])
 	quit(1 if failures else 0)

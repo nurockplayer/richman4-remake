@@ -59,5 +59,13 @@ func _initialize() -> void:
 	broken=saved.duplicate(true)
 	broken.market.rows.s01.shock=NAN
 	reject(broken,"NaN shock rejected")
+	broken=saved.duplicate(true)
+	broken.market.rows.s01.price=100.096
+	broken.market.prices.s01=100.096
+	broken.market.history.s01[-1]=100.096
+	var raw_total := 0.0
+	for stock_row in broken.market.rows.values(): raw_total+=float(stock_row.price)
+	broken.market.index=int(raw_total*10.0)
+	reject(broken,"non-cent price must not load then normalize into invalid market index")
 	print("Company save checks: %d, failures: %d"%[checks,failures])
 	quit(1 if failures else 0)

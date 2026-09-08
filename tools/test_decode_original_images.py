@@ -66,14 +66,15 @@ def make_spr() -> bytes:
     )
 
 
-def make_smp() -> bytes:
+def make_smp(pixels: tuple[int, ...] = (0x03E0,)) -> bytes:
     start_offset = 12 + 12
-    chunks = struct.pack("<hhhhI", 1, 1, -2, 5, 2)
+    width = len(pixels)
+    chunks = struct.pack("<hhhhI", width, 1, -2, 5, width * 2)
     return (
         b"SMP\0"
         + struct.pack("<II", 1, start_offset)
         + chunks
-        + struct.pack("<H", 0x03E0)  # green in RGB555
+        + struct.pack(f"<{width}H", *pixels)
     )
 
 
@@ -684,6 +685,27 @@ class DecodeOriginalImagesTests(unittest.TestCase):
             width, height, rgba = read_png_rgba(path.read_bytes())
         self.assertEqual((width, height), (2, 1))
         self.assertEqual(rgba, bytes((0, 0, 0, 0, 255, 0, 0, 255)))
+
+    def test_smp_word_zero_transparency_is_opt_in(self) -> None:
+        smp = make_smp((0, 0x8000))
+        entry = MkfEntry(0, 4, len(smp), len(smp), 24, 4, 20, 20 + len(smp))
+        resource = parse_visual_resource(smp, entry)
+        assert resource is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            default_path = Path(temporary) / "default.png"
+            keyed_path = Path(temporary) / "keyed.png"
+            write_png(default_path, resource.chunks[0], resource, pixel_format="rgb555")
+            write_png(
+                keyed_path,
+                resource.chunks[0],
+                resource,
+                pixel_format="rgb555",
+                transparent_word_zero=True,
+            )
+            _, _, default_rgba = read_png_rgba(default_path.read_bytes())
+            _, _, keyed_rgba = read_png_rgba(keyed_path.read_bytes())
+        self.assertEqual(default_rgba, bytes((0, 0, 0, 255, 0, 0, 0, 255)))
+        self.assertEqual(keyed_rgba, bytes((0, 0, 0, 0, 0, 0, 0, 255)))
 
     def test_decode_source_writes_manifest_and_bounded_visuals(self) -> None:
         spr = make_spr()

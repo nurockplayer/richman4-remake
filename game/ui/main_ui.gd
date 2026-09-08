@@ -1698,7 +1698,7 @@ func _update_property_card(tile: Dictionary) -> void:
 		var owner := int(tile.get("owner", -1))
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
 		if owner < 0 and _has_original_gods():
-			var purchase_price := int(tile.get("land_price", tile.get("cost", 0))) + int(tile.get("building_level", 0)) * int(tile.get("house_price", tile.get("upgrade_cost", 0)))
+			var purchase_price := (int(tile.get("land_price", tile.get("cost", 0))) + int(tile.get("building_level", 0)) * int(tile.get("house_price", tile.get("upgrade_cost", 0)))) * int(state.get("price_index", 1))
 			details += " · 購買總價 %s" % _format_money(purchase_price)
 	elif kind == "facility":
 		var level := int(tile.get("building_level", 0))

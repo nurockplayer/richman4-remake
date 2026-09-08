@@ -639,7 +639,7 @@ func _property_buy_price(tile: Dictionary) -> int:
 	if _is_gods() and tile.get("kind", "") == "property":
 		var land_price: int = int(tile.get("land_price", tile.get("cost", 0)))
 		var house_price: int = int(tile.get("house_price", tile.get("upgrade_cost", 0)))
-		return max(0, land_price + int(tile.get("building_level", 0)) * house_price)
+		return max(0, land_price + int(tile.get("building_level", 0)) * house_price) * _facility_price_index()
 	return int(tile.get("cost", 0))
 
 
@@ -3755,12 +3755,14 @@ func _ai_action(player_id: int) -> void:
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":
 		var owner: int = int(tile.get("owner", -1))
-		if owner == -1 and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
-			choose_action("buy")
-			return
+		if owner == -1 and not bool(state.get("property_action_used", false)) and int(player.get("cash", 0)) >= _property_buy_price(tile):
+			var buy_result: Dictionary = choose_action("buy")
+			if bool(buy_result.get("ok", false)):
+				return
 		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
-			choose_action("upgrade")
-			return
+			var upgrade_result: Dictionary = choose_action("upgrade")
+			if bool(upgrade_result.get("ok", false)):
+				return
 	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
 		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
 		var facility_owner: int = int(facility.get("owner", -1))

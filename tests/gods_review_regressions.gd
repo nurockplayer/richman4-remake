@@ -274,5 +274,34 @@ func _initialize() -> void:
 		var old_unowned = purchase_card_game(false,facility,-1,0,1)
 		valid(old_unowned,"legacy unowned purchase prestate")
 		expect(old_unowned.choose_action("use_card",{"card_id":"購地"}).get("ok",false),"legacy purchase card retains unowned target compatibility")
+	for level in [0,2]:
+		for cash in [1000+level*300, (1000+level*300)*2]:
+			var direct = purchase_card_game(true,false,-1,level,2)
+			direct.state.phase="await_action"
+			direct.state.players[0].cash=cash
+			direct._set_action_options(0)
+			valid(direct,"indexed direct purchase prestate")
+			var before: Dictionary = direct.to_dict()
+			var result: Dictionary = direct.choose_action("buy")
+			var expected_price: int = (1000+level*300)*2
+			expect(result.get("ok",false)==(cash>=expected_price),"direct purchase affordability includes index")
+			if cash>=expected_price:
+				expect(direct.state.players[0].cash==cash-expected_price,"direct purchase charges indexed land and improvements")
+			else:
+				expect(direct.to_dict()==before,"insufficient indexed purchase is atomic")
+			valid(direct,"indexed direct purchase result")
+	for god_id in [7,8,15,12]:
+		for owner in [-1,0]:
+			if god_id==12 and owner==0: continue
+			var ai = purchase_card_game(true,false,owner,0,1,god_id)
+			ai.set_player_ai(0,true)
+			ai.state.phase="await_action"
+			ai._set_action_options(0)
+			valid(ai,"blocked investment AI prestate")
+			var shares_before: Dictionary = ai.state.players[0].stocks.duplicate(true)
+			var result: Dictionary = ai.run_ai_turn()
+			expect(result.get("ok",false) and result.get("completed",false),"blocked investment AI completes")
+			expect(ai.state.players[0].stocks!=shares_before,"blocked investment AI continues to legal stock purchase")
+			valid(ai,"blocked investment AI result")
 	print("God review regression checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)

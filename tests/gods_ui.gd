@@ -105,6 +105,7 @@ func run() -> void:
 	ui._refresh_from_state()
 	ui._update_cards_popup()
 	expect(ui.cards_popup_list.find_child("UseCard_購地",true,false).disabled,"v6 purchase card UI excludes unowned improvements")
+	expect(ui.current_property_detail.text.contains("3,200"),"direct purchase UI displays indexed complete price")
 	ui.free()
 	print("God UI checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

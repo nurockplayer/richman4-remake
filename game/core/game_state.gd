@@ -2196,7 +2196,7 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 	var rng_text: String = str(game.state.get("rng_state_text", ""))
 	game._rng.state = int(rng_text) if rng_text != "" else int(game.state.get("rng_state", 0))
 	game._sync_state()
-	if game.state.get("phase", "") in ["await_roll", "await_action"]:
+	if game.state.get("phase", "") in ["await_roll", "await_action", "await_route"]:
 		game._set_action_options(int(game.state.get("current_player", -1)))
 	else:
 		game.state["action_options"] = []

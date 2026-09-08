@@ -238,6 +238,8 @@ func _test_pending_route_save_load_and_validation() -> void:
 	var restored: Object = GameState.from_dict(saved)
 	_expect(restored != null, "pending graph save restores")
 	if restored != null:
+		_expect_equal(restored.state["action_options"], game.state["action_options"], "pending-route load preserves immediately available actions")
+		_expect_equal(restored.to_json(), game.to_json(), "pending-route save round trip is identical before continuing")
 		_expect_equal(restored.state["route_options"], game.state["route_options"], "restored route choices match")
 		_expect_equal(restored.state["remaining_steps"], game.state["remaining_steps"], "restored remaining steps match")
 		game.choose_route(2)

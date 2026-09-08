@@ -327,5 +327,5 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"name": "%s · 地圖 %d" % ["原版" if raw.edition == "Game" else "超時空之旅", raw.map_number],
 		"source": source, "original_facilities": original_facilities,
 		"board": board, "start_position": start_position, "supports_new_game": supported,
-		"unsupported_reason": "" if supported else "此地圖需要商業設施系統，尚未開放對局。"}
+		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。"}
 	return {"ok": true, "error": "", "definition": definition}

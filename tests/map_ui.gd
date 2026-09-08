@@ -198,23 +198,23 @@ func _test_catalog_selection_and_map8(ui: Control, raw_fixture: Dictionary) -> v
 	_expect(not ui.new_game_confirm_button.disabled, "map eight with housing enables new game")
 	_expect(str(ui.map_preview_status_label.text).contains("可開始新局"), "playable map preview explains start availability")
 
-	var map_eight_without_housing := raw_fixture.duplicate(true)
-	map_eight_without_housing["map_number"] = 8
-	map_eight_without_housing["lands"] = []
-	var unsupported_nodes: Array = map_eight_without_housing["nodes"]
+	var map_eight_without_supported_property := raw_fixture.duplicate(true)
+	map_eight_without_supported_property["map_number"] = 8
+	map_eight_without_supported_property["lands"] = []
+	var unsupported_nodes: Array = map_eight_without_supported_property["nodes"]
 	for node_index in [2, 3]:
-		unsupported_nodes[node_index]["type_and_idx"] = 4001
-	map_eight_without_housing["nodes"] = unsupported_nodes
-	payload = {"schema": "richman4.map-catalog/v1", "version": 1, "count": 2, "maps": [map_one, map_eight_without_housing]}
+		unsupported_nodes[node_index]["type_and_idx"] = 6001
+	map_eight_without_supported_property["nodes"] = unsupported_nodes
+	payload = {"schema": "richman4.map-catalog/v1", "version": 1, "count": 2, "maps": [map_one, map_eight_without_supported_property]}
 	file = FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(JSON.stringify(payload))
 	file.close()
 	ui._load_map_catalog(path)
-	_expect(bool(ui._map_catalog_ok), "catalog accepts map eight without housing")
+	_expect(bool(ui._map_catalog_ok), "catalog accepts a map without supported property")
 	ui._on_map_selected(1)
 	_expect(str(ui._selected_map_definition.get("id", "")) == "Game:8", "unsupported map eight identity is preserved")
-	_expect(not bool(ui._selected_map_definition.get("supports_new_game", true)), "map eight without housing is preview only")
-	_expect(ui.new_game_confirm_button.disabled, "map without housing disables new game")
+	_expect(not bool(ui._selected_map_definition.get("supports_new_game", true)), "map with only unsupported companies is preview only")
+	_expect(ui.new_game_confirm_button.disabled, "map without supported property disables new game")
 	_expect(str(ui.map_preview_status_label.text).contains("僅供預覽"), "unsupported map preview explains restriction")
 	ui._new_game(23, 2, ui._map_catalog[0])
 	var before_state: Dictionary = ui.state.duplicate(true)

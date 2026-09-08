@@ -2,7 +2,7 @@
 set -euo pipefail
 
 warn_gib="${RICHMAN4_DISK_WARN_GIB:-60}"
-hard_gib="${RICHMAN4_DISK_HARD_MIN_GIB:-25}"
+hard_gib="${RICHMAN4_DISK_HARD_MIN_GIB:-40}"
 allow_low="${RICHMAN4_ALLOW_LOW_DISK:-0}"
 probe_path="${PWD}"
 operation="full materialization"

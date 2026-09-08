@@ -41,5 +41,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/facility_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/facility_save_recovery.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/facility_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/facility_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_map_loader.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_facility_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --quit-after 5
 python3 -m unittest discover -s tools -p 'test_*.py'

@@ -13,12 +13,14 @@ const GRAPH_SAVE_VERSION = 2
 const SETUP_SAVE_VERSION = 3
 const INVENTORY_SAVE_VERSION = 4
 const FACILITY_SAVE_VERSION = 5
+const GODS_SAVE_VERSION = 6
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
 const OriginalInventory = preload("res://game/core/inventory_rules.gd")
 const OriginalInventoryCatalogue = preload("res://game/content/original_inventory.gd")
+const OriginalGods = preload("res://game/content/original_gods.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -155,10 +157,14 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if options.has("original_facilities") and typeof(options.get("original_facilities")) != TYPE_BOOL:
 		return null
+	if options.has("original_gods") and typeof(options.get("original_gods")) != TYPE_BOOL:
+		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
 		original_facilities = true
 	if original_facilities and options.is_empty():
+		return null
+	if bool(options.get("original_gods", false)) and not original_facilities:
 		return null
 	var validation: Dictionary = validate_board_definition(definition, original_facilities)
 	if not bool(validation.get("ok", false)):
@@ -180,7 +186,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -239,6 +245,13 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		original_facilities = bool(options["original_facilities"])
 	if original_facilities:
 		original_inventory = true
+	var original_gods: bool = false
+	if options.has("original_gods"):
+		if typeof(options["original_gods"]) != TYPE_BOOL:
+			return {}
+		original_gods = bool(options["original_gods"])
+	if original_gods and not original_facilities:
+		return {}
 
 	return {
 		"initial_fund": initial_fund,
@@ -248,6 +261,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"character_ids": character_ids,
 		"original_inventory": original_inventory,
 		"original_facilities": original_facilities,
+		"original_gods": original_gods,
 	}
 
 
@@ -263,8 +277,10 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
 	var original_facilities: bool = bool(options.get("original_facilities", false))
-	state["version"] = FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	var original_gods: bool = bool(options.get("original_gods", false))
+	state["version"] = GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
 	state["original_facilities"] = original_facilities
+	state["original_gods"] = original_gods
 	if original_facilities:
 		state["price_index"] = 1
 		state["last_roll_total"] = 0
@@ -298,6 +314,8 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		if not bool(inventory_result.get("ok", false)):
 			state = {}
 			return
+	if original_gods:
+		_initialize_original_gods()
 	_sync_state()
 	_set_action_options(0)
 
@@ -323,15 +341,19 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION]
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
 
 
 func _is_facilities() -> bool:
-	return int(state.get("version", 0)) == FACILITY_SAVE_VERSION
+	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
+
+
+func _is_gods() -> bool:
+	return int(state.get("version", 0)) == GODS_SAVE_VERSION and bool(state.get("original_gods", false))
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -468,12 +490,413 @@ func _build_players(player_count: int, start_position: int = START_POSITION, gra
 			"loan": 0,
 			"loan_due_day": 0,
 			"turns_taken": 0,
+			"god_id": 0,
+			"hospital_days": 0,
 		}
 		if graph_mode:
 			player["previous_position"] = -1
 			player["points"] = 0
 		players.append(player)
 	return players
+
+
+func _initialize_original_gods() -> void:
+	if not _is_gods() or not _is_graph():
+		return
+	state["god_objects"] = []
+	for god_id in OriginalGods.initial_ids():
+		_spawn_god(int(god_id), -1, false)
+
+
+func _god_object_index(god_id: int) -> int:
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return -1
+	for index in range(objects.size()):
+		if typeof(objects[index]) == TYPE_DICTIONARY and int(objects[index].get("id", 0)) == god_id:
+			return index
+	return -1
+
+
+func _god_object(god_id: int) -> Dictionary:
+	var index: int = _god_object_index(god_id)
+	var objects: Array = state.get("god_objects", [])
+	if index < 0 or index >= objects.size() or typeof(objects[index]) != TYPE_DICTIONARY:
+		return {}
+	return objects[index]
+
+
+func _god_reachable_nodes() -> Dictionary:
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY or board.is_empty():
+		return {}
+	var start_value: Variant = state.get("start_position", 0)
+	if not _valid_int(start_value, 0, board.size() - 1):
+		return {}
+	var reachable: Dictionary = {int(start_value): true}
+	var queue: Array = [int(start_value)]
+	while not queue.is_empty():
+		var node: int = int(queue.pop_front())
+		if typeof(board[node]) != TYPE_DICTIONARY:
+			continue
+		var adjacent: Variant = board[node].get("adjacent", [])
+		if typeof(adjacent) != TYPE_ARRAY:
+			continue
+		for neighbor in adjacent:
+			if not _valid_int(neighbor, 0, board.size() - 1):
+				continue
+			var next_node: int = int(neighbor)
+			if not reachable.has(next_node):
+				reachable[next_node] = true
+				queue.append(next_node)
+	return reachable
+
+
+func _god_occupied_nodes(ignore_god_id: int = -1) -> Dictionary:
+	var occupied: Dictionary = {}
+	for player in _players():
+		if typeof(player) != TYPE_DICTIONARY or not bool(player.get("alive", false)):
+			continue
+		var position: Variant = player.get("position", null)
+		if _valid_int(position, 0, state.get("board", []).size() - 1):
+			occupied[int(position)] = true
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) == TYPE_ARRAY:
+		for actor in objects:
+			if typeof(actor) != TYPE_DICTIONARY or int(actor.get("id", 0)) == ignore_god_id:
+				continue
+			var owner: int = int(actor.get("owner", -1))
+			var node: int = int(actor.get("node", -1))
+			if owner >= 0:
+				var owner_player: Dictionary = _player(owner)
+				if not owner_player.is_empty():
+					node = int(owner_player.get("position", node))
+			if _valid_int(node, 0, state.get("board", []).size() - 1):
+				occupied[node] = true
+	return occupied
+
+
+func _god_spawn_candidates(anchor_node: int = -1, require_distance: bool = false, ignore_god_id: int = -1) -> Array:
+	if not _is_gods() or not _is_graph():
+		return []
+	var board: Array = state.get("board", [])
+	var occupied: Dictionary = _god_occupied_nodes(ignore_god_id)
+	var candidates: Array = OriginalGods.spawn_candidates(board, occupied, anchor_node, require_distance)
+	var reachable: Dictionary = _god_reachable_nodes()
+	var result: Array = []
+	for node in candidates:
+		if reachable.is_empty() or reachable.has(int(node)):
+			result.append(int(node))
+	return result
+
+
+func _spawn_god(god_id: int, anchor_node: int = -1, replacement: bool = false) -> Dictionary:
+	if not _is_gods() or not OriginalGods.is_spawnable(god_id):
+		return {}
+	if _god_object_index(god_id) >= 0:
+		return _god_object(god_id)
+	var require_distance: bool = replacement and anchor_node >= 0
+	var candidates: Array = _god_spawn_candidates(anchor_node, require_distance)
+	if candidates.is_empty():
+		_record_event("god_spawn_unavailable", {"god_id": god_id, "anchor": anchor_node, "replacement": replacement})
+		return {}
+	# The original routine chooses a valid source node through the saved RNG.
+	# Keeping selection deterministic by seed also makes save/replay continuation
+	# explicit; no unbounded retry loop is allowed here.
+	var selected_node: int = int(candidates[_rng.randi_range(0, candidates.size() - 1)])
+	var actor: Dictionary = {"id": god_id, "node": selected_node, "owner": -1, "days": 0}
+	var objects: Array = state.get("god_objects", [])
+	objects.append(actor)
+	state["god_objects"] = objects
+	_record_event("god_spawned", {"god_id": god_id, "node": selected_node, "replacement": replacement})
+	return actor
+
+
+func _remove_god(god_id: int) -> Dictionary:
+	var index: int = _god_object_index(god_id)
+	var objects: Array = state.get("god_objects", [])
+	if index < 0 or index >= objects.size():
+		return {}
+	var removed: Dictionary = objects[index].duplicate(true) if typeof(objects[index]) == TYPE_DICTIONARY else {}
+	objects.remove_at(index)
+	state["god_objects"] = objects
+	return removed
+
+
+func _player_god_id(player_id: int) -> int:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return 0
+	var value: Variant = player.get("god_id", 0)
+	return int(value) if OriginalGods.valid_id(value) else 0
+
+
+func _god_investment_blocked(player_id: int) -> bool:
+	return _is_gods() and _player_god_id(player_id) in [7, 8, 15]
+
+
+func _property_buy_price(tile: Dictionary) -> int:
+	if _is_gods() and tile.get("kind", "") == "property":
+		var land_price: int = int(tile.get("land_price", tile.get("cost", 0)))
+		var house_price: int = int(tile.get("house_price", tile.get("upgrade_cost", 0)))
+		return max(0, land_price + int(tile.get("building_level", 0)) * house_price)
+	return int(tile.get("cost", 0))
+
+
+func _god_pair_respawn(god_id: int, anchor_node: int) -> void:
+	var pair_id: int = OriginalGods.pair_for(god_id)
+	if pair_id <= 0 or not OriginalGods.is_spawnable(pair_id):
+		return
+	if _god_object_index(pair_id) >= 0:
+		_record_event("god_respawn_skipped", {"god_id": pair_id, "anchor": anchor_node, "reason": "occupied"})
+		return
+	_spawn_god(pair_id, anchor_node, true)
+
+
+func _detach_god(god_id: int, reason: String = "detached", respawn: bool = true) -> Dictionary:
+	var actor: Dictionary = _god_object(god_id)
+	if actor.is_empty():
+		return {}
+	var owner_id: int = int(actor.get("owner", -1))
+	var anchor_node: int = int(actor.get("node", -1))
+	if owner_id >= 0:
+		var owner: Dictionary = _player(owner_id)
+		if not owner.is_empty():
+			anchor_node = int(owner.get("position", anchor_node))
+			if int(owner.get("god_id", 0)) == god_id:
+				owner["god_id"] = 0
+	_remove_god(god_id)
+	_record_event("god_detached", {"god_id": god_id, "owner": owner_id, "reason": reason})
+	if respawn:
+		_god_pair_respawn(god_id, anchor_node)
+	return actor
+
+
+func _detach_player_god(player_id: int, reason: String = "replaced") -> void:
+	var god_id: int = _player_god_id(player_id)
+	if god_id > 0:
+		_detach_god(god_id, reason, true)
+
+
+func _attach_god(player_id: int, god_id: int) -> bool:
+	if not _is_gods() or not OriginalGods.is_attachable(god_id):
+		return false
+	var player: Dictionary = _player(player_id)
+	var actor: Dictionary = _god_object(god_id)
+	if player.is_empty() or actor.is_empty() or int(actor.get("owner", -1)) >= 0:
+		return false
+	if god_id == 11:
+		return false
+	_detach_player_god(player_id, "replaced")
+	var current_player_god: int = _player_god_id(player_id)
+	if current_player_god != 0:
+		return false
+	var days: int = OriginalGods.days_for(god_id)
+	actor["owner"] = player_id
+	actor["node"] = int(player.get("position", actor.get("node", -1)))
+	actor["days"] = days
+	player["god_id"] = god_id
+	_record_event("god_attached", {"player_id": player_id, "god_id": god_id, "days": days})
+	_apply_god_attachment_effect(player_id, god_id)
+	return true
+
+
+func _sync_attached_gods() -> void:
+	if not _is_gods():
+		return
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return
+	for actor in objects:
+		if typeof(actor) != TYPE_DICTIONARY:
+			continue
+		var owner_id: int = int(actor.get("owner", -1))
+		if owner_id < 0:
+			continue
+		var player: Dictionary = _player(owner_id)
+		if player.is_empty() or not bool(player.get("alive", false)):
+			actor["owner"] = -1
+			actor["days"] = 0
+			continue
+		actor["node"] = int(player.get("position", actor.get("node", -1)))
+
+
+func _encounter_dog(player_id: int, node_id: int) -> void:
+	var dog: Dictionary = _god_object(11)
+	if dog.is_empty() or int(dog.get("owner", -1)) >= 0 or int(dog.get("node", -1)) != node_id:
+		return
+	var vehicle: String = str(_player(player_id).get("vehicle", "walking"))
+	var dog_node: int = int(dog.get("node", node_id))
+	_remove_god(11)
+	_record_event("dog_encounter", {"player_id": player_id, "node": node_id, "vehicle": vehicle, "hospital_days": 3 if vehicle == "walking" else 0})
+	if vehicle == "walking":
+		var player: Dictionary = _player(player_id)
+		player["hospital_days"] = max(int(player.get("hospital_days", 0)), 3)
+		_record_event("hospital_started", {"player_id": player_id, "hospital_days": int(player["hospital_days"])})
+	_god_pair_respawn(11, dog_node)
+
+
+func _process_god_step(player_id: int, node_id: int) -> void:
+	if not _is_gods():
+		return
+	_sync_attached_gods()
+	_encounter_dog(player_id, node_id)
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return
+	for actor in objects:
+		if typeof(actor) != TYPE_DICTIONARY:
+			continue
+		if int(actor.get("owner", -1)) >= 0 or int(actor.get("node", -1)) != node_id:
+			continue
+		var god_id: int = int(actor.get("id", 0))
+		if OriginalGods.is_attachable(god_id) and god_id != 11:
+			_attach_god(player_id, god_id)
+			break
+
+
+func _tick_gods() -> void:
+	if not _is_gods():
+		return
+	_sync_attached_gods()
+	var expiring: Array = []
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return
+	for actor in objects:
+		if typeof(actor) != TYPE_DICTIONARY or int(actor.get("owner", -1)) < 0:
+			continue
+		var days: int = int(actor.get("days", 0)) - 1
+		actor["days"] = max(0, days)
+		if days <= 0:
+			expiring.append(int(actor.get("id", 0)))
+	for god_id in expiring:
+		if _god_object_index(god_id) >= 0:
+			_detach_god(god_id, "expired", true)
+
+
+func _god_random_cash(large: bool) -> int:
+	return _rng.randi_range(1000, 9999) if large else _rng.randi_range(100, 999)
+
+
+func _god_bank_income(player_id: int, amount: int) -> void:
+	if amount <= 0:
+		return
+	if not _bank_can_pay(amount):
+		_record_event("god_cash_unavailable", {"player_id": player_id, "amount": amount, "source": "bank"})
+		return
+	_bank_subtract_cash(amount)
+	var player: Dictionary = _player(player_id)
+	player["cash"] = int(player.get("cash", 0)) + amount
+	_record_event("god_cash_effect", {"player_id": player_id, "amount": amount, "source": "bank"})
+
+
+func _drop_god_cards(player_id: int, amount: int) -> void:
+	var player: Dictionary = _player(player_id)
+	var cards: Array = player.get("cards", [])
+	var dropped: Array = []
+	var requested: int = min(max(0, amount), cards.size())
+	for _index in range(requested):
+		if cards.is_empty():
+			break
+		var card_index: int = _rng.randi_range(0, cards.size() - 1)
+		var card_id: String = str(cards[card_index])
+		if _is_inventory():
+			var result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], cards, card_id)
+			if not bool(result.get("ok", false)):
+				break
+		else:
+			cards.remove_at(card_index)
+		dropped.append(card_id)
+	player["cards"] = cards
+	_record_event("god_card_drop", {"player_id": player_id, "card_ids": dropped, "count": dropped.size()})
+
+
+func _clear_player_inventory(player_id: int) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return
+	var dropped_cards: Array = player.get("cards", []).duplicate()
+	var dropped_tools: Dictionary = player.get("tools", {}).duplicate(true)
+	if _is_inventory():
+		for card_id in dropped_cards.duplicate():
+			OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
+		for tool_id in dropped_tools.keys():
+			var quantity: int = int(player["tools"].get(tool_id, 0))
+			if quantity > 0:
+				OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, quantity)
+		# Equipped vehicles are represented outside tools; return their finite
+		# source unit before resetting the player to walking.
+		var active_tool: String = _inventory_vehicle_tool_id(str(player.get("vehicle", "walking")))
+		if not active_tool.is_empty():
+			var supply_tools: Dictionary = state["inventory_supply"].get("tools", {})
+			if supply_tools.has(active_tool):
+				supply_tools[active_tool] = int(supply_tools[active_tool]) + 1
+			state["inventory_supply"]["tools"] = supply_tools
+	player["cards"] = []
+	player["tools"] = {}
+	player["vehicle"] = "walking"
+	player["dice_count"] = 1
+	player["vehicles"] = {"walking": true, "motorcycle": false, "car": false}
+	_record_event("god_inventory_cleared", {"player_id": player_id, "card_count": dropped_cards.size(), "tool_ids": dropped_tools.keys()})
+
+
+func _apply_god_attachment_effect(player_id: int, god_id: int) -> void:
+	var role: String = OriginalGods.role_for(god_id)
+	match role:
+		"wealth_small":
+			for other in _players():
+				var other_id: int = int(other.get("id", -1))
+				if other_id < 0 or other_id == player_id or not bool(other.get("alive", false)):
+					continue
+				_charge_amount(other_id, _god_random_cash(false), player_id, "god_wealth")
+		"wealth_large":
+			_god_bank_income(player_id, _god_random_cash(true))
+		"fortune_small":
+			_grant_random_card(player_id, "god_fortune")
+		"fortune_large":
+			_grant_random_card(player_id, "god_fortune")
+			_grant_random_card(player_id, "god_fortune")
+		"poor_small":
+			for other in _players():
+				var other_id: int = int(other.get("id", -1))
+				if other_id < 0 or other_id == player_id or not bool(other.get("alive", false)):
+					continue
+				_charge_amount(player_id, _god_random_cash(false), other_id, "god_poor")
+				if not bool(_player(player_id).get("alive", false)):
+					break
+		"poor_large":
+			_charge_amount(player_id, _god_random_cash(true), -1, "god_poor")
+		"unlucky_small":
+			_drop_god_cards(player_id, 1)
+		"unlucky_large":
+			_drop_god_cards(player_id, int(floor(float(_player(player_id).get("cards", []).size()) / 2.0)))
+		"death":
+			_clear_player_inventory(player_id)
+
+
+func _apply_fortune_construction_bonus(player_id: int, tile: Dictionary) -> void:
+	if not _is_gods() or not [3, 4].has(_player_god_id(player_id)) or tile.is_empty():
+		return
+	var kind: String = str(tile.get("kind", ""))
+	if kind == "property":
+		var level: int = int(tile.get("building_level", 0))
+		if level >= MAX_PROPERTY_LEVEL:
+			return
+		tile["building_level"] = level + 1
+		_update_tile_rent(tile)
+		_recalculate_property_values()
+		_record_event("god_fortune_construction", {"player_id": player_id, "god_id": _player_god_id(player_id), "tile_id": int(tile.get("index", -1)), "from_level": level, "to_level": level + 1})
+		return
+	if kind == "facility":
+		var facility: Dictionary = _facility_record(int(tile.get("index", -1)))
+		var facility_type: int = int(facility.get("facility_type", -1))
+		var level: int = int(facility.get("building_level", 0))
+		if not _facility_type_valid(facility_type) or facility_type == FACILITY_LAB_TYPE or level >= _facility_type_cap(facility_type):
+			return
+		_update_facility_records(int(facility.get("source_object_id", -1)), {"building_level": level + 1})
+		_recalculate_property_values()
+		_record_event("god_fortune_construction", {"player_id": player_id, "god_id": _player_god_id(player_id), "tile_id": int(tile.get("index", -1)), "from_level": level, "to_level": level + 1})
 
 
 func _build_board() -> Array:
@@ -656,18 +1079,18 @@ func _set_action_options(player_id: int) -> void:
 		options.push_front("buy_item")
 	if tile.get("kind", "") == "property" and not bool(state.get("property_action_used", false)):
 		var owner: int = int(tile.get("owner", -1))
-		if owner == -1 and int(player.get("cash", 0)) >= int(tile.get("cost", 0)):
+		if owner == -1 and _player_god_id(player_id) != 12 and not _god_investment_blocked(player_id) and int(player.get("cash", 0)) >= _property_buy_price(tile):
 			options.push_front("buy")
-		elif owner == player_id:
+		elif owner == player_id and not _god_investment_blocked(player_id):
 			var level: int = int(tile.get("building_level", 0))
 			if level < MAX_PROPERTY_LEVEL and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
 	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and not bool(state.get("property_action_used", false)):
 		var facility: Dictionary = _facility_record(int(player.get("position", -1)))
 		var facility_owner: int = int(facility.get("owner", -1))
-		if facility_owner == -1 and int(player.get("cash", 0)) >= _facility_land_price(facility):
+		if facility_owner == -1 and _player_god_id(player_id) != 12 and not _god_investment_blocked(player_id) and int(player.get("cash", 0)) >= _facility_land_price(facility):
 			options.push_front("buy")
-		elif facility_owner == player_id:
+		elif facility_owner == player_id and not _god_investment_blocked(player_id):
 			var facility_level: int = int(facility.get("building_level", 0))
 			var facility_type: int = int(facility.get("facility_type", -1))
 			if facility_level == 0 and _facility_type_valid(facility_type) and int(player.get("cash", 0)) >= _facility_land_price(facility):
@@ -1195,6 +1618,21 @@ func roll(dice_count: int = -1) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法擲骰")
+	var hospital_days: int = int(player.get("hospital_days", 0))
+	if hospital_days > 0:
+		player["hospital_days"] = hospital_days - 1
+		state["last_roll"] = []
+		state["last_total"] = 0
+		state["extra_roll"] = false
+		state["doubles_count"] = 0
+		if _is_facilities():
+			state["last_roll_total"] = 0
+		state["phase"] = "await_action"
+		_set_action_options(player_id)
+		_record_event("hospital_skipped", {"player_id": player_id, "days": int(player["hospital_days"])})
+		if int(player["hospital_days"]) == 0:
+			_record_event("hospital_recovered", {"player_id": player_id})
+		return _result(true, "住院中，本回合休養", {"skipped": true, "hospital_days": int(player["hospital_days"])})
 	var pending_remote: Dictionary = {}
 	if _is_inventory() and typeof(state.get("pending_remote_dice", {})) == TYPE_DICTIONARY:
 		pending_remote = state.get("pending_remote_dice", {})
@@ -1369,6 +1807,10 @@ func _graph_continue_movement(player_id: int) -> void:
 			"previous_node": old_node,
 		}
 		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
+		_process_god_step(player_id, next_node)
+		if int(player.get("hospital_days", 0)) > 0:
+			state["remaining_steps"] = 0
+			break
 		if _graph_consume_roadblock(player_id, next_node):
 			state["remaining_steps"] = 0
 			break
@@ -1414,6 +1856,9 @@ func choose_route(route: int) -> Dictionary:
 		"previous_node": current_node,
 	}
 	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
+	_process_god_step(player_id, route)
+	if int(player.get("hospital_days", 0)) > 0:
+		state["remaining_steps"] = 0
 	var hit_roadblock: bool = _graph_consume_roadblock(player_id, route)
 	if hit_roadblock:
 		state["remaining_steps"] = 0
@@ -1423,6 +1868,93 @@ func choose_route(route: int) -> Dictionary:
 	if int(state.get("remaining_steps", 0)) == 0 and state.get("phase", "") != "game_over":
 		_resolve_landing(player_id)
 	return _result(true, "已選擇路線", {"route": route})
+
+
+func _remove_property_reference(player_id: int, property_id: int) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return
+	var properties: Array = player.get("properties", []).duplicate(true)
+	while properties.has(property_id):
+		properties.erase(property_id)
+	player["properties"] = properties
+
+
+func _add_property_reference(player_id: int, property_id: int) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return
+	var properties: Array = player.get("properties", []).duplicate(true)
+	if not properties.has(property_id):
+		properties.append(property_id)
+	player["properties"] = properties
+
+
+func _occupy_with_land_god(player_id: int, tile: Dictionary) -> bool:
+	var old_owner: int = int(tile.get("owner", -1))
+	if old_owner < 0 or old_owner == player_id:
+		return false
+	var property_id: int = int(tile.get("index", -1))
+	if tile.get("kind", "") == "facility":
+		property_id = _facility_canonical_index(property_id)
+		_update_facility_records(int(tile.get("source_object_id", -1)), {"owner": player_id})
+	else:
+		tile["owner"] = player_id
+	_remove_property_reference(old_owner, property_id)
+	_add_property_reference(player_id, property_id)
+	state["property_action_used"] = true
+	_recalculate_property_values()
+	return true
+
+
+func _apply_god_property_effect(player_id: int, tile: Dictionary, final_landing: bool) -> void:
+	if not _is_gods() or tile.is_empty():
+		return
+	var god_id: int = _player_god_id(player_id)
+	if god_id <= 0:
+		return
+	var kind: String = str(tile.get("kind", ""))
+	if kind not in ["property", "facility"]:
+		return
+	if god_id == 12 and final_landing:
+		var previous_owner: int = int(tile.get("owner", -1))
+		if _occupy_with_land_god(player_id, tile):
+			_record_event("god_property_effect", {"player_id": player_id, "god_id": god_id, "tile_id": int(tile.get("index", -1)), "effect": "occupy", "previous_owner": previous_owner})
+		return
+	if god_id not in [9, 10]:
+		return
+	var owner_id: int = int(tile.get("owner", -1))
+	var level: int = int(tile.get("building_level", 0))
+	var next_level: int = level
+	var effect: String = ""
+	if god_id == 9:
+		var angel_cap: int = MAX_PROPERTY_LEVEL
+		if kind == "facility":
+			var angel_type: int = int(tile.get("facility_type", -1))
+			# Research-facility production remains outside this ticket; do not
+			# create a level that v5 validation intentionally rejects.
+			if angel_type == FACILITY_LAB_TYPE:
+				return
+			angel_cap = _facility_type_cap(angel_type)
+		if level >= angel_cap:
+			return
+		next_level = level + 1
+		effect = "angel_raise"
+	else:
+		if level <= 0:
+			return
+		next_level = level - 1
+		effect = "demon_lower"
+	if kind == "facility":
+		var facility_updates: Dictionary = {"building_level": next_level}
+		if next_level == 0:
+			facility_updates["facility_type"] = 0
+		_update_facility_records(int(tile.get("source_object_id", -1)), facility_updates)
+	else:
+		tile["building_level"] = next_level
+		_update_tile_rent(tile)
+	_recalculate_property_values()
+	_record_event("god_property_effect", {"player_id": player_id, "god_id": god_id, "tile_id": int(tile.get("index", -1)), "effect": effect, "from_level": level, "to_level": next_level})
 
 
 func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool) -> void:
@@ -1510,11 +2042,15 @@ func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_obje
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
+	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, amount, "facility")
+	if _is_gods() and adjusted_amount <= 0:
+		_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": "facility", "amount": amount})
+		return
 	if int(debtor.get("rent_shield", 0)) > 0:
 		debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
 		_record_event("facility_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "source_object_id": source_object_id, "amount": amount})
 		return
-	_charge_amount(debtor_id, amount, creditor_id, "facility")
+	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false)
 
 
 func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
@@ -1656,19 +2192,52 @@ func _calculate_rent(tile: Dictionary, owner_id: int) -> int:
 
 func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 	var debtor: Dictionary = _player(debtor_id)
+	if amount <= 0:
+		if amount == 0 and not _is_gods() and int(debtor.get("rent_shield", 0)) > 0:
+			debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
+			_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
+		return
+	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, amount, "rent")
+	if _is_gods() and adjusted_amount <= 0:
+		_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": "rent", "amount": amount})
+		return
 	if int(debtor.get("rent_shield", 0)) > 0:
 		debtor["rent_shield"] = int(debtor["rent_shield"]) - 1
 		_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
 		return
-	_charge_amount(debtor_id, amount, creditor_id, "rent")
+	_charge_amount(debtor_id, adjusted_amount, creditor_id, "rent", false)
 
 
-func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String) -> void:
+func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> int:
+	if amount <= 0 or not _is_gods() or not ["rent", "facility"].has(reason):
+		return amount
+	var adjusted_amount: int = amount
+	match _player_god_id(debtor_id):
+		1:
+			adjusted_amount = int(floor(float(amount) / 2.0))
+		2:
+			adjusted_amount = 0
+		5:
+			adjusted_amount += int(floor(float(amount) / 2.0))
+		6:
+			adjusted_amount *= 2
+	if adjusted_amount != amount:
+		_record_event("god_charge_modifier", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "from_amount": amount, "to_amount": adjusted_amount})
+	return adjusted_amount
+
+
+func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true) -> void:
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
+	var original_amount: int = amount
+	if apply_god_modifier:
+		amount = _god_adjust_charge_amount(debtor_id, amount, reason)
+		if amount <= 0:
+			_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "amount": original_amount})
+			return
 	# The manual's bankruptcy trigger is based on cash plus deposit. Deposits
 	# are withdrawn to meet a charge; properties and shares go to auction only
 	# after the player is declared bankrupt, never as a hidden rescue sale.
@@ -1827,7 +2396,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return _error("目前位置不能執行此行動")
 	match normalized:
 		"buy":
-			return _buy_property(player_id)
+			return _buy_property(player_id, params)
 		"build_facility":
 			return _build_facility(player_id, params)
 		"upgrade":
@@ -1924,6 +2493,8 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 		return _error("目前移動狀態無法使用遙控骰子")
 	if tool_id in ["路障", "機器工人"] and _inventory_movement_blocked(player):
 		return _error("目前移動狀態無法使用道具")
+	if tool_id == "機器工人" and _god_investment_blocked(player_id):
+		return _error("目前神明效果使建設失敗")
 	if (tool_id == "機車" and str(player.get("vehicle", "walking")) == "motorcycle") or (tool_id == "汽車" and str(player.get("vehicle", "walking")) == "car"):
 		return _error("這項交通工具已經啟用")
 	var pending_remote: Variant = state.get("pending_remote_dice", {})
@@ -1950,12 +2521,14 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 				var worker_source_id: int = int(worker_facility.get("source_object_id", -1))
 				var worker_level: int = int(worker_facility.get("building_level", 0)) + 1
 				_update_facility_records(worker_source_id, {"building_level": worker_level})
+				_apply_fortune_construction_bonus(player_id, worker_tile)
 				state["property_action_used"] = true
 				_recalculate_property_values()
 				_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": _facility_canonical_index(target_id), "source_object_id": worker_source_id, "level": worker_level, "effect": "build_facility"})
 			else:
 				worker_tile["building_level"] = int(worker_tile.get("building_level", 0)) + 1
 				_update_tile_rent(worker_tile)
+				_apply_fortune_construction_bonus(player_id, worker_tile)
 				state["property_action_used"] = true
 				_recalculate_property_values()
 				_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": target_id, "level": int(worker_tile["building_level"]), "effect": "build"})
@@ -1986,9 +2559,13 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	return _result(true, "遙控骰子已排程", {"tool_id": tool_id, "value": int(remote_value)})
 
 
-func _buy_property(player_id: int) -> Dictionary:
+func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
+	if _god_investment_blocked(player_id):
+		return _error("目前神明效果使買地失敗")
+	if _is_gods() and _player_god_id(player_id) == 12 and int(tile.get("owner", -1)) == -1:
+		return _error("土地公不能購買空地")
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
 	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
@@ -1998,10 +2575,26 @@ func _buy_property(player_id: int) -> Dictionary:
 		var facility_price: int = _facility_land_price(facility)
 		if int(player.get("cash", 0)) < facility_price:
 			return _error("現金不足")
+		var facility_level: int = int(facility.get("building_level", 0))
+		var fortune_facility_type: int = 0
+		var fortune_facility_buy: bool = _is_gods() and _player_god_id(player_id) in [3, 4]
+		if fortune_facility_buy and facility_level == 0:
+			var requested_type: Variant = params.get("facility_type", null)
+			if bool(player.get("is_ai", false)) and not params.has("facility_type"):
+				fortune_facility_type = _rng.randi_range(1, FACILITY_LAB_TYPE - 1)
+			elif not _valid_int(requested_type, 0, FACILITY_LAB_TYPE - 1):
+				return _error("請選擇有效的設施類型")
+			else:
+				fortune_facility_type = int(requested_type)
 		player["cash"] = int(player.get("cash", 0)) - facility_price
 		_bank_add_cash(facility_price)
 		var source_object_id: int = int(facility.get("source_object_id", -1))
-		_update_facility_records(source_object_id, {"owner": player_id, "building_level": 0, "facility_state": 0})
+		var facility_updates: Dictionary = {"owner": player_id}
+		if fortune_facility_buy and facility_level == 0:
+			facility_updates["facility_type"] = fortune_facility_type
+		_update_facility_records(source_object_id, facility_updates)
+		if fortune_facility_buy:
+			_apply_fortune_construction_bonus(player_id, _facility_record(int(player.get("position", -1))))
 		var properties: Array = player.get("properties", []).duplicate(true)
 		var canonical_id: int = _facility_canonical_index(int(player.get("position", -1)))
 		if not properties.has(canonical_id):
@@ -2009,12 +2602,17 @@ func _buy_property(player_id: int) -> Dictionary:
 		player["properties"] = properties
 		state["property_action_used"] = true
 		_recalculate_property_values()
-		_record_event("facility_bought", {"player_id": player_id, "facility_id": canonical_id, "source_object_id": source_object_id, "price": facility_price})
+		var facility_event: Dictionary = {"player_id": player_id, "facility_id": canonical_id, "source_object_id": source_object_id, "price": facility_price}
+		if fortune_facility_buy:
+			var purchased_facility: Dictionary = _facility_record(canonical_id)
+			facility_event["facility_type"] = int(purchased_facility.get("facility_type", -1))
+			facility_event["building_level"] = int(purchased_facility.get("building_level", 0))
+		_record_event("facility_bought", facility_event)
 		_set_action_options(player_id)
 		return _result(true, "已購買設施用地", {"tile_id": canonical_id, "source_object_id": source_object_id, "price": facility_price})
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != -1:
 		return _error("目前位置沒有可購買的土地")
-	var price: int = int(tile.get("cost", 0))
+	var price: int = _property_buy_price(tile)
 	if int(player.get("cash", 0)) < price:
 		return _error("現金不足")
 	player["cash"] = int(player.get("cash", 0)) - price
@@ -2023,6 +2621,7 @@ func _buy_property(player_id: int) -> Dictionary:
 	var properties: Array = player.get("properties", [])
 	properties.append(int(tile["index"]))
 	player["properties"] = properties
+	_apply_fortune_construction_bonus(player_id, tile)
 	state["property_action_used"] = true
 	_recalculate_property_values()
 	_record_event("property_bought", {"player_id": player_id, "property_id": int(tile["index"]), "price": price})
@@ -2034,6 +2633,8 @@ func _build_facility(player_id: int, params: Dictionary = {}) -> Dictionary:
 	if not _is_facilities() or not _is_graph():
 		return _error("設施建造只適用於原版設施地圖")
 	var player: Dictionary = _player(player_id)
+	if _god_investment_blocked(player_id):
+		return _error("目前神明效果使建設失敗")
 	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
@@ -2055,6 +2656,7 @@ func _build_facility(player_id: int, params: Dictionary = {}) -> Dictionary:
 	_bank_add_cash(price)
 	var source_object_id: int = int(facility.get("source_object_id", -1))
 	_update_facility_records(source_object_id, {"facility_type": facility_type, "building_level": 1, "facility_state": 0})
+	_apply_fortune_construction_bonus(player_id, tile)
 	state["property_action_used"] = true
 	_recalculate_property_values()
 	_record_event("facility_built", {"player_id": player_id, "facility_id": _facility_canonical_index(int(player.get("position", -1))), "source_object_id": source_object_id, "facility_type": facility_type, "building_level": 1, "price": price})
@@ -2065,6 +2667,8 @@ func _build_facility(player_id: int, params: Dictionary = {}) -> Dictionary:
 func _upgrade_property(player_id: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
+	if _god_investment_blocked(player_id):
+		return _error("目前神明效果使加蓋失敗")
 	if bool(state.get("property_action_used", false)):
 		return _error("本次造訪已完成土地行動")
 	if _is_facilities() and _is_graph() and tile.get("kind", "") == "facility":
@@ -2104,6 +2708,7 @@ func _upgrade_property(player_id: int) -> Dictionary:
 	_bank_add_cash(price)
 	tile["building_level"] = level + 1
 	_update_tile_rent(tile)
+	_apply_fortune_construction_bonus(player_id, tile)
 	state["property_action_used"] = true
 	_recalculate_property_values()
 	_record_event("property_upgraded", {"player_id": player_id, "property_id": int(tile["index"]), "level": int(tile["building_level"]), "price": price})
@@ -2571,6 +3176,12 @@ func end_turn() -> Dictionary:
 		_repay_due_loan(player_id)
 		if not _is_setup():
 			_tick_market()
+		# Original god property effects run at the common landed-node tail, after
+		# rent/service and the player's explicit property action. A skipped or
+		# dog-stopped turn has no successful landing settlement to mutate.
+		var last_roll_value: Variant = state.get("last_roll", [])
+		if _is_gods() and typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and int(player.get("hospital_days", 0)) == 0:
+			_apply_god_property_effect(player_id, _tile_at(int(player.get("position", -1))), true)
 	state["bank_access"] = false
 	state["bank_landing"] = false
 	state["doubles_count"] = 0
@@ -2604,6 +3215,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 				return
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
+		_tick_gods()
 		# Facility temporary states decay once per complete player cycle. This is
 		# deliberately outside the setup/non-setup branches so a wrapped round
 		# cannot decrement the same source record twice.
@@ -3476,6 +4088,8 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 					errors.append("non-property graph tile state %d" % index)
 		var type_value: Variant = tile.get("type_and_idx", null)
 		var event_value: Variant = tile.get("event_code", null)
+		if tile.has("source_status_bits") and (not _valid_int(tile.get("source_status_bits", null), 0, 0xffffffff) or (_valid_int(event_value, 0, 255) and (int(tile.get("source_status_bits")) & 0xff) != int(event_value))):
+			errors.append("invalid graph source status bits %d" % index)
 		if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 			errors.append("invalid graph source tile status %d" % index)
 		else:
@@ -3609,7 +4223,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var facility_save: bool = _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
+	var gods_save: bool = _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
+	var facility_save: bool = gods_save or _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
 	var inventory_save: bool = _valid_int(version_marker, INVENTORY_SAVE_VERSION, INVENTORY_SAVE_VERSION) or facility_save
 	var setup_save: bool = _valid_int(version_marker, SETUP_SAVE_VERSION, SETUP_SAVE_VERSION) or inventory_save
 	var graph_save: bool = facility_save or (typeof(board_mode_marker) == TYPE_STRING and board_mode_marker == GRAPH_BOARD_MODE) or (_valid_int(version_marker) and int(version_marker) == GRAPH_SAVE_VERSION)
@@ -3631,11 +4246,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		required_top.append_array(["inventory_supply", "pending_remote_dice", "roadblocks"])
 	if facility_save:
 		required_top.append_array(["original_facilities", "price_index", "last_roll_total"])
+	if gods_save:
+		required_top.append_array(["original_gods", "god_objects"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if facility_save:
@@ -3647,6 +4264,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("invalid facility last roll total")
 	elif data.has("original_facilities") and typeof(data.get("original_facilities")) == TYPE_BOOL and bool(data.get("original_facilities")):
 		errors.append("facility marker requires v5 save")
+	if gods_save:
+		if typeof(data.get("original_gods", null)) != TYPE_BOOL or not bool(data.get("original_gods", false)):
+			errors.append("invalid original gods marker")
+		if not bool(data.get("original_facilities", false)):
+			errors.append("gods marker requires facilities")
+	elif data.has("original_gods") and typeof(data.get("original_gods")) == TYPE_BOOL and bool(data.get("original_gods")):
+		errors.append("gods marker requires v6 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)
@@ -3988,7 +4612,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
-			if graph_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
+			if graph_save and not gods_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
 				errors.append("unowned graph property has improvements %d" % index)
 			if owner_valid and tile.get("kind", "") not in ["property", "facility"] and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
@@ -4078,6 +4702,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("graph source node mismatch %d" % index)
 				var type_value: Variant = tile.get("type_and_idx", null)
 				var event_value: Variant = tile.get("event_code", null)
+				if tile.has("source_status_bits") and (not _valid_int(tile.get("source_status_bits", null), 0, 0xffffffff) or (_valid_int(event_value, 0, 255) and (int(tile.get("source_status_bits")) & 0xff) != int(event_value))):
+					errors.append("invalid graph source status bits %d" % index)
 				if not _valid_int(type_value, 0, 65535) or not _valid_int(event_value, 0, 255):
 					errors.append("invalid graph source tile status %d" % index)
 				else:
@@ -4221,6 +4847,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				required_player.append("points")
 			if inventory_save:
 				required_player.append("tools")
+			if gods_save:
+				required_player.append_array(["god_id", "hospital_days"])
 			if setup_save:
 				required_player.append_array(["character_id", "init_cash_ratio"])
 			for required_key in required_player:
@@ -4251,6 +4879,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
 				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
 					errors.append("player %d %s invalid" % [index, counter_key])
+			if gods_save:
+				var player_god_value: Variant = player.get("god_id", null)
+				if not _valid_int(player_god_value, 0, 15):
+					errors.append("player %d god_id invalid" % index)
+				elif int(player_god_value) != 0 and not OriginalGods.valid_id(player_god_value):
+					errors.append("player %d god_id unknown" % index)
+				if not _valid_int(player.get("hospital_days", null), 0, 3):
+					errors.append("player %d hospital_days invalid" % index)
 			if graph_save or inventory_save:
 				if not _valid_int(player.get("previous_position", null), -1, position_limit):
 					if graph_save:
@@ -4351,6 +4987,90 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d vehicle ownership invalid" % index)
 				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
+
+	if gods_save:
+		var god_objects_value: Variant = data.get("god_objects", null)
+		var god_owner_by_id: Dictionary = {}
+		if typeof(god_objects_value) != TYPE_ARRAY or god_objects_value.size() > 15:
+			errors.append("invalid god_objects")
+		else:
+			var seen_god_ids: Dictionary = {}
+			var seen_unbound_god_nodes: Dictionary = {}
+			var god_board_limit: int = board.size() - 1 if typeof(board) == TYPE_ARRAY else -1
+			for god_object_index in range(god_objects_value.size()):
+				var god_object_value: Variant = god_objects_value[god_object_index]
+				if typeof(god_object_value) != TYPE_DICTIONARY:
+					errors.append("invalid god object %d" % god_object_index)
+					continue
+				var god_object: Dictionary = god_object_value
+				for god_key in ["id", "node", "owner", "days"]:
+					if not god_object.has(god_key):
+						errors.append("god object %d missing %s" % [god_object_index, god_key])
+				var god_id_value: Variant = god_object.get("id", null)
+				var god_id_valid: bool = _valid_int(god_id_value, 1, 15) and OriginalGods.valid_id(god_id_value)
+				if not god_id_valid:
+					errors.append("god object %d id invalid" % god_object_index)
+					continue
+				var god_id: int = int(god_id_value)
+				if god_id in [13, 14]:
+					errors.append("god object %d unsupported" % god_id)
+				if seen_god_ids.has(god_id):
+					errors.append("duplicate god object %d" % god_id)
+				seen_god_ids[god_id] = true
+				var god_node_value: Variant = god_object.get("node", null)
+				if not _valid_int(god_node_value, 0, god_board_limit):
+					errors.append("god object %d node invalid" % god_id)
+				var god_owner_value: Variant = god_object.get("owner", null)
+				var god_owner_valid: bool = _valid_int(god_owner_value, -1, max(-1, player_count - 1))
+				if not god_owner_valid:
+					errors.append("god object %d owner invalid" % god_id)
+				var god_days_value: Variant = god_object.get("days", null)
+				if not _valid_int(god_days_value, 0, 13):
+					errors.append("god object %d days invalid" % god_id)
+				var god_owner: int = int(god_owner_value) if god_owner_valid else -1
+				var god_days: int = int(god_days_value) if _valid_int(god_days_value, 0, 13) else -1
+				if god_owner >= 0:
+					god_owner_by_id[god_id] = god_owner
+					if god_id == 11 or god_id in [13, 14]:
+						errors.append("god object %d cannot attach" % god_id)
+					if god_days <= 0:
+						errors.append("attached god %d has no remaining days" % god_id)
+					if god_days > OriginalGods.days_for(god_id):
+						errors.append("attached god %d exceeds its duration" % god_id)
+					if typeof(players) == TYPE_ARRAY and god_owner < players.size() and typeof(players[god_owner]) == TYPE_DICTIONARY:
+						var god_owner_player: Dictionary = players[god_owner]
+						if not bool(god_owner_player.get("alive", false)) or int(god_owner_player.get("god_id", 0)) != god_id:
+							errors.append("god object %d owner mismatch" % god_id)
+						if _valid_int(god_node_value, 0, god_board_limit) and _valid_int(god_owner_player.get("position", null), 0, god_board_limit) and int(god_node_value) != int(god_owner_player.get("position")):
+							errors.append("god object %d node does not follow owner" % god_id)
+				else:
+					if god_days != 0:
+						errors.append("unattached god %d has remaining days" % god_id)
+					if _valid_int(god_node_value, 0, god_board_limit):
+						if seen_unbound_god_nodes.has(int(god_node_value)):
+							errors.append("duplicate unattached god node %d" % int(god_node_value))
+						seen_unbound_god_nodes[int(god_node_value)] = true
+					if typeof(players) == TYPE_ARRAY and _valid_int(god_node_value, 0, god_board_limit):
+						for god_player in players:
+							if typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
+								errors.append("unattached god %d is on player" % god_id)
+			if typeof(players) == TYPE_ARRAY:
+				var god_claimed_by_player: Dictionary = {}
+				for god_player_index in range(players.size()):
+					if typeof(players[god_player_index]) != TYPE_DICTIONARY:
+						continue
+					var god_player: Dictionary = players[god_player_index]
+					var player_god_value: Variant = god_player.get("god_id", 0)
+					if _valid_int(player_god_value, 1, 15) and int(player_god_value) != 0:
+						var player_god_id: int = int(player_god_value)
+						if god_claimed_by_player.has(player_god_id):
+							errors.append("god %d claimed by multiple players" % player_god_id)
+						else:
+							god_claimed_by_player[player_god_id] = god_player_index
+						if not god_owner_by_id.has(player_god_id):
+							errors.append("player %d god object missing" % god_player_index)
+						elif int(god_owner_by_id[player_god_id]) != god_player_index:
+							errors.append("player %d god object owner mismatch" % god_player_index)
 
 	if setup_save and typeof(players) == TYPE_ARRAY and typeof(bank) == TYPE_DICTIONARY and _valid_int(bank.get("deposits", null), 0, 1000000000000):
 		var setup_deposits: int = 0

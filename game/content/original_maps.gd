@@ -242,11 +242,14 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 			return _failure("原版地圖格位類別無效。")
 		var object_type := int(node.type_and_idx)
 		var event_code := int(node.event_code)
+		var status_bits: Variant = node.get("status_bits", event_code)
+		if not _integer(status_bits, 0, 4294967295) or (int(status_bits) & 0xff) != event_code:
+			return _failure("Invalid source node status bits.")
 		var classification: Dictionary = classify_source_node(object_type, event_code, original_facilities)
 		if original_facilities and object_type >= 4000 and object_type < 6000 and classification.kind != "facility":
 			return _failure("設施來源參照無效。")
 		var tile := {"index": index, "source_node_id": index + 1, "x": int(node.x), "y": int(node.y), "adjacent": adjacent,
-			"type_and_idx": object_type, "visual_index": node.get("visual_index", 0), "event_code": event_code, "source_object_id": 0,
+			"type_and_idx": object_type, "visual_index": node.get("visual_index", 0), "event_code": event_code, "source_status_bits": int(status_bits), "source_object_id": 0,
 			"kind": "rest", "name": EVENT_NAMES.get(event_code, "未知事件 %d" % event_code), "owner": -1, "building_level": 0,
 			"cost": 0, "upgrade_cost": 0, "base_rent": 0, "rent": 0, "group": "", "tax_amount": 0}
 		if classification.kind == "property":

@@ -6,6 +6,7 @@ extends Control
 ## runtime so the UI remains parseable while the core is developed in its own
 ## lane.  Once present, GameState is the authority for every displayed value.
 
+const OriginalGods = preload("res://game/content/original_gods.gd")
 const SAVE_PATH := "user://richman4_save.json"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
@@ -97,6 +98,7 @@ var new_game_confirm_button: Button
 var cards_popup: PopupPanel
 var facility_popup: PopupPanel
 var facility_popup_list: VBoxContainer
+var facility_popup_action := "build_facility"
 var inventory_balance_label: Label
 var shop_button: Button
 var shop_popup: PopupPanel
@@ -729,6 +731,7 @@ func _default_setup_options(player_count: int) -> Dictionary:
 	return {
 		"original_inventory": true,
 		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
+		"original_gods": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -805,6 +808,7 @@ func _setup_options_from_state() -> Dictionary:
 	return {
 		"original_inventory": int(state.get("version", 0)) >= 4,
 		"original_facilities": int(state.get("version", 0)) >= 5,
+		"original_gods": int(state.get("version", 0)) >= 6,
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -876,6 +880,7 @@ func _collect_setup_options() -> Dictionary:
 	return {"ok": true, "options": {
 		"original_inventory": true,
 		"original_facilities": bool(_selected_map_definition.get("original_facilities", false)),
+		"original_gods": bool(_selected_map_definition.get("original_facilities", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1393,12 +1398,17 @@ func _load_game() -> void:
 func _on_roll_pressed() -> void:
 	if roll_button.disabled:
 		return
+	var resting := _has_original_gods() and int(_current_player().get("hospital_days", 0)) > 0
 	var result := _invoke_game("roll")
-	_append_local_log("你擲出 %s。" % _roll_text(result))
+	_append_local_log(_result_text(result, "休養中。") if resting else "你擲出 %s。" % _roll_text(result))
 	_handle_result(result)
 
 func _on_buy_pressed() -> void:
 	if buy_button.disabled:
+		return
+	var tile := _current_tile()
+	if _has_original_gods() and int(_current_player().get("god_id", 0)) in [3, 4] and tile.get("kind", "") == "facility" and int(tile.get("building_level", 0)) == 0:
+		_open_facility_builder("buy")
 		return
 	var result := _invoke_game("choose_action", ["buy", {}])
 	_append_local_log("購買地產：%s" % _result_text(result, "已送出購買指令。"))
@@ -1417,14 +1427,16 @@ func _on_upgrade_pressed() -> void:
 func _facility_name(type_id: int) -> String:
 	return ["公園", "旅館", "購物中心", "加油站", "研究所"][clampi(type_id, 0, 4)]
 
-func _open_facility_builder() -> void:
+func _open_facility_builder(action: String = "build_facility") -> void:
+	facility_popup_action = action
 	for child in facility_popup_list.get_children():
 		child.free()
 	var tile := _current_tile()
 	var tile_index := int(tile.get("index", -1))
 	var player_id := int(state.get("current_player", -1))
 	var price := int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
-	facility_popup_list.add_child(_make_label("建造費 %s · 選擇後立即建成第 1 級" % _format_money(price), 13, TEXT_GOLD))
+	var price_text := "購地 %s · 福神免費建成第 1 級" if action == "buy" else "建造費 %s · 選擇後立即建成第 1 級"
+	facility_popup_list.add_child(_make_label(price_text % _format_money(price), 13, TEXT_GOLD))
 	var descriptions := ["不收設施費，最高 1 級", "依輪盤收費，最高 5 級", "依輪盤收費，最高 5 級", "向搭乘載具的訪客收費，最高 1 級", "道具生產尚未開放"]
 	for type_id in range(5):
 		var choice := type_id
@@ -1432,13 +1444,13 @@ func _open_facility_builder() -> void:
 			if int(_current_tile().get("index", -1)) != tile_index or int(state.get("current_player", -1)) != player_id:
 				facility_popup.hide()
 				return
-			var result := _invoke_game("choose_action", ["build_facility", {"facility_type": choice}])
+			var result := _invoke_game("choose_action", [action, {"facility_type": choice}])
 			_append_local_log("建造%s：%s" % [_facility_name(choice), _result_text(result, "已送出建造指令。")])
 			_handle_result(result)
 			facility_popup.hide()
 		)
 		button.name = "BuildFacility_%d" % choice
-		button.disabled = choice == 4 or price > int(_current_player().get("cash", 0)) or not _is_human_turn() or not _has_action_option(_as_array(state.get("action_options", [])), "build_facility")
+		button.disabled = choice == 4 or price > int(_current_player().get("cash", 0)) or not _is_human_turn() or not _has_action_option(_as_array(state.get("action_options", [])), action)
 		facility_popup_list.add_child(button)
 	facility_popup.popup_centered(Vector2i(590, 390))
 	_settle_inventory_popup(facility_popup, Vector2i(590, 390))
@@ -1579,7 +1591,7 @@ func _update_all() -> void:
 	var players: Array = state.get("players", [])
 	var board: Array = state.get("board", [])
 	if board_view != null and board_view.has_method("set_game_data"):
-		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}))
+		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}), (_as_array(state.get("god_objects", [])) if _has_original_gods() else []))
 	_update_header(phase, current_index)
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())
@@ -1658,6 +1670,15 @@ func _update_players(players: Array, current_index: int) -> void:
 		name_column.add_child(property_count)
 		if _has_original_inventory():
 			name_column.add_child(_make_label("點券 %d · 卡片 %d/15" % [int(player.get("points", 0)), _as_array(player.get("cards", [])).size()], 10, TEXT_MUTED))
+		var god_id := int(player.get("god_id", 0)) if _has_original_gods() else 0
+		if god_id > 0:
+			var days := 0
+			for actor in _as_array(state.get("god_objects", [])):
+				if actor is Dictionary and int(actor.get("owner", -1)) == index and int(actor.get("id", 0)) == god_id:
+					days = int(actor.get("days", 0))
+			name_column.add_child(_make_label("%s · %d 天" % [OriginalGods.name_for(god_id), days], 10, TEXT_GOLD))
+		if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
+			name_column.add_child(_make_label("住院 · %d 天" % int(player.hospital_days), 10, TEXT_GOLD))
 		var money := _make_label(_format_money(int(player.get("cash", 0))), 12, TEXT_GOLD)
 		money.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		money.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1676,6 +1697,9 @@ func _update_property_card(tile: Dictionary) -> void:
 		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
+		if owner < 0 and _has_original_gods():
+			var purchase_price := int(tile.get("land_price", tile.get("cost", 0))) + int(tile.get("building_level", 0)) * int(tile.get("house_price", tile.get("upgrade_cost", 0)))
+			details += " · 購買總價 %s" % _format_money(purchase_price)
 	elif kind == "facility":
 		var level := int(tile.get("building_level", 0))
 		var price_index := int(state.get("price_index", 1))
@@ -1704,6 +1728,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var game_over := phase == "game_over"
 	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
+	roll_button.text = "休養" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "擲骰"
 	roll_button.disabled = not (human_turn and phase == "await_roll")
 	buy_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "buy"))
 	var can_build := _has_action_option(action_options, "build_facility")
@@ -1722,7 +1747,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	shop_button.disabled = not human_turn
 	if not human_turn or not _shop_available():
 		shop_popup.hide()
-	if not human_turn or phase != "await_action" or not can_build:
+	if not human_turn or phase != "await_action" or not _has_action_option(action_options, facility_popup_action):
 		facility_popup.hide()
 	if not human_turn:
 		bank_popup.hide()
@@ -1735,7 +1760,11 @@ func _update_actions(phase: String, current_index: int) -> void:
 	elif phase == "await_route":
 		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
-		action_hint_label.text = "輪到你了，請擲骰"
+		action_hint_label.text = "住院休養中，按休養推進回合" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "輪到你了，請擲骰"
+	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
+		action_hint_label.text = "%s將在結束回合時影響停留地產" % OriginalGods.name_for(int(player.god_id))
+	elif _has_original_gods() and int(player.get("god_id", 0)) in [7, 8, 15]:
+		action_hint_label.text = "%s附身，暫時無法購地或建造" % OriginalGods.name_for(int(player.god_id))
 	else:
 		action_hint_label.text = "請處理目前格位"
 
@@ -2025,6 +2054,44 @@ func _event_actor(event: Dictionary) -> String:
 
 func _event_detail(event_type: String, event: Dictionary) -> String:
 	match event_type:
+		"god_attached":
+			return "%s附身 · %d 天" % [OriginalGods.name_for(int(event.get("god_id", 0))), int(event.get("days", 0))]
+		"god_detached":
+			return "%s離開" % OriginalGods.name_for(int(event.get("god_id", 0)))
+		"god_spawned":
+			return "%s出現在%s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _tile_name(int(event.get("node", -1)))]
+		"god_spawn_unavailable":
+			return "%s暫無可出現的位置" % OriginalGods.name_for(int(event.get("god_id", 0)))
+		"dog_encounter":
+			return "遭惡犬咬傷，住院 3 天" if int(event.get("hospital_days", 0)) > 0 else "乘坐交通工具通過惡犬"
+		"hospital_started":
+			return "開始住院休養 · %d 天" % int(event.get("hospital_days", 0))
+		"hospital_skipped":
+			return "住院休養 · 剩餘 %d 天" % int(event.get("days", 0))
+		"hospital_recovered":
+			return "康復出院"
+		"god_respawn_skipped":
+			return "%s已在場上" % OriginalGods.name_for(int(event.get("god_id", 0)))
+		"god_cash_effect":
+			return "神明贈予 %s" % _format_money(int(event.get("amount", 0)))
+		"god_cash_unavailable":
+			return "銀行資金不足，本次未取得神明贈款"
+		"god_card_drop":
+			return "神明移除 %d 張卡片" % int(event.get("count", 0))
+		"god_inventory_cleared":
+			return "死神清空卡片、道具與裝備載具"
+		"god_charge_modifier":
+			return "%s將費用由 %s 調整為 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("from_amount", 0))), _format_money(int(event.get("to_amount", 0)))]
+		"god_charge_waived":
+			return "%s免除費用 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("amount", 0)))]
+		"god_fortune_construction":
+			return "%s額外加蓋%s至第 %d 級" % [OriginalGods.name_for(int(event.get("god_id", 0))), _tile_name(int(event.get("tile_id", -1))), int(event.get("to_level", 0))]
+		"god_property_effect":
+			var god_name: String = OriginalGods.name_for(int(event.get("god_id", 0)))
+			var property_name := _tile_name(int(event.get("tile_id", -1)))
+			if event.get("effect", "") == "occupy":
+				return "%s取得%s的所有權" % [god_name, property_name]
+			return "%s將%s調整為第 %d 級" % [god_name, property_name, int(event.get("to_level", 0))]
 		"new_game":
 			return "新局開始 · %d 位玩家" % int(event.get("player_count", 0))
 		"roll":
@@ -2082,7 +2149,7 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s %s × %d · %d 點券" % ["買入" if event_type == "item_bought" else "出售", item_name, int(event.get("quantity", 1)), int(event.get("price", event.get("sale_price", 0)))]
 		"points_landed", "points_passed":
 			return "取得 %d 點券" % int(event.get("points", 0))
-		"card_passed", "event_drawn":
+		"card_passed", "event_drawn", "god_fortune":
 			if event.has("error"):
 				return "本次未取得卡片"
 			var card_id := str(event.get("card_id", ""))
@@ -2188,6 +2255,9 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	if tile.get("kind", "") == "facility":
 		return int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
 	return int(tile.get("cost", 0))
+
+func _has_original_gods() -> bool:
+	return int(state.get("version", 0)) >= 6 and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
 	return int(state.get("version", 0)) >= 4

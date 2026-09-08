@@ -257,6 +257,7 @@ func _test_graph_source_classification_and_points() -> void:
 	for source_points in [{"event_code": 10, "points": 50}, {"event_code": 11, "points": 30}, {"event_code": 12, "points": 10}]:
 		var mapped: Dictionary = _definition.duplicate(true)
 		mapped["board"][1]["event_code"] = source_points["event_code"]
+		mapped["board"][1]["source_status_bits"] = (int(mapped["board"][1]["source_status_bits"]) & ~0xff) | int(source_points["event_code"])
 		mapped["board"][1]["points"] = source_points["points"]
 		_expect(bool(GameState.validate_board_definition(mapped).get("ok", false)), "point source %d keeps exact value" % source_points["event_code"])
 		var wrong_points: Dictionary = mapped.duplicate(true)

@@ -110,14 +110,16 @@ config_revision="$(printf '%s\n' "$config_values" | sed -n '2p')"
 [[ -n "$revision" ]] || revision="$config_revision"
 [[ "$revision" == "$config_revision" ]] || fail "requested revision does not match config/private-assets.json"
 
-if [[ -z "$cache_root" ]]; then
+if [[ -z "$cache_root" && "$destination_explicit" -eq 0 ]]; then
   [[ -n "${HOME:-}" ]] || fail "HOME is required unless --cache-root or --destination is supplied"
   cache_root="$HOME/Library/Caches/richman4-remake"
 fi
-case "$cache_root" in
-  /*) ;;
-  *) cache_root="$project_root/$cache_root" ;;
-esac
+if [[ -n "$cache_root" ]]; then
+  case "$cache_root" in
+    /*) ;;
+    *) cache_root="$project_root/$cache_root" ;;
+  esac
+fi
 
 if (( destination_explicit == 0 )); then
   destination="$cache_root/private-assets/$revision"
@@ -145,30 +147,29 @@ verify_destination() {
   python3 "$script_dir/verify_private_assets.py" --asset-root "$destination" --config "$config_path"
 }
 
+resolved_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
 ensure_worktree_link() {
   [[ -n "$link_path" ]] || return 0
   link_parent="$(dirname -- "$link_path")"
   mkdir -p -- "$link_parent"
 
   if [[ -L "$link_path" ]]; then
-    resolved_link="$(python3 - "$link_path" <<'PY'
-import os
-import sys
-print(os.path.realpath(sys.argv[1]))
-PY
-)"
-    resolved_destination="$(python3 - "$destination" <<'PY'
-import os
-import sys
-print(os.path.realpath(sys.argv[1]))
-PY
-)"
-    [[ "$resolved_link" == "$resolved_destination" ]] || fail "worktree asset link points somewhere else: $link_path"
+    [[ "$(resolved_path "$link_path")" == "$(resolved_path "$destination")" ]] || fail "worktree asset link points somewhere else: $link_path"
     return 0
   fi
 
   [[ ! -e "$link_path" ]] || fail "worktree asset path already exists and is not a managed symlink: $link_path"
   if ! ln -s -- "$destination" "$link_path"; then
+    if [[ -L "$link_path" && "$(resolved_path "$link_path")" == "$(resolved_path "$destination")" ]]; then
+      return 0
+    fi
     fail "cannot create worktree asset link: $link_path"
   fi
 }
@@ -208,6 +209,12 @@ if ! GIT_TERMINAL_PROMPT=0 git -C "$clone_path" lfs pull origin; then
   fail "Git LFS could not retrieve the pinned private asset content"
 fi
 python3 "$script_dir/verify_private_assets.py" --asset-root "$clone_path" --config "$config_path"
+
+# The shared checkout is an immutable verified snapshot, not an authoring repo.
+# LFS already materialized the working files, so its local object store is a
+# second, re-downloadable copy of the same large payload. Keep Git tree/pointer
+# metadata for future verification, but drop that duplicate local LFS cache.
+rm -rf -- "$clone_path/.git/lfs/objects"
 
 publish_status=0
 python3 "$script_dir/atomic_publish.py" "$clone_path" "$destination" || publish_status=$?

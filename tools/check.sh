@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 GODOT_BIN="${GODOT_BIN:-godot}"
-mkdir -p .local
+mkdir -p .local build
+touch build/.gdignore
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"

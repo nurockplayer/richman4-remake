@@ -11,7 +11,7 @@ from decode_original_ground import (
     PAYLOAD_SIZE, PIXEL_OFFSET, PLACEMENT_OFFSET, SIDE, TILE_COUNT,
     FormatError, InputError, decode_ground, decode_source, scene_objects,
 )
-from test_decode_original_images import make_mkf
+from test_decode_original_images import make_mkf, init_git_repo
 from test_import_original import make_map_payload
 
 
@@ -31,6 +31,18 @@ class GroundTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.payload = fixture()
+
+    def test_unignored_output_fails_before_creation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            init_git_repo(repo)
+            source = root / "source"
+            source.mkdir()
+            output = repo / "derived-scenes"
+            with self.assertRaisesRegex(InputError, "ignored"):
+                decode_source(source, output)
+            self.assertFalse(output.exists())
 
     def test_scenery_uses_source_resource_and_orientation_fields(self):
         graph = bytearray(160)

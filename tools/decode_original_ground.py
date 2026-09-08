@@ -17,6 +17,7 @@ from decode_original_images import (
     _find_casefolded,
     _publish_staged_images,
     assert_disjoint_paths,
+    assert_private_output,
     decode_entry,
     discover_editions,
     parse_mkf,
@@ -101,6 +102,7 @@ def scene_objects(graph: bytes, parsed: dict) -> list[dict]:
 def decode_source(source: Path, output: Path) -> dict:
     source, output = source.resolve(), output.resolve()
     assert_disjoint_paths(source, output)
+    assert_private_output(output)
     editions = []
     names = {"game": "Game", "multiversejourney": "MultiverseJourney"}
     for edition, directory in discover_editions(source):

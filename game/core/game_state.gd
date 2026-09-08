@@ -1813,6 +1813,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if rate_type not in [TYPE_INT, TYPE_FLOAT] or float(trend.get("rate", 0.0)) <= 0.0 or float(trend.get("rate", 0.0)) > 1.0:
 					errors.append("invalid market trend rate")
 
+	var graph_reachable: Dictionary = {}
 	var property_owners: Dictionary = {}
 	if typeof(board) == TYPE_ARRAY:
 		for index in range(board.size()):
@@ -1860,7 +1861,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		errors.append_array(_validate_graph_source(data.get("map_source", null), graph_map_id))
 		var graph_start: Variant = data.get("start_position", null)
 		var graph_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
-		if not _valid_int(graph_start, 0, max(0, graph_board_size - 1)):
+		if not _valid_int(graph_start, 0, graph_board_size - 1):
 			errors.append("invalid graph start position")
 		if typeof(board) == TYPE_ARRAY:
 			for index in range(board.size()):
@@ -1937,8 +1938,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 									break
 						if not reverse_has:
 							errors.append("asymmetric graph edge %d" % index)
-			if _valid_int(graph_start, 0, max(0, graph_board_size - 1)):
-				var reachable: Dictionary = {int(graph_start): true}
+			if _valid_int(graph_start, 0, graph_board_size - 1):
+				graph_reachable[int(graph_start)] = true
 				var queue: Array = [int(graph_start)]
 				while not queue.is_empty():
 					var node: int = int(queue.pop_front())
@@ -1951,11 +1952,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if not _valid_int(neighbor, 0, max(0, board.size() - 1)):
 							continue
 						var next_node: int = int(neighbor)
-						if not reachable.has(next_node):
-							reachable[next_node] = true
+						if not graph_reachable.has(next_node):
+							graph_reachable[next_node] = true
 							queue.append(next_node)
 				for index in range(board.size()):
-					if typeof(board[index]) == TYPE_DICTIONARY and board[index].get("kind", "") == "property" and not reachable.has(index):
+					if typeof(board[index]) == TYPE_DICTIONARY and board[index].get("kind", "") == "property" and not graph_reachable.has(index):
 						errors.append("graph property is unreachable %d" % index)
 		else:
 			for _unused in range(0):
@@ -1990,7 +1991,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
 					errors.append("player %d %s invalid" % [index, counter_key])
 			if graph_save:
-				if not _valid_int(player.get("previous_position", null), -1, 1000000000):
+				if not _valid_int(player.get("previous_position", null), -1, position_limit):
 					errors.append("player %d previous_position invalid" % index)
 				if not _valid_int(player.get("points", null), 0, 1000000000000):
 					errors.append("player %d points invalid" % index)
@@ -2053,7 +2054,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				var graph_player: Dictionary = players[index]
 				var position: Variant = graph_player.get("position", null)
 				var previous_position: Variant = graph_player.get("previous_position", null)
-				if _valid_int(position, 0, max(0, graph_board_size - 1)) and _valid_int(previous_position, -1, max(-1, graph_board_size - 1)):
+				if _valid_int(position, 0, graph_board_size - 1) and _valid_int(previous_position, -1, max(-1, graph_board_size - 1)):
 					if int(previous_position) >= 0 and typeof(board[int(position)]) == TYPE_DICTIONARY:
 						var player_adjacent: Variant = board[int(position)].get("adjacent", [])
 						var player_previous_valid: bool = false
@@ -2064,10 +2065,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 									break
 						if not player_previous_valid:
 							errors.append("player %d previous node is not adjacent" % index)
-					if _valid_int(position, 0, max(0, graph_board_size - 1)) and _valid_int(data.get("start_position", null), 0, max(0, graph_board_size - 1)):
-						# Position reachability is checked from the map start below; this
-						# keeps isolated source nodes available for browsing only.
-						pass
+					if not graph_reachable.has(int(position)):
+						errors.append("player %d position is unreachable" % index)
 		var route_options: Variant = data.get("route_options", null)
 		var remaining_steps_value: Variant = data.get("remaining_steps", null)
 		if typeof(route_options) != TYPE_ARRAY:
@@ -2090,7 +2089,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				var pending_current_node: Variant = pending.get("current_node", null)
 				var pending_previous_node: Variant = pending.get("previous_node", null)
 				var pending_player_valid: bool = _valid_int(pending_player_id, 0, max(0, player_count - 1))
-				var pending_current_valid: bool = _valid_int(pending_current_node, 0, max(0, graph_board_size - 1))
+				var pending_current_valid: bool = _valid_int(pending_current_node, 0, graph_board_size - 1)
 				var pending_previous_valid: bool = _valid_int(pending_previous_node, -1, max(-1, graph_board_size - 1))
 				if not pending_player_valid or int(pending_player_id) != current_player:
 					errors.append("pending route player mismatch")
@@ -2100,7 +2099,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					var route_player: Dictionary = players[current_player]
 					var route_position: Variant = route_player.get("position", null)
 					var route_previous_position: Variant = route_player.get("previous_position", null)
-					if not _valid_int(route_position, 0, max(0, graph_board_size - 1)) or not _valid_int(route_previous_position, -1, max(-1, graph_board_size - 1)) or int(route_position) != int(pending_current_node) or int(route_previous_position) != int(pending_previous_node):
+					if not _valid_int(route_position, 0, graph_board_size - 1) or not _valid_int(route_previous_position, -1, max(-1, graph_board_size - 1)) or int(route_position) != int(pending_current_node) or int(route_previous_position) != int(pending_previous_node):
 						errors.append("pending route position mismatch")
 				if pending_current_valid and pending_previous_valid:
 					var legal_routes: Array = []
@@ -2112,7 +2111,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					var pending_adjacent: Variant = pending_tile.get("adjacent", [])
 					if typeof(pending_adjacent) == TYPE_ARRAY:
 						for neighbor in pending_adjacent:
-							if not _valid_int(neighbor, 0, max(0, graph_board_size - 1)):
+							if not _valid_int(neighbor, 0, graph_board_size - 1):
 								continue
 							var neighbor_id: int = int(neighbor)
 							if neighbor_id != int(pending_previous_node):

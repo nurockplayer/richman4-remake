@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_fixed_property_economics()
 	_test_pending_route_save_load_and_validation()
 	_test_graph_save_degree_limit()
+	_test_graph_save_positions()
 	_test_ai_completes_pending_routes_deterministically()
 	print("Graph flow checks: %d, failures: %d" % [_checks, _failures])
 	quit(1 if _failures else 0)
@@ -327,3 +328,32 @@ func _test_ai_completes_pending_routes_deterministically() -> void:
 	_expect(second.state.get("phase", "") != "await_route", "second AI does not stop at pending route")
 	_expect_equal(first.state.get("route_options", []), [], "AI clears route options")
 	_expect_equal(first.to_json(), second.to_json(), "AI graph route choice is deterministic")
+
+
+func _test_graph_save_positions() -> void:
+	var game: Object = _new_graph(42)
+	var saved: Dictionary = game.to_dict()
+	var bad_previous: Dictionary = saved.duplicate(true)
+	bad_previous["players"][0]["previous_position"] = saved["board"].size()
+	_expect(not bool(GameState.validate_save(bad_previous).get("ok", false)), "previous position beyond board is rejected")
+	var isolated: Dictionary = saved.duplicate(true)
+	var extra: Dictionary = isolated["board"][0].duplicate(true)
+	extra["index"] = isolated["board"].size()
+	extra["source_node_id"] = int(extra["index"]) + 1
+	extra["adjacent"] = []
+	isolated["board"].append(extra)
+	_expect(bool(GameState.validate_save(isolated).get("ok", false)), "isolated non-property source node remains valid for browsing")
+	isolated["players"][0]["position"] = extra["index"]
+	_expect(not bool(GameState.validate_save(isolated).get("ok", false)), "player on isolated source node is rejected")
+	for phase in ["await_roll", "await_route"]:
+		var empty: Dictionary = saved.duplicate(true)
+		empty["board"] = []
+		empty["start_position"] = 0
+		empty["phase"] = phase
+		if phase == "await_route":
+			empty["route_options"] = [0]
+			empty["remaining_steps"] = 1
+			empty["pending_movement"] = {"player_id": 0, "current_node": 0, "previous_node": -1}
+		var result: Dictionary = GameState.validate_save(empty)
+		_expect(result.has("ok") and result.has("errors"), "empty graph validation returns a result in " + phase)
+		_expect(not bool(result.get("ok", true)), "empty graph is rejected in " + phase)

@@ -25,7 +25,7 @@ macOS 打包輸出 `build/Richman4.zip` 與新的 `build/package.XXXXXX/*.app`�
 bash tools/disk_guard.sh --operation "Richman4 FULL validation"
 ```
 
-預設低於 60 GiB 會警告，不應再建立第二個 FULL lane；低於 25 GiB 會 fail closed。只有擁有者明確接受風險時才可用 `RICHMAN4_ALLOW_LOW_DISK=1` 覆寫 hard stop。門檻可用 `RICHMAN4_DISK_WARN_GIB` 與 `RICHMAN4_DISK_HARD_MIN_GIB` 調整。
+預設低於 60 GiB 會警告，不應再建立第二個 FULL lane；低於 40 GiB 直接 fail closed，不再新增大型素材 checkout／完整 Godot validation cache。只有擁有者明確接受風險時才可用 `RICHMAN4_ALLOW_LOW_DISK=1` 覆寫 hard stop。門檻可用 `RICHMAN4_DISK_WARN_GIB` 與 `RICHMAN4_DISK_HARD_MIN_GIB` 調整。
 
 `.godot/`、`.local/imported-original/`、`.local/original-scenes/`、`build/`、`dist/` 與 test results 都是可重建 cache。FULL worktree 退役後應回收，不把它們當成需要長期保存的開發 authority。
 

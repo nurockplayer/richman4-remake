@@ -17,6 +17,7 @@ func _run() -> void:
 	_test_rent_payment_uses_deposit_exactly()
 	_test_bankruptcy_auction_and_game_over()
 	_test_non_final_bankruptcy_advances_to_next_actor()
+	_test_loan_bankruptcy_bookkeeping()
 	_test_bank_and_monthly_interest()
 	_test_vehicles_and_verified_cards()
 	_test_save_load_and_validation()
@@ -223,6 +224,36 @@ func _test_non_final_bankruptcy_advances_to_next_actor() -> void:
 	_expect(bool(next_player["alive"]), "next player remains alive")
 	var ai_result: Dictionary = game.run_ai_turn()
 	_expect(bool(ai_result.get("ok", false)), "next AI actor can be scheduled immediately")
+
+
+func _test_loan_bankruptcy_bookkeeping() -> void:
+	var game: GameState = GameState.new_game(323, 3)
+	game.state["bank_landing"] = true
+	_expect(bool(game._take_loan(0, 1000).get("ok", false)), "first borrower can take a loan")
+	_expect(bool(game._take_loan(1, 2000).get("ok", false)), "second borrower can take a loan")
+	_expect(bool(game._take_loan(2, 3000).get("ok", false)), "third borrower can take a loan")
+	_expect_equal(game.state["bank"]["loans"], 6000, "bank tracks all borrower principals")
+	game.state["players"][0]["cash"] = 0
+	game.state["players"][0]["deposit"] = 0
+	game._charge_amount(0, 1, 1, "loan_bankruptcy_test")
+	_expect(bool(game.state["players"][0]["bankrupt"]), "loan borrower can be declared bankrupt")
+	_expect_equal(game.state["players"][0]["loan"], 0, "bankrupt borrower loan is cleared")
+	_expect_equal(game.state["bank"]["loans"], 5000, "bank loan total removes only bankrupt borrower principal")
+	_expect_equal(game.state["players"][1]["loan"], 2000, "other borrower loan survives bankruptcy")
+	_expect_equal(game.state["players"][2]["loan"], 3000, "third borrower loan survives bankruptcy")
+	game.state["players"][1]["cash"] = 500
+	game.state["players"][1]["deposit"] = 1500
+	game.state["bank"]["deposits"] = 1500
+	game.state["players"][1]["loan_due_day"] = 1
+	var bank_loans_before_repay: int = int(game.state["bank"]["loans"])
+	game._repay_due_loan(1)
+	_expect_equal(game.state["players"][1]["cash"], 0, "normal repayment uses cash and deposit exactly once")
+	_expect_equal(game.state["players"][1]["deposit"], 0, "normal repayment clears the required deposit")
+	_expect_equal(game.state["players"][1]["loan"], 0, "normal repayment clears borrower loan")
+	_expect_equal(game.state["bank"]["loans"], bank_loans_before_repay - 2000, "normal repayment removes only its borrower principal")
+	_expect_equal(game.state["bank"]["loans"], 3000, "third borrower principal remains after normal repayment")
+	game._repay_due_loan(1)
+	_expect_equal(game.state["bank"]["loans"], 3000, "repeating a settled repayment does not double deduct bank loans")
 
 
 func _test_bank_and_monthly_interest() -> void:

@@ -566,6 +566,11 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		return
 	var was_current_roll: bool = int(state.get("current_player", -1)) == debtor_id and state.get("phase", "") == "await_roll"
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
+	var loan: int = int(debtor.get("loan", 0))
+	if loan > 0:
+		var bank: Dictionary = state.get("bank", {})
+		bank["loans"] = max(0, int(bank.get("loans", 0)) - loan)
+		state["bank"] = bank
 	debtor["cash"] = 0
 	debtor["deposit"] = 0
 	debtor["loan"] = 0

@@ -37,6 +37,33 @@ func _run() -> void:
 	await create_timer(1.2).timeout
 	_expect(int(game.state.turn) > turn_after_death, "Actual UI timer runs the next AI turn")
 	_expect(not game.state.players[game.state.current_player].bankrupt, "UI never rests on a bankrupt actor")
+	ui.set_process(false)
+	game = GameState.new_game(42, 3)
+	game.state.current_player = 1
+	game._set_action_options(1)
+	ui.game_state = game
+	ui._refresh_from_state()
+	_expect(ui.bank_shortcut.disabled and ui.cards_shortcut.disabled and ui.stocks_shortcut.disabled, "All AI sidebar shortcuts are disabled")
+	ui._on_stocks_pressed()
+	_expect(not ui.stocks_popup.visible, "AI sidebar cannot open trading popup")
+	var ai_cash := int(game.state.players[1].cash)
+	var result: Dictionary = ui._invoke_game("choose_action", ["buy_stock", {"symbol": "tech", "quantity": 1}])
+	_expect(not result.get("ok", false), "UI action boundary rejects human action for AI")
+	_expect(int(game.state.players[1].cash) == ai_cash, "AI cash remains unchanged by human input")
+	game = GameState.new_game(42, 2)
+	game.state.players[0].deposit = 250
+	game.state.bank.deposits = 250
+	game.state.phase = "await_action"
+	game.state.bank_access = true
+	game._set_action_options(0)
+	ui.game_state = game
+	ui._refresh_from_state()
+	ui._on_bank_pressed()
+	_expect(ui.bank_withdraw_button.text == "提取 $250", "UI shows the actual remaining withdrawal amount")
+	ui._on_withdraw_pressed()
+	_expect(int(game.state.players[0].deposit) == 0, "UI withdraws sub-500 remaining deposit")
+	_expect(int(game.state.players[0].cash) == 15250, "UI returns exact remaining deposit to cash")
+	_expect(ui.bank_withdraw_button.disabled, "UI refreshes withdrawal availability after exhausting deposit")
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	if failures == 0:

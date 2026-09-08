@@ -39,6 +39,9 @@ var event_log_view: RichTextLabel
 var event_status_label: Label
 var action_hint_label: Label
 
+var bank_shortcut: Button
+var cards_shortcut: Button
+var stocks_shortcut: Button
 var roll_button: Button
 var buy_button: Button
 var upgrade_button: Button
@@ -286,13 +289,13 @@ func _build_playfield() -> Control:
 	var utility_row := HBoxContainer.new()
 	utility_row.add_theme_constant_override("separation", 7)
 	side_column.add_child(utility_row)
-	var bank_shortcut := _make_button("銀行", _on_bank_pressed)
+	bank_shortcut = _make_button("銀行", _on_bank_pressed)
 	bank_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	utility_row.add_child(bank_shortcut)
-	var cards_shortcut := _make_button("卡片", _on_cards_pressed)
+	cards_shortcut = _make_button("卡片", _on_cards_pressed)
 	cards_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	utility_row.add_child(cards_shortcut)
-	var stocks_shortcut := _make_button("股市", _on_stocks_pressed)
+	stocks_shortcut = _make_button("股市", _on_stocks_pressed)
 	stocks_shortcut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	utility_row.add_child(stocks_shortcut)
 	return row
@@ -740,19 +743,30 @@ func _on_deposit_pressed() -> void:
 	_handle_result(result)
 
 func _on_withdraw_pressed() -> void:
-	var result := _invoke_game("choose_action", ["withdraw", {"amount": 500}])
-	_append_local_log("銀行提取 $500：%s" % _result_text(result, "已送出提款指令。"))
+	var amount := mini(500, int(_current_player().get("deposit", 0)))
+	var result := _invoke_game("choose_action", ["withdraw", {"amount": amount}])
+	_append_local_log("銀行提取 %s：%s" % [_format_money(amount), _result_text(result, "已送出提款指令。")])
 	_handle_result(result)
 
 func _on_cards_pressed() -> void:
+	if not _is_human_turn():
+		return
 	_update_cards_popup()
 	cards_popup.popup_centered()
 
 func _on_stocks_pressed() -> void:
+	if not _is_human_turn():
+		return
 	_update_stocks_popup()
 	stocks_popup.popup_centered()
 
 func _on_bank_pressed() -> void:
+	if not _is_human_turn():
+		return
+	_update_bank_popup()
+	bank_popup.popup_centered()
+
+func _update_bank_popup() -> void:
 	var balance: Label = bank_popup.get_node_or_null("MarginContainer/VBoxContainer/Balance")
 	var player := _current_player()
 	if balance != null:
@@ -760,7 +774,7 @@ func _on_bank_pressed() -> void:
 	var options: Array = _as_array(state.get("action_options", []))
 	bank_deposit_button.disabled = not _has_action_option(options, "deposit")
 	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw")
-	bank_popup.popup_centered()
+	bank_withdraw_button.text = "提取 %s" % _format_money(mini(500, int(player.get("deposit", 0))))
 
 func _on_tile_selected(index: int) -> void:
 	_selected_tile = index
@@ -774,7 +788,13 @@ func _on_end_restart_pressed() -> void:
 func _close_end_overlay() -> void:
 	end_overlay.hide()
 
+func _is_human_turn() -> bool:
+	var player := _current_player()
+	return game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if method != "run_ai_turn" and not _is_human_turn():
+		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var result: Variant = game_state.callv(method, args)
 		return result if result is Dictionary else {}
@@ -818,6 +838,8 @@ func _update_all() -> void:
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())
 	_update_actions(phase, current_index)
+	if bank_popup.visible:
+		_update_bank_popup()
 	_update_event_log()
 	_update_end_overlay(phase)
 	_last_rendered_phase = phase
@@ -893,6 +915,13 @@ func _update_actions(phase: String, current_index: int) -> void:
 	bank_button.disabled = not human_turn
 	cards_button.disabled = not human_turn
 	stocks_button.disabled = not (human_turn and bool(state.get("market", {}).get("open", true)))
+	bank_shortcut.disabled = bank_button.disabled
+	cards_shortcut.disabled = cards_button.disabled
+	stocks_shortcut.disabled = stocks_button.disabled
+	if not human_turn:
+		bank_popup.hide()
+		cards_popup.hide()
+		stocks_popup.hide()
 	if game_over:
 		action_hint_label.text = "本局已結束"
 	elif not human_turn:

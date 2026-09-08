@@ -5226,6 +5226,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if _valid_int(god_node_value, 0, god_board_limit) and _valid_int(god_owner_player.get("position", null), 0, god_board_limit) and int(god_node_value) != int(god_owner_player.get("position")):
 							errors.append("god object %d node does not follow owner" % god_id)
 				else:
+					if not OriginalGods.is_spawnable(god_id):
+						errors.append("unattached god %d is not spawnable" % god_id)
 					if god_days != 0:
 						errors.append("unattached god %d has remaining days" % god_id)
 					if _valid_int(god_node_value, 0, god_board_limit):

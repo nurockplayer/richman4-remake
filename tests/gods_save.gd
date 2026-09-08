@@ -142,6 +142,18 @@ func _test_v6_effect_state_and_legacy() -> void:
 func _test_unbound_spawn_validation() -> void:
 	var game := _new_gods_game()
 	var saved: Dictionary = game.to_dict()
+	var unbound_death: Dictionary = saved.duplicate(true)
+	unbound_death.god_objects[0].id=15
+	_expect(not Game.validate_save(unbound_death).get("ok",false),"unsupported unbound death cannot validate")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(unbound_death)))==null,"unsupported unbound death cannot load")
+	var attached_death: Dictionary = unbound_death.duplicate(true)
+	attached_death.god_objects[0].owner=0
+	attached_death.god_objects[0].node=0
+	attached_death.god_objects[0].days=13
+	attached_death.players[0].god_id=15
+	_expect(Game.validate_save(attached_death).get("ok",false),"already attached death remains supported")
+	_expect(Game.from_dict(JSON.parse_string(JSON.stringify(attached_death)))!=null,"attached death continuation can load")
+
 	var masked: Dictionary = saved.duplicate(true)
 	var node: int = int(masked.god_objects[0].node)
 	masked.board[node].source_status_bits = 0x100

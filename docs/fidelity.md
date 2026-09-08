@@ -15,7 +15,7 @@
 
 Runtime loader 另外核對雙向鄰接、住宅參照唯一性與住宅從起點的可達性。超時空之旅第 5 張地圖有 20 個無鄰接的非住宅節點，匯入時保留它們，不補造道路；所有住宅均可到達。第 8 張只有商業設施而沒有住宅，v5 商業系統接入後已開放對局。第 6 張有一筆名稱全零的住宅，以「未命名住宅 48」呈現，不虛構來源名稱。
 
-12 張來源地圖共有 15 個 `event_code == 14` 銀行服務節點，均同時具有企業物件編號。銀行服務優先於尚未實作的企業分類，以保留原作經過 ATM／停留銀行的 dispatch；這不代表已實作該企業的經營權。
+12 張來源地圖共有 15 個 `event_code == 14` 銀行服務節點，均同時具有企業物件編號。銀行服務保留原作經過 ATM／停留銀行的 dispatch；完整十二股 catalog 啟用 v7 時，另以來源企業 ID 接入持股與經營權。
 
 節點輸出保留原始 `status_bits` 與 `field_0x22`，另提供 `event_code = status_bits & 0xff` 與 `visual_index = field_0x22`。原版落地 dispatch 的 jump table 將 1–16 對應到事件／UI；`field_0x22` 在繪圖路徑中作資源索引，因此兩者在重製 runtime 中必須分開。這些欄位對應由 `.local/research-rich4/asm/rich4_player_core_actions.asm` 的 `rich4_handle_player_land_on_node` 與相關繪圖反組譯核對，並以 `catalog.json` 的原始節點值交叉檢查。
 
@@ -56,4 +56,4 @@ Godot 桌面版本已具備 2–4 人新局、固定 seed、擲骰／買地／�
 
 v5 商業設施版本已在本機十二張來源地圖完成四位 AI 的三十日對局，並核對 JSON 存讀後的續玩一致。此為重製規則的對局與重播證據，並非原版執行軌跡對照；後續版本的最終驗證另記於各 PR。
 
-新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色站姿可由本機素材呈現，詳見 [original-scenes.md](original-scenes.md)。v4 已接完整 30 張卡片與 13 種工具目錄、有限供給、背包與點券商店，詳見 [original-inventory.md](original-inventory.md)；目錄完整不代表效果完整。v5 已接公園、旅館、購物中心與加油站，詳見 [original-facilities.md](original-facilities.md)。v6 已接神明附身、每日倒數、財神／窮神收費、福神建設、天使／惡魔／土地公停留結算及惡犬住院，詳見 [original-gods.md](original-gods.md)。部分經濟參數與破產資產分配仍屬暫定，多數卡片／工具效果、特殊人物、企業、研究所生產、拍賣互動、小遊戲、原作鏡頭與動畫仍有缺口。#1 保持未完成並持續推進。
+新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色站姿可由本機素材呈現，詳見 [original-scenes.md](original-scenes.md)。v4 已接完整 30 張卡片與 13 種工具目錄、有限供給、背包與點券商店，詳見 [original-inventory.md](original-inventory.md)；目錄完整不代表效果完整。v5 已接公園、旅館、購物中心與加油站，詳見 [original-facilities.md](original-facilities.md)。v6 已接神明附身、每日倒數、財神／窮神收費、福神建設、天使／惡魔／土地公停留結算及惡犬住院，詳見 [original-gods.md](original-gods.md)。v7 接入來源十二股、企業持股、服務、分紅與保險，詳見 [original-companies.md](original-companies.md)。部分經濟參數與地產破產分配仍屬暫定，多數卡片／工具效果、特殊人物、其他企業服務、研究所生產、拍賣互動、小遊戲、原作鏡頭與動畫仍有缺口。#1 保持未完成並持續推進。

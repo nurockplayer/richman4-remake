@@ -14,6 +14,8 @@ const SETUP_SAVE_VERSION = 3
 const INVENTORY_SAVE_VERSION = 4
 const FACILITY_SAVE_VERSION = 5
 const GODS_SAVE_VERSION = 6
+const COMPANY_SAVE_VERSION = 7
+const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -127,6 +129,7 @@ const EVENT_CARDS = [
 	{"id": "黑", "name": "黑", "kind": "card", "effect": "stock_down"},
 ]
 
+var _settling_company_dividends := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -159,12 +162,18 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if options.has("original_gods") and typeof(options.get("original_gods")) != TYPE_BOOL:
 		return null
+	if options.has("original_companies") and typeof(options.get("original_companies")) != TYPE_BOOL:
+		return null
+	if bool(options.get("original_companies", false)) and not bool(definition.get("supports_original_companies", false)):
+		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
 		original_facilities = true
 	if original_facilities and options.is_empty():
 		return null
 	if bool(options.get("original_gods", false)) and not original_facilities:
+		return null
+	if bool(options.get("original_companies", false)) and not _company_definition_errors(definition, player_count).is_empty():
 		return null
 	var validation: Dictionary = validate_board_definition(definition, original_facilities)
 	if not bool(validation.get("ok", false)):
@@ -186,7 +195,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -252,6 +261,11 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		original_gods = bool(options["original_gods"])
 	if original_gods and not original_facilities:
 		return {}
+	if options.has("original_companies") and typeof(options.original_companies) != TYPE_BOOL:
+		return {}
+	var original_companies: bool = bool(options.get("original_companies", false))
+	if original_companies and not original_gods:
+		return {}
 
 	return {
 		"initial_fund": initial_fund,
@@ -262,6 +276,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_inventory": original_inventory,
 		"original_facilities": original_facilities,
 		"original_gods": original_gods,
+		"original_companies": original_companies,
 	}
 
 
@@ -273,14 +288,18 @@ func _initialize_setup(seed_value: int, player_count: int, options: Dictionary) 
 func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dictionary, options: Dictionary) -> void:
 	_initialize_graph(seed_value, player_count, definition)
 	_configure_setup(options, player_count)
+	if bool(options.get("original_companies", false)):
+		_initialize_original_companies(definition)
 
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	var original_gods: bool = bool(options.get("original_gods", false))
-	state["version"] = GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	state["version"] = COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
 	state["original_facilities"] = original_facilities
 	state["original_gods"] = original_gods
+	if bool(options.get("original_companies", false)):
+		state["original_companies"] = true
 	if original_facilities:
 		state["price_index"] = 1
 		state["last_roll_total"] = 0
@@ -341,19 +360,19 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
 
 
 func _is_facilities() -> bool:
-	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION]
 
 
 func _is_gods() -> bool:
-	return int(state.get("version", 0)) == GODS_SAVE_VERSION and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -499,6 +518,438 @@ func _build_players(player_count: int, start_position: int = START_POSITION, gra
 		players.append(player)
 	return players
 
+
+func _is_companies() -> bool:
+	return int(state.get("version", 0)) == COMPANY_SAVE_VERSION and bool(state.get("original_companies", false))
+
+
+func get_stock_symbols() -> Array:
+	return OriginalStockMarket.symbols() if _is_companies() else STOCK_SYMBOLS.duplicate()
+
+
+func get_stock_name(stock_symbol: String) -> String:
+	if _is_companies():
+		return str(state.get("market", {}).get("rows", {}).get(stock_symbol, {}).get("name", stock_symbol))
+	return {"tech":"科技", "transport":"運輸", "energy":"能源"}.get(stock_symbol, stock_symbol)
+
+
+func _initialize_original_companies(definition: Dictionary) -> void:
+	state["companies"] = definition.get("companies", []).duplicate(true)
+	state["market"] = OriginalStockMarket.create(definition.get("stock_rows", []))
+	state["company_purchase_remaining"] = 1000
+	state["company_service_pending"] = 0
+	state["company_months"] = 0
+	state["jackpot"] = 0
+	for company in state.companies:
+		company["owner"] = -1
+		company["treasury"] = 10000 - int(state.market.rows[OriginalStockMarket.symbol(int(company.stock_index))].market_supply)
+	for player in _players():
+		player["stocks"] = {}
+		player["insurance_status"] = 0
+		for stock_symbol in get_stock_symbols():
+			player.stocks[stock_symbol] = 0
+	OriginalStockMarket.reset_turn_supply(state.market, _rng)
+	_sync_state()
+	_set_action_options(0)
+
+
+func get_company_at(node_id: int) -> Dictionary:
+	if not _is_companies(): return {}
+	var tile := _tile_at(node_id)
+	var source_id := int(tile.get("source_company_id", 0))
+	if source_id == 0:
+		var source_type := int(tile.get("type_and_idx", 0))
+		if source_type > 6000 and source_type < 8000: source_id = source_type - 6000
+	for company in state.get("companies", []):
+		if int(company.get("id", 0)) == source_id: return company
+	return {}
+
+
+func _update_company_owners() -> void:
+	if not _is_companies(): return
+	for company in state.get("companies", []):
+		var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
+		var old_owner := int(company.get("owner", -1))
+		var maximum := 0
+		var candidates: Array = []
+		for player in _players():
+			if not bool(player.get("alive", false)): continue
+			var shares := int(player.stocks.get(stock_symbol, 0))
+			if shares > maximum:
+				maximum = shares
+				candidates = [int(player.id)]
+			elif shares == maximum and shares > 0:
+				candidates.append(int(player.id))
+		var owner := old_owner if candidates.has(old_owner) else int(candidates[0]) if not candidates.is_empty() else -1
+		company.owner = owner
+		if owner != old_owner:
+			_record_event("company_owner_changed", {"company_id":int(company.id), "company_name":str(company.display_name), "owner_id":owner, "previous_owner_id":old_owner})
+
+
+func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
+	if state.get("phase", "") == "game_over": return _error("遊戲已結束")
+	if not bool(state.market.open): return _error("證券市場休市")
+	var player_id := int(state.current_player)
+	var player := _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)): return _error("目前玩家無法交易")
+	var stock_symbol := str(params.get("symbol", params.get("stock", ""))).to_lower()
+	var quantity_value: Variant = params.get("quantity", params.get("shares", null))
+	if not get_stock_symbols().has(stock_symbol) or not _valid_int(quantity_value, 1, 10000): return _error("股票代號或數量無效")
+	var quantity := int(quantity_value)
+	var row: Dictionary = state.market.rows[stock_symbol]
+	if int(row.suspension) > 0: return _error("這檔股票暫停交易")
+	var amount := OriginalStockMarket.quote(float(row.price), quantity)
+	if action == "buy_stock":
+		if quantity > int(row.market_supply) or quantity > int(row.turn_supply): return _error("本回合可購買股數不足")
+		if int(player.deposit) < amount: return _error("銀行存款不足")
+		player.deposit = int(player.deposit) - amount
+		state.bank.deposits = int(state.bank.deposits) - amount
+		row.market_supply = int(row.market_supply) - quantity
+		row.turn_supply = int(row.turn_supply) - quantity
+		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+	else:
+		if int(player.stocks[stock_symbol]) < quantity: return _error("持股不足")
+		if int(player.deposit) > 1000000000000 - amount or int(state.bank.deposits) > 1000000000000 - amount: return _error("存款超出上限")
+		player.deposit = int(player.deposit) + amount
+		state.bank.deposits = int(state.bank.deposits) + amount
+		row.market_supply = int(row.market_supply) + quantity
+		row.turn_supply = int(row.turn_supply) + quantity
+		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) - quantity
+	_update_company_owners()
+	_record_event("stock_bought" if action == "buy_stock" else "stock_sold", {"player_id":player_id,"symbol":stock_symbol,"stock_name":str(row.name),"quantity":quantity,"price":float(row.price),"amount":amount,"account":"deposit"})
+	_set_action_options(player_id)
+	return _result(true,"股票交易完成")
+
+
+func _buy_company_stock(player_id: int, params: Dictionary) -> Dictionary:
+	var player := _player(player_id)
+	var company := get_company_at(int(player.get("position", -1)))
+	if company.is_empty() or _is_gods_hospital_action(player): return _error("目前無法購買企業股份")
+	var quantity_value: Variant = params.get("quantity", null)
+	if not _valid_int(quantity_value, 1, 1000): return _error("每次造訪最多購買一千股")
+	var quantity := int(quantity_value)
+	if quantity > int(state.company_purchase_remaining) or quantity > int(company.treasury): return _error("企業剩餘股數或本次造訪額度不足")
+	var face_price := int(company.stock_value) / 10000
+	var amount: int = face_price * quantity
+	if face_price <= 0 or int(player.cash) < amount: return _error("現金不足或企業售價無效")
+	var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
+	player.cash = int(player.cash) - amount
+	player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+	company.treasury = int(company.treasury) - quantity
+	state.company_purchase_remaining = int(state.company_purchase_remaining) - quantity
+	_update_company_owners()
+	_record_event("company_shares_bought", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"symbol":stock_symbol,"quantity":quantity,"price":face_price,"amount":amount})
+	_set_action_options(player_id)
+	return _result(true,"已購入企業股份")
+
+
+static func _company_definition_errors(definition: Dictionary, player_count: int) -> Array:
+	var rows: Variant = definition.get("stock_rows")
+	var companies: Variant = definition.get("companies")
+	if typeof(definition.get("supports_original_companies")) != TYPE_BOOL or not definition.get("supports_original_companies", false):
+		return ["map does not support original companies"]
+	if typeof(rows) != TYPE_ARRAY or rows.size() != 12 or typeof(companies) != TYPE_ARRAY:
+		return ["missing company source rows"]
+	for index in range(rows.size()):
+		var row: Variant = rows[index]
+		if typeof(row) != TYPE_DICTIONARY or not _valid_int(row.get("index"), index, index) or not OriginalStockMarket._number(row.get("price"), 1.0, 9999.0):
+			return ["invalid company source stock"]
+		if not _valid_int(row.get("market_supply"), 0, 10000): return ["invalid initial stock supply"]
+	var runtime_companies: Array = companies.duplicate(true)
+	for company in runtime_companies:
+		if typeof(company) != TYPE_DICTIONARY or not _valid_int(company.get("stock_index"), 0, 11): return ["invalid initial company link"]
+		company["owner"] = -1
+		company["treasury"] = 10000 - int(rows[int(company.stock_index)].market_supply)
+	var market := OriginalStockMarket.create(rows)
+	var players: Array = []
+	for index in range(player_count):
+		var player := {"id":index,"alive":true,"stocks":{}}
+		for stock_symbol in OriginalStockMarket.symbols(): player.stocks[stock_symbol] = 0
+		players.append(player)
+	var errors := OriginalStockMarket.validate(market, players, runtime_companies)
+	errors.append_array(_validate_companies(runtime_companies, players, definition.get("board")))
+	return errors
+
+static func _validate_companies(companies: Variant, players: Variant, board: Variant) -> Array:
+	var errors: Array = []
+	if typeof(companies) != TYPE_ARRAY or companies.size() > 12: return ["invalid companies"]
+	if typeof(players) != TYPE_ARRAY or typeof(board) != TYPE_ARRAY: return ["invalid company context"]
+	for tile in board:
+		if typeof(tile) != TYPE_DICTIONARY or not tile.has("source_company_id"): continue
+		if not _valid_int(tile.get("type_and_idx"),6001,7999) or not _valid_int(tile.get("source_company_id"),1,1999) or int(tile.type_and_idx) != 6000+int(tile.source_company_id):
+			errors.append("company metadata does not match board node")
+	var used_stocks: Dictionary = {}
+	for company in companies:
+		if typeof(company) != TYPE_DICTIONARY:
+			errors.append("invalid company record")
+			continue
+		if not _valid_int(company.get("id"), 1, 1999) or not _valid_int(company.get("stock_index"), 0, 11):
+			errors.append("invalid company identity")
+			continue
+		var company_id := int(company.id)
+		var stock_index := int(company.stock_index)
+		if used_stocks.has(stock_index): errors.append("duplicate company stock link")
+		used_stocks[stock_index] = true
+		if typeof(company.get("display_name")) != TYPE_STRING or str(company.get("display_name", "")).is_empty() or str(company.get("display_name", "")).length() > 128:
+			errors.append("invalid company name")
+		if not _valid_int(company.get("company_type"), 0, 255) or not _valid_int(company.get("stock_value"), 0, 4294967295) or not _valid_int(company.get("toll_fee"), 0, 65535):
+			errors.append("invalid company price or type")
+		for key in ["monthly_profit", "cumulative_profit"]:
+			if not _valid_int(company.get(key), -1000000000000, 1000000000000): errors.append("invalid company earnings")
+		if not _valid_int(company.get("treasury"), 0, 10000) or not _valid_int(company.get("owner"), -1, players.size()-1):
+			errors.append("invalid company ownership")
+		var referenced := false
+		for tile in board:
+			if typeof(tile) == TYPE_DICTIONARY and _valid_int(tile.get("type_and_idx"), 0, 65535) and int(tile.type_and_idx) == 6000 + company_id:
+				referenced = true
+				if tile.has("source_company_id") and not _valid_int(tile.source_company_id, company_id, company_id): errors.append("company node link mismatch")
+		if not referenced: errors.append("unreferenced company")
+		var maximum := 0
+		var candidates: Array = []
+		var stock_symbol := OriginalStockMarket.symbol(stock_index)
+		for player in players:
+			if typeof(player) != TYPE_DICTIONARY or typeof(player.get("stocks")) != TYPE_DICTIONARY or not _valid_int(player.get("id"),0,players.size()-1): continue
+			var shares: Variant = player.stocks.get(stock_symbol)
+			if not _valid_int(shares, 0, 10000) or not bool(player.get("alive", false)): continue
+			if int(shares) > maximum:
+				maximum = int(shares)
+				candidates = [int(player.id)]
+			elif int(shares) == maximum and maximum > 0: candidates.append(int(player.id))
+		if _valid_int(company.get("owner"), -1, players.size()-1):
+			if (candidates.is_empty() and int(company.owner) != -1) or (not candidates.is_empty() and not candidates.has(int(company.owner))): errors.append("company largest-holder mismatch")
+	return errors
+
+func _company_by_id(company_id: int) -> Dictionary:
+	for company in state.get("companies", []):
+		if int(company.get("id", 0)) == company_id: return company
+	return {}
+
+
+func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
+	var company := get_company_at(int(tile.get("index", -1)))
+	if company.is_empty(): return
+	var player := _player(player_id)
+	if _is_gods_hospital_action(player): return
+	var owner := int(company.get("owner", -1))
+	var company_type := int(company.company_type)
+	var base := 0
+	var insurance_days := 0
+	var insurance_rng_before := _rng.state
+	var supported := company_type in [3, 4, 5, 6, 11, 12]
+	if company_type == 11 and owner >= 0:
+		if not get_company_upgrade_targets(player_id).is_empty():
+			if _company_payable_upgrade_targets(player_id, company).is_empty():
+				_record_event("company_service_unavailable", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"reason":"earnings_limit"})
+				return
+			state.company_service_pending = int(company.id)
+		elif owner != player_id:
+			base = 1000 * _facility_price_index()
+	if company_type == 4 and owner >= 0:
+		insurance_days = _roll_company_insurance_days()
+		if owner != player_id: base = insurance_days * int(company.toll_fee) * _facility_price_index()
+	if owner >= 0 and owner != player_id:
+		match company_type:
+			3:
+				base = int(company.toll_fee) * int(state.get("elapsed", 0))
+			5, 6:
+				var vehicle := str(player.get("vehicle", "walking"))
+				if vehicle != "walking":
+					base = (700 if company_type == 5 else 500) * int(state.get("last_roll_total", 0)) * _facility_price_index() * (2 if vehicle == "car" else 1)
+			12:
+				base = int(company.toll_fee) * int(state.get("last_roll_total", 0)) * _facility_price_index()
+	var amount := _god_charge_amount_value(player_id, base, "company")
+	var payable := mini(amount, int(player.cash)+int(player.deposit))
+	if payable>0 and (int(company.monthly_profit)>1000000000000-payable or int(company.cumulative_profit)>1000000000000-payable):
+		if insurance_days>0: _rng.state=insurance_rng_before
+		_record_event("company_service_unavailable", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"reason":"earnings_limit"})
+		return
+	_record_event("company_visited", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"company_type":company_type,"owner_id":owner,"base_fee":base,"service_supported":supported})
+	if insurance_days>0: _grant_company_insurance(player_id, company, insurance_days)
+	if base > 0:
+		amount = _god_adjust_charge_amount(player_id, base, "company")
+		if amount <= 0:
+			_record_event("god_charge_waived", {"player_id":player_id,"god_id":_player_god_id(player_id),"reason":"company","amount":base})
+			return
+		# Negative IDs below -1 identify a corporate creditor. The generic
+		# cash/deposit/bankruptcy path then credits only actual payments.
+		_charge_amount(player_id, amount, -int(company.id)-2, "company", false)
+
+
+static func _company_upgrade_target_ids(board: Array, player_id: int) -> Array:
+	var targets: Array = []
+	var seen_facilities: Dictionary = {}
+	for tile in board:
+		if typeof(tile) != TYPE_DICTIONARY or not _valid_int(tile.get("owner"), player_id, player_id) or not _valid_int(tile.get("index"),0,board.size()-1): continue
+		var kind := str(tile.get("kind", ""))
+		var level: Variant = tile.get("building_level")
+		if kind == "property" and _valid_int(level, 0, MAX_PROPERTY_LEVEL-1):
+			targets.append(int(tile.index))
+		elif kind == "facility" and _valid_int(level, 0, 5):
+			var facility_type: Variant = tile.get("facility_type")
+			if not _valid_int(facility_type, 0, FACILITY_LAB_TYPE-1): continue
+			if int(level) > 0 and int(level) >= _facility_type_cap(int(facility_type)): continue
+			if not _valid_int(tile.get("source_object_id"),1,1999) or not _valid_int(tile.get("facility_node_index",tile.index),0,board.size()-1): continue
+			var source_id := int(tile.get("source_object_id", 0))
+			if seen_facilities.has(source_id): continue
+			seen_facilities[source_id] = true
+			targets.append(int(tile.get("facility_node_index", tile.index)))
+	return targets
+
+
+func get_company_upgrade_targets(player_id: int) -> Array:
+	if not _is_companies() or not bool(_player(player_id).get("alive", false)): return []
+	return _company_upgrade_target_ids(state.board, player_id)
+
+
+func get_company_upgrade_fee(player_id: int, tile_id: int, company_owner_id: int) -> int:
+	if company_owner_id == player_id: return 0
+	var tile := _tile_at(tile_id)
+	return _god_charge_amount_value(player_id, int(tile.get("land_price", tile.get("cost", 0))) * _facility_price_index(), "company")
+
+
+func _company_payable_upgrade_targets(player_id: int, company: Dictionary) -> Array:
+	var targets: Array = []
+	var funds := int(_player(player_id).cash)+int(_player(player_id).deposit)
+	for tile_id in get_company_upgrade_targets(player_id):
+		var payable := mini(get_company_upgrade_fee(player_id, int(tile_id), int(company.owner)), funds)
+		if int(company.monthly_profit)<=1000000000000-payable and int(company.cumulative_profit)<=1000000000000-payable:
+			targets.append(tile_id)
+	return targets
+
+
+func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
+	var company := get_company_at(int(_player(player_id).get("position", -1)))
+	if company.is_empty() or int(company.company_type) != 11 or int(state.company_service_pending) != int(company.id):
+		return _error("目前沒有待處理的建設服務")
+	var target_value: Variant = params.get("tile_id")
+	if not _valid_int(target_value,0,state.board.size()-1) or not get_company_upgrade_targets(player_id).has(int(target_value)):
+		return _error("請選擇自己尚未達最高等級的土地或設施")
+	var tile := _tile_at(int(target_value))
+	var level := int(tile.building_level)
+	var kind := str(tile.kind)
+	var cap := MAX_PROPERTY_LEVEL
+	var facility_type := -1
+	if kind == "facility":
+		facility_type = int(tile.facility_type)
+		if level == 0:
+			var requested_type: Variant = params.get("facility_type")
+			if not _valid_int(requested_type,0,FACILITY_LAB_TYPE-1): return _error("請選擇有效的設施類型")
+			facility_type = int(requested_type)
+		cap = _facility_type_cap(facility_type)
+	var free_service := int(company.owner) == player_id
+	var amount := 0 if free_service else int(tile.get("land_price", tile.get("cost", 0))) * _facility_price_index()
+	var payable := mini(get_company_upgrade_fee(player_id, int(target_value), int(company.owner)), int(_player(player_id).cash)+int(_player(player_id).deposit))
+	if int(company.monthly_profit)>1000000000000-payable or int(company.cumulative_profit)>1000000000000-payable:
+		return _error("企業收益已達可處理上限")
+	var next_level := mini(cap,level+(2 if free_service else 1))
+	if kind == "facility":
+		_update_facility_records(int(tile.source_object_id), {"building_level":next_level,"facility_type":facility_type})
+	else:
+		tile.building_level = next_level
+		_update_tile_rent(tile)
+	_recalculate_property_values()
+	state.company_service_pending = 0
+	_record_event("company_construction", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"tile_id":int(target_value),"from_level":level,"to_level":next_level,"base_fee":amount})
+	if amount>0: _charge_amount(player_id,amount,-int(company.id)-2,"company")
+	if not bool(_player(player_id).alive) and state.phase != "game_over" and int(state.current_player) == player_id:
+		_advance_to_next_alive(player_id)
+	_set_action_options(int(state.current_player))
+	return _result(true,"企業建設服務完成")
+
+
+func _tick_company_insurance() -> void:
+	if not _is_companies(): return
+	for player in _players():
+		var status := int(player.get("insurance_status", 0))
+		player.insurance_status = 0 if status == 128 else 128 if status == 1 else maxi(0, status - 1)
+
+
+func _roll_company_insurance_days() -> int:
+	# Source mode-3 roulette has six equally likely nonblank outcomes. The
+	# replayable remake RNG does not attempt the original wall-clock trace.
+	var outcomes: Array = [5, 3, 30, 20, 15, 10]
+	return int(outcomes[_rng.randi_range(0, outcomes.size()-1)])
+
+
+func _grant_company_insurance(player_id: int, company: Dictionary, days: int) -> void:
+	var player := _player(player_id)
+	player.insurance_status = (int(player.get("insurance_status", 0)) + days) & 0x7f
+	_record_event("company_insurance_granted", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"days":days,"insurance_status":int(player.insurance_status)})
+
+
+func _pay_company_insurance(player_id: int, added_days: int) -> void:
+	if not _is_companies() or added_days <= 0: return
+	var player := _player(player_id)
+	if player.is_empty() or int(player.get("insurance_status", 0)) == 0: return
+	var insurer: Dictionary = {}
+	for company in state.companies:
+		if int(company.company_type) == 4:
+			insurer = company
+			break
+	if insurer.is_empty(): return
+	var amount := 2000 * added_days * _facility_price_index()
+	if int(player.cash) > 1000000000000-amount or int(insurer.monthly_profit) < -1000000000000+amount or int(insurer.cumulative_profit) < -1000000000000+amount:
+		_record_event("company_service_unavailable", {"company_id":int(insurer.id),"reason":"earnings_limit"})
+		return
+	player.cash = int(player.cash) + amount
+	insurer.monthly_profit = int(insurer.monthly_profit) - amount
+	insurer.cumulative_profit = int(insurer.cumulative_profit) - amount
+	_record_event("company_insurance_paid", {"player_id":player_id,"company_id":int(insurer.id),"company_name":str(insurer.display_name),"days":added_days,"amount":amount})
+
+
+func _settle_company_dividends() -> void:
+	if not _is_companies() or int(state.get("day_of_month", 0)) != 15: return
+	var payouts: Dictionary = {}
+	var settlements: Array = []
+	for player in _players():
+		if bool(player.get("alive", false)): payouts[int(player.id)] = 0
+	for company in state.companies:
+		var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
+		var total_shares := 0
+		for player_id in payouts:
+			total_shares += int(_player(int(player_id)).stocks[stock_symbol])
+		if total_shares == 0: continue
+		var pool := int(company.monthly_profit)
+		var distributed := 0
+		for player_id in payouts:
+			var shares := int(_player(int(player_id)).stocks[stock_symbol])
+			# Integer division truncates toward zero for positive and negative pools.
+			var payout: int = pool * shares / total_shares
+			payouts[player_id] = int(payouts[player_id]) + payout
+			distributed += payout
+		settlements.append({"company":company,"pool":pool,"distributed":distributed})
+	var projected_bank_deposits := int(state.bank.deposits)
+	for player_id in payouts:
+		var old_deposit := int(_player(int(player_id)).deposit)
+		var new_deposit := maxi(0,old_deposit+int(payouts[player_id]))
+		projected_bank_deposits += new_deposit-old_deposit
+		if new_deposit>1000000000000:
+			_record_event("company_dividend_unavailable", {"reason":"balance_limit"})
+			return
+	if projected_bank_deposits>1000000000000:
+		_record_event("company_dividend_unavailable", {"reason":"balance_limit"})
+		return
+	_settling_company_dividends = true
+	for settlement in settlements:
+		var company: Dictionary = settlement.company
+		company.monthly_profit = 0
+		_record_event("company_dividend", {"company_id":int(company.id),"company_name":str(company.display_name),"pool":int(settlement.pool),"distributed":int(settlement.distributed),"rounding_remainder":int(settlement.pool)-int(settlement.distributed)})
+	for player_id in payouts:
+		var player := _player(int(player_id))
+		var payout := int(payouts[player_id])
+		var old_deposit := int(player.deposit)
+		var new_deposit := old_deposit + payout
+		player.deposit = maxi(0, new_deposit)
+		state.bank.deposits = int(state.bank.deposits) + int(player.deposit) - old_deposit
+		if new_deposit < 0:
+			var loss := -new_deposit
+			var cash := int(player.cash)
+			player.cash = maxi(0, cash-loss)
+			if cash < loss: _declare_bankruptcy(int(player_id), -1, loss, "company_dividend")
+		_record_event("company_dividend_paid", {"player_id":int(player_id),"amount":payout})
+	_update_company_owners()
+	_settling_company_dividends = false
+	_check_game_over("company_dividend")
 
 func _initialize_original_gods() -> void:
 	if not _is_gods() or not _is_graph():
@@ -747,7 +1198,9 @@ func _encounter_dog(player_id: int, node_id: int) -> bool:
 	_record_event("dog_encounter", {"player_id": player_id, "node": node_id, "vehicle": vehicle, "hospital_days": 3 if vehicle == "walking" else 0})
 	if vehicle == "walking":
 		var player: Dictionary = _player(player_id)
-		player["hospital_days"] = max(int(player.get("hospital_days", 0)), 3)
+		var old_hospital_days := int(player.get("hospital_days", 0))
+		player["hospital_days"] = max(old_hospital_days, 3)
+		_pay_company_insurance(player_id, int(player["hospital_days"]) - old_hospital_days)
 		_record_event("hospital_started", {"player_id": player_id, "hospital_days": int(player["hospital_days"])})
 	_god_pair_respawn(11, dog_node)
 	return vehicle == "walking"
@@ -990,14 +1443,14 @@ func _sync_state() -> void:
 		else:
 			state["elapsed"] = elapsed
 		var market: Dictionary = state.get("market", {})
-		market["open"] = not _is_sunday()
+		market["open"] = not _is_sunday() and (not _is_companies() or int(market.get("closed_days", 0)) == 0)
 		state["market"] = market
 		return
 	state["day_of_month"] = ((day - 1) % DAYS_PER_MONTH) + 1
 	state["month"] = ((day - 1) / DAYS_PER_MONTH) + 1
 	state["weekday"] = ((day - 1) % 7) + 1
 	var market: Dictionary = state.get("market", {})
-	market["open"] = not _is_sunday()
+	market["open"] = not _is_sunday() and (not _is_companies() or int(market.get("closed_days", 0)) == 0)
 	state["market"] = market
 
 
@@ -1082,10 +1535,11 @@ func _set_action_options(player_id: int) -> void:
 		state["action_options"] = options
 		return
 	var bank_open: bool = not _is_sunday()
+	var stock_open: bool = bank_open and (not _is_companies() or bool(state.get("market", {}).get("open", false)))
 	var hospitalized: bool = _is_gods_hospital_action(player)
-	if bank_open:
+	if stock_open:
 		options.push_front("sell_stock")
-		if int(player.get("cash", 0)) >= 10:
+		if int(player.get("deposit" if _is_companies() else "cash", 0)) >= (1 if _is_companies() else 10):
 			options.push_front("buy_stock")
 	if phase != "await_action":
 		if _is_inventory() and phase == "await_roll":
@@ -1102,6 +1556,13 @@ func _set_action_options(player_id: int) -> void:
 		state["action_options"] = options
 		return
 	options.push_back("end_turn")
+	if _is_companies() and int(state.get("company_service_pending",0))>0:
+		state["action_options"] = ["company_upgrade"]
+		return
+	if _is_companies() and not hospitalized:
+		var company: Dictionary = get_company_at(int(player.get("position", -1)))
+		if not company.is_empty() and int(company.get("treasury", 0)) > 0 and int(state.get("company_purchase_remaining", 0)) > 0 and int(company.get("stock_value", 0)) >= 10000:
+			options.push_front("buy_company")
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if not hospitalized and _is_inventory() and _is_graph() and int(tile.get("event_code", -1)) == 15:
 		options.push_front("sell_item")
@@ -1135,9 +1596,9 @@ func _set_action_options(player_id: int) -> void:
 			options.push_front("deposit")
 		if int(player.get("deposit", 0)) > 0:
 			options.push_front("withdraw")
-	if bank_open:
+	if stock_open:
 		options.push_front("sell_stock")
-		if int(player.get("cash", 0)) >= 10:
+		if int(player.get("deposit" if _is_companies() else "cash", 0)) >= (1 if _is_companies() else 10):
 			options.push_front("buy_stock")
 		if not hospitalized and not _is_inventory():
 			var vehicles: Dictionary = player.get("vehicles", {})
@@ -2065,6 +2526,11 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 	if tile.is_empty():
 		return
 	var tile_index: int = int(tile.get("index", -1))
+	if _is_companies() and not get_company_at(tile_index).is_empty():
+		if final_landing:
+			_resolve_company_visit(player_id, tile)
+		if not bool(_player(player_id).get("alive", false)) or tile.get("kind", "") == "unsupported":
+			return
 	match str(tile.get("kind", "rest")):
 		"property":
 			if final_landing:
@@ -2351,8 +2817,8 @@ func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 	_charge_amount(debtor_id, adjusted_amount, creditor_id, "rent", false)
 
 
-func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> int:
-	if amount <= 0 or not _is_gods() or not ["rent", "facility"].has(reason):
+func _god_charge_amount_value(debtor_id: int, amount: int, reason: String) -> int:
+	if amount <= 0 or not _is_gods() or (not ["rent", "facility"].has(reason) and not (_is_companies() and reason == "company")):
 		return amount
 	var adjusted_amount: int = amount
 	match _player_god_id(debtor_id):
@@ -2364,6 +2830,11 @@ func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> i
 			adjusted_amount += int(floor(float(amount) / 2.0))
 		6:
 			adjusted_amount *= 2
+	return adjusted_amount
+
+
+func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> int:
+	var adjusted_amount := _god_charge_amount_value(debtor_id, amount, reason)
 	if adjusted_amount != amount:
 		_record_event("god_charge_modifier", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "from_amount": amount, "to_amount": adjusted_amount})
 	return adjusted_amount
@@ -2406,6 +2877,12 @@ func _pay_from_player(player_id: int, amount: int, creditor_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	var paid: int = min(amount, int(player.get("cash", 0)))
 	player["cash"] = int(player.get("cash", 0)) - paid
+	if _is_companies() and creditor_id <= -2:
+		var company := _company_by_id(-creditor_id-2)
+		if not company.is_empty():
+			company.monthly_profit = int(company.monthly_profit) + paid
+			company.cumulative_profit = int(company.cumulative_profit) + paid
+			return
 	if creditor_id >= 0 and _valid_player(creditor_id, true):
 		var creditor: Dictionary = _player(creditor_id)
 		creditor["cash"] = int(creditor.get("cash", 0)) + paid
@@ -2464,7 +2941,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# A landing or route charge advances immediately so a non-final bankruptcy
 	# cannot leave a dead player as the current actor. Loan-debt bankruptcy from
 	# end_turn is advanced by that caller after its final bookkeeping instead.
-	if was_current_movement and state.get("phase", "") != "game_over":
+	if was_current_movement and not _settling_company_dividends and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
 
 
@@ -2517,10 +2994,21 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 			transferred_receiver["properties"] = transferred_properties
 		_record_event("auction_property", {"auction_id": auction_id, "property_id": canonical_property_id, "winner": transfer_to})
 	debtor["properties"] = []
-	debtor["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
-	if transfer_to >= 0:
+	if _is_companies():
+		debtor["stocks"] = {}
+		for stock_symbol in get_stock_symbols():
+			var quantity := int(stock_holdings.get(stock_symbol, 0))
+			var row: Dictionary = state.market.rows[stock_symbol]
+			row.market_supply = int(row.market_supply) + quantity
+			row.turn_supply = int(row.turn_supply) + quantity
+			state.jackpot = int(state.jackpot) + OriginalStockMarket.quote(float(row.price), quantity)
+			debtor.stocks[stock_symbol] = 0
+		_update_company_owners()
+	else:
+		debtor["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
+	if transfer_to >= 0 and not _is_companies():
 		var receiver_stocks: Dictionary = _player(transfer_to).get("stocks", {})
-		for symbol in STOCK_SYMBOLS:
+		for symbol in get_stock_symbols():
 			receiver_stocks[symbol] = int(receiver_stocks.get(symbol, 0)) + int(stock_holdings.get(symbol, 0))
 		_player(transfer_to)["stocks"] = receiver_stocks
 	# The reference resolves this as an auction. Until bidding is implemented,
@@ -2538,6 +3026,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if _is_companies() and int(state.get("company_service_pending",0))>0 and normalized != "company_upgrade":
+		return _error("請先選擇企業建設目標")
 	if normalized == "set_vehicle":
 		if _is_inventory():
 			var pending_remote: Variant = state.get("pending_remote_dice", {})
@@ -2563,6 +3053,10 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	if not allowed_options.has(normalized):
 		return _error("目前位置不能執行此行動")
 	match normalized:
+		"company_upgrade":
+			return _company_upgrade(player_id,params)
+		"buy_company":
+			return _buy_company_stock(player_id, params)
 		"buy":
 			return _buy_property(player_id, params)
 		"build_facility":
@@ -2971,6 +3465,8 @@ func _take_loan(player_id: int, amount: int) -> Dictionary:
 
 
 func _trade_stock(action: String, params: Dictionary) -> Dictionary:
+	if _is_companies():
+		return _trade_company_market(action, params)
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if _is_sunday():
@@ -2981,7 +3477,7 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 		return _error("目前玩家無法交易")
 	var symbol: String = str(params.get("symbol", params.get("stock", ""))).to_lower()
 	var quantity: int = int(params.get("quantity", params.get("shares", 0)))
-	if not STOCK_SYMBOLS.has(symbol) or quantity <= 0:
+	if not get_stock_symbols().has(symbol) or quantity <= 0:
 		return _error("股票代號或數量無效")
 	var market: Dictionary = state.get("market", {})
 	var prices: Dictionary = market.get("prices", {})
@@ -3203,8 +3699,10 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 	if card_id == "轉向" and not _is_graph():
 		return _error("轉向卡只能在圖形地圖使用")
 	if card_id == "紅" or card_id == "黑":
-		if not STOCK_SYMBOLS.has(symbol):
+		if not get_stock_symbols().has(symbol):
 			return _error("紅／黑卡需要指定股票代號")
+		if _is_companies() and not bool(state.market.open):
+			return _error("證券市場休市，無法使用紅／黑卡")
 	if _is_inventory():
 		var consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
 		if not bool(consume_result.get("ok", false)):
@@ -3266,11 +3764,14 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "reverse_direction", "from_previous_position": old_previous_node, "to_previous_position": selected_previous, "candidates": turn_candidates})
 	elif card_id == "紅" or card_id == "黑":
 		var market: Dictionary = state.get("market", {})
-		var trends: Dictionary = market.get("trends", {})
-		trends[symbol] = {"direction": "up" if card_id == "紅" else "down", "days": 3, "rate": 0.10}
-		market["trends"] = trends
+		if _is_companies():
+			OriginalStockMarket.apply_card(market, symbol, card_id == "紅")
+		else:
+			var trends: Dictionary = market.get("trends", {})
+			trends[symbol] = {"direction": "up" if card_id == "紅" else "down", "days": 3, "rate": 0.10}
+			market["trends"] = trends
 		state["market"] = market
-		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "symbol": symbol, "effect": "stock_up" if card_id == "紅" else "stock_down", "days": 3})
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "symbol": symbol, "effect": "stock_up" if card_id == "紅" else "stock_down", "days": 2 if _is_companies() else 3})
 	else:
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "effect": "provisional_unknown"})
 	_set_action_options(player_id)
@@ -3344,6 +3845,8 @@ func _grant_card(player_id: int, card_id: String) -> Dictionary:
 func end_turn() -> Dictionary:
 	if not _require_phase("await_action"):
 		return _error("目前不是結束回合階段")
+	if _is_companies() and int(state.get("company_service_pending",0))>0:
+		return _error("請先選擇企業建設目標")
 	var player_id: int = int(state.get("current_player", -1))
 	var player: Dictionary = _player(player_id)
 	if bool(player.get("alive", false)):
@@ -3391,6 +3894,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 		state["round"] = int(state.get("round", 1)) + 1
 		state["day"] = int(state.get("day", 1)) + 1
 		_tick_gods()
+		_tick_company_insurance()
 		# Facility temporary states decay once per complete player cycle. This is
 		# deliberately outside the setup/non-setup branches so a wrapped round
 		# cannot decrement the same source record twice.
@@ -3402,9 +3906,15 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			_sync_state()
 			if _check_setup_end_conditions():
 				return
+			if _is_companies():
+				_decrement_market_trends()
 			_tick_market()
-			_decrement_market_trends()
+			if not _is_companies():
+				_decrement_market_trends()
+			_settle_company_dividends()
 			_apply_month_boundary()
+			if state.get("phase", "") == "game_over":
+				return
 		else:
 			var market: Dictionary = state.get("market", {})
 			var trends: Dictionary = market.get("trends", {})
@@ -3418,6 +3928,12 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			market["trends"] = trends
 			state["market"] = market
 			_apply_month_boundary()
+	if _is_companies() and not bool(_player(next_id).get("alive", false)):
+		for offset in range(1, players.size()+1):
+			var candidate := (previous_id+offset) % players.size()
+			if bool(_player(candidate).get("alive", false)):
+				next_id = candidate
+				break
 	if not (_is_setup() and wraps):
 		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
@@ -3426,6 +3942,10 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	state["last_total"] = 0
 	if _is_facilities():
 		state["last_roll_total"] = 0
+	if _is_companies():
+		state["company_purchase_remaining"] = 1000
+		state["company_service_pending"] = 0
+		OriginalStockMarket.reset_turn_supply(state.market, _rng)
 	_set_action_options(next_id)
 	_record_event("turn_started", {"player_id": next_id, "day": int(state["day"])})
 
@@ -3445,6 +3965,7 @@ func _apply_month_boundary() -> void:
 		if not last_settled_month.is_empty() and int(last_settled_month.get("year", -1)) == int(previous_date["year"]) and int(last_settled_month.get("month", -1)) == int(previous_date["month"]):
 			return
 		_apply_deposit_interest()
+		if _is_companies(): state.company_months = int(state.company_months) + 1
 		state["last_settled_month"] = {"year": int(previous_date["year"]), "month": int(previous_date["month"])}
 		_record_event("month_end_settlement", {"month": int(previous_date["month"]), "year": int(previous_date["year"])})
 		return
@@ -3506,13 +4027,20 @@ func _repay_due_loan(player_id: int) -> void:
 
 
 func _tick_market() -> void:
+	if _is_companies():
+		var company_prices: Dictionary = {}
+		for company in state.get("companies", []):
+			company_prices[int(company.id)] = int(company.stock_value) / 10000
+		OriginalStockMarket.tick(state.market, company_prices, _rng)
+		_record_event("market_tick", {"prices": state.market.prices.duplicate(true)})
+		return
 	if _is_sunday():
 		return
 	var market: Dictionary = state.get("market", {})
 	var prices: Dictionary = market.get("prices", {})
 	var trends: Dictionary = market.get("trends", {})
-	for symbol in STOCK_SYMBOLS:
-		var old_price: int = int(prices.get(symbol, STOCK_BASE_PRICES[symbol]))
+	for symbol in get_stock_symbols():
+		var old_price: int = int(prices.get(symbol, STOCK_BASE_PRICES.get(symbol, 0)))
 		var delta: int = _rng.randi_range(-10, 10)
 		var trend: Dictionary = trends.get(symbol, {})
 		if int(trend.get("days", 0)) > 0:
@@ -3524,6 +4052,10 @@ func _tick_market() -> void:
 
 
 func _decrement_market_trends() -> void:
+	if _is_companies():
+		OriginalStockMarket.decrement_status(state.market)
+		_sync_state()
+		return
 	var market: Dictionary = state.get("market", {})
 	var trends: Dictionary = market.get("trends", {})
 	for symbol in trends.keys():
@@ -3597,10 +4129,10 @@ func _player_wealth(player_id: int) -> int:
 	var wealth: int = int(player.get("cash", 0)) + int(player.get("deposit", 0)) - int(player.get("loan", 0))
 	var prices: Dictionary = state.get("market", {}).get("prices", {})
 	var stocks: Dictionary = player.get("stocks", {})
-	for symbol in STOCK_SYMBOLS:
+	for symbol in get_stock_symbols():
 		# The original routine truncates the per-share market value to an
 		# integer, which is already represented by integer prices in this state.
-		wealth += int(stocks.get(symbol, 0)) * int(prices.get(symbol, STOCK_BASE_PRICES[symbol]))
+		wealth += int(stocks.get(symbol, 0)) * int(prices.get(symbol, STOCK_BASE_PRICES.get(symbol, 0)))
 	var seen_assets: Dictionary = {}
 	for property_id in player.get("properties", []):
 		var tile: Dictionary = _tile_at(int(property_id))
@@ -3682,8 +4214,8 @@ func _check_setup_end_conditions(calendar_boundary: bool = false) -> bool:
 	return true
 
 
-func _check_game_over() -> void:
-	if state.get("phase", "") == "game_over":
+func _check_game_over(reason: String = "") -> void:
+	if _settling_company_dividends or state.get("phase", "") == "game_over":
 		return
 	var alive_ids: Array = []
 	for player in _players():
@@ -3693,7 +4225,10 @@ func _check_game_over() -> void:
 		state["winner"] = alive_ids[0] if alive_ids.size() == 1 else -1
 		state["phase"] = "game_over"
 		state["action_options"] = []
-		_record_event("game_over", {"winner": int(state["winner"])})
+		var result_event := {"winner": int(state["winner"])}
+		if _is_companies() and alive_ids.is_empty() and reason == "company_dividend":
+			result_event["reason"] = "company_dividend_no_survivors"
+		_record_event("game_over", result_event)
 
 
 func run_ai_turn() -> Dictionary:
@@ -3754,6 +4289,19 @@ func run_ai_turn() -> Dictionary:
 
 func _ai_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
+	if _is_companies() and int(state.get("company_service_pending",0))>0:
+		var targets := _company_payable_upgrade_targets(player_id, get_company_at(int(player.get("position", -1))))
+		var selected := -1
+		var highest_value := -1
+		for target in targets:
+			var target_tile := _tile_at(int(target))
+			var target_value := inventory_purchase_price(target_tile)
+			if target_value>highest_value:
+				highest_value=target_value
+				selected=int(target)
+		if selected>=0:
+			choose_action("company_upgrade",{"tile_id":selected,"facility_type":1})
+			return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":
 		var owner: int = int(tile.get("owner", -1))
@@ -3791,16 +4339,24 @@ func _ai_action(player_id: int) -> void:
 					var facility_upgrade_result: Dictionary = choose_action("upgrade")
 					if bool(facility_upgrade_result.get("ok", false)):
 						return
+	if _is_companies() and not _is_gods_hospital_action(player):
+		var company := get_company_at(int(player.get("position", -1)))
+		if not company.is_empty():
+			var face_price := int(company.stock_value) / 10000
+			if face_price > 0:
+				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
+				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
 		choose_action("deposit", {"amount": int(player.get("cash", 0)) / 4})
 		return
-	if not _is_sunday() and int(player.get("cash", 0)) >= 3000:
+	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
-		var symbol: String = STOCK_SYMBOLS[player_id % STOCK_SYMBOLS.size()]
+		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]
 		var price: int = int(prices.get(symbol, 100))
 		if price > 0:
-			choose_action("buy_stock", {"symbol": symbol, "quantity": 1})
-			return
+			var stock_result: Dictionary = choose_action("buy_stock", {"symbol": symbol, "quantity": 1})
+			if not _is_companies() or bool(stock_result.get("ok", false)):
+				return
 	if player.get("cards", []).size() > 0:
 		if _is_inventory():
 			for card_value in player["cards"]:
@@ -3838,7 +4394,9 @@ func _ai_action(player_id: int) -> void:
 					else:
 						continue
 				elif card_id == "紅" or card_id == "黑":
-					inventory_card_params["symbol"] = STOCK_SYMBOLS[player_id % STOCK_SYMBOLS.size()]
+					inventory_card_params["symbol"] = get_stock_symbols()[player_id % get_stock_symbols().size()]
+					if _is_companies() and (not bool(state.market.open) or int(state.market.rows[inventory_card_params.symbol].suspension)>0):
+						continue
 				var inventory_card_result: Dictionary = choose_action("use_card", inventory_card_params)
 				if bool(inventory_card_result.get("ok", false)):
 					return
@@ -3848,7 +4406,7 @@ func _ai_action(player_id: int) -> void:
 			if card_id == "停留" or card_id == "烏龜":
 				card_params["target_id"] = player_id
 			elif card_id == "紅" or card_id == "黑":
-				card_params["symbol"] = STOCK_SYMBOLS[player_id % STOCK_SYMBOLS.size()]
+				card_params["symbol"] = get_stock_symbols()[player_id % get_stock_symbols().size()]
 			choose_action("use_card", card_params)
 			return
 	end_turn()
@@ -4404,7 +4962,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var gods_save: bool = _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
+	var companies_save: bool = _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
+	var stock_symbols: Array = OriginalStockMarket.symbols() if companies_save else STOCK_SYMBOLS
+	var gods_save: bool = companies_save or _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
 	var facility_save: bool = gods_save or _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
 	var inventory_save: bool = _valid_int(version_marker, INVENTORY_SAVE_VERSION, INVENTORY_SAVE_VERSION) or facility_save
 	var setup_save: bool = _valid_int(version_marker, SETUP_SAVE_VERSION, SETUP_SAVE_VERSION) or inventory_save
@@ -4429,11 +4989,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		required_top.append_array(["original_facilities", "price_index", "last_roll_total"])
 	if gods_save:
 		required_top.append_array(["original_gods", "god_objects"])
+	if companies_save:
+		required_top.append_array(["original_companies", "companies", "company_purchase_remaining", "jackpot", "company_months", "company_service_pending"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if facility_save:
@@ -4452,6 +5014,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("gods marker requires facilities")
 	elif data.has("original_gods") and typeof(data.get("original_gods")) == TYPE_BOOL and bool(data.get("original_gods")):
 		errors.append("gods marker requires v6 save")
+	if companies_save:
+		if typeof(data.get("original_companies")) != TYPE_BOOL or not data.get("original_companies", false):
+			errors.append("invalid original companies marker")
+		if not _valid_int(data.get("company_purchase_remaining"), 0, 1000) or not _valid_int(data.get("jackpot"), 0, 1000000000000) or not _valid_int(data.get("company_months"), 0, 100000):
+			errors.append("invalid company turn state")
+	elif data.get("original_companies", false) == true:
+		errors.append("company marker requires v7 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)
@@ -4653,6 +5222,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
 	if facility_save:
 		known_actions.append("build_facility")
+	if companies_save:
+		known_actions.append_array(["buy_company", "company_upgrade"])
 	if inventory_save:
 		known_actions.append_array(["buy_item", "sell_item", "use_tool"])
 	if typeof(action_options) != TYPE_ARRAY:
@@ -4673,7 +5244,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("pending remote dice has unavailable action")
 			if inventory_save and phase_name == "await_roll" and saved_current_movement_blocked and option == "use_tool":
 				errors.append("movement modifier has unavailable tool action")
-		if phase_name == "await_action" and not action_options.has("end_turn"):
+		if phase_name == "await_action" and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
 			errors.append("await_action missing end_turn")
 		if phase_name in ["await_roll", "await_route"]:
 			var non_action_phase_options: Array = ["buy_stock", "sell_stock"]
@@ -4703,15 +5274,15 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if typeof(prices) != TYPE_DICTIONARY:
 			errors.append("missing market prices")
 		else:
-			for symbol in STOCK_SYMBOLS:
-				if not _valid_int(prices.get(symbol, null), 1, 1000000000):
+			for symbol in stock_symbols:
+				if not companies_save and not _valid_int(prices.get(symbol, null), 1, 1000000000):
 					errors.append("invalid market price %s" % symbol)
 		var trends: Variant = market.get("trends", null)
 		if typeof(trends) != TYPE_DICTIONARY:
 			errors.append("missing market trends")
 		else:
 			for symbol in trends.keys():
-				if not STOCK_SYMBOLS.has(symbol) or typeof(trends[symbol]) != TYPE_DICTIONARY:
+				if not stock_symbols.has(symbol) or typeof(trends[symbol]) != TYPE_DICTIONARY:
 					errors.append("invalid market trend")
 					continue
 				var trend: Dictionary = trends[symbol]
@@ -4722,6 +5293,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("invalid market trend rate")
 		if setup_save and typeof(market.get("open", null)) == TYPE_BOOL and _valid_setup_date(data.get("date", null)):
 			var expected_market_open: bool = GameCalendar.weekday(data["date"]) != 7
+			if companies_save and _valid_int(market.get("closed_days"), 0, 255):
+				expected_market_open = expected_market_open and int(market.closed_days) == 0
 			if bool(market["open"]) != expected_market_open:
 				errors.append("market open mismatch")
 
@@ -5028,6 +5601,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				required_player.append("points")
 			if inventory_save:
 				required_player.append("tools")
+			if companies_save:
+				required_player.append("insurance_status")
 			if gods_save:
 				required_player.append_array(["god_id", "hospital_days"])
 			if setup_save:
@@ -5060,6 +5635,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
 				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
 					errors.append("player %d %s invalid" % [index, counter_key])
+			if companies_save and not _valid_int(player.get("insurance_status"), 0, 128):
+				errors.append("player %d insurance_status invalid" % index)
 			if gods_save:
 				var player_god_value: Variant = player.get("god_id", null)
 				if not _valid_int(player_god_value, 0, 15):
@@ -5115,11 +5692,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			if typeof(stocks) != TYPE_DICTIONARY:
 				errors.append("player %d stocks invalid" % index)
 			else:
-				for symbol in STOCK_SYMBOLS:
+				for symbol in stock_symbols:
 					if not _valid_int(stocks.get(symbol, null), 0, 1000000000):
 						errors.append("player %d stock %s invalid" % [index, symbol])
 				for symbol in stocks.keys():
-					if not STOCK_SYMBOLS.has(symbol):
+					if not stock_symbols.has(symbol):
 						errors.append("player %d unknown stock" % index)
 			var cards: Variant = player.get("cards", null)
 			if typeof(cards) != TYPE_ARRAY or cards.size() > 15:
@@ -5415,13 +5992,38 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					and _valid_int(event_elapsed, 0, 3000000) \
 					and _valid_int(data.get("elapsed", null), 0, 3000000) \
 					and int(event_elapsed) == int(data.get("elapsed", -1))
-			if not setup_save or not calendar_terminal_event:
+			var company_terminal_event: bool = companies_save and typeof(last_event)==TYPE_DICTIONARY and last_event.get("type","")=="game_over" and last_event.get("reason","")=="company_dividend_no_survivors" and _valid_int(last_event.get("winner"),-1,-1)
+			if company_terminal_event:
+				for player in players:
+					if typeof(player)!=TYPE_DICTIONARY or not _valid_bool(player.get("alive")) or bool(player.alive): company_terminal_event=false
+			if not (setup_save and calendar_terminal_event) and not company_terminal_event:
 				errors.append("invalid game over winner")
 		elif winner >= 0 and (winner >= player_count or typeof(players[winner]) != TYPE_DICTIONARY or not bool(players[winner].get("alive", false))):
 			errors.append("invalid game over winner")
 	elif winner != -1:
 		errors.append("winner set before game over")
 
+	if companies_save:
+		errors.append_array(OriginalStockMarket.validate(data.get("market"), data.get("players"), data.get("companies")))
+		errors.append_array(_validate_companies(data.get("companies"), data.get("players"), data.get("board")))
+		var pending_company: Variant = data.get("company_service_pending")
+		if not _valid_int(pending_company,0,1999):
+			errors.append("invalid pending company service")
+		elif int(pending_company)>0:
+			var pending_valid := false
+			if typeof(players)==TYPE_ARRAY and _valid_int(data.get("current_player"),0,players.size()-1) and typeof(board)==TYPE_ARRAY and typeof(data.get("companies"))==TYPE_ARRAY:
+				var pending_player: Variant = players[int(data.current_player)]
+				if typeof(pending_player)==TYPE_DICTIONARY and _valid_int(pending_player.get("position"),0,board.size()-1):
+					var pending_tile: Variant = board[int(pending_player.position)]
+					if typeof(pending_tile)==TYPE_DICTIONARY and _valid_int(pending_tile.get("type_and_idx"),6000+int(pending_company),6000+int(pending_company)):
+						for company in data.companies:
+							if typeof(company)==TYPE_DICTIONARY and _valid_int(company.get("id"),int(pending_company),int(pending_company)) and _valid_int(company.get("company_type"),11,11) and _valid_int(company.get("owner"),0,players.size()-1):
+								pending_valid=data.get("phase","")=="await_action" and not _company_upgrade_target_ids(board,int(data.current_player)).is_empty()
+			if pending_valid and errors.is_empty():
+				var pending_game = new()
+				pending_game.state = data
+				pending_valid = not pending_game._company_payable_upgrade_targets(int(data.current_player), pending_game.get_company_at(int(players[int(data.current_player)].position))).is_empty()
+			if not pending_valid: errors.append("pending company service context mismatch")
 	var auctions: Variant = data.get("bankruptcy_auctions", null)
 	if typeof(auctions) != TYPE_ARRAY:
 		errors.append("invalid bankruptcy auctions")
@@ -5440,6 +6042,8 @@ func to_dict() -> Dictionary:
 
 
 func to_json() -> String:
+	if _is_companies():
+		return JSON.stringify(_canonicalize_json_numbers(to_dict()), "", true, true)
 	return JSON.stringify(to_dict())
 
 
@@ -5466,6 +6070,11 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 	game.state = data.duplicate(true)
 	if int(game.state.get("version", SAVE_VERSION)) >= GRAPH_SAVE_VERSION:
 		game.state = _canonicalize_json_numbers(game.state)
+	if game._is_companies():
+		OriginalStockMarket.normalize_numbers(game.state.market)
+		OriginalStockMarket.normalize_price_events(game.state.event_log)
+		OriginalStockMarket.normalize_price_events(game.state.last_event)
+		if not bool(validate_save(game.state).get("ok", false)): return null
 	game._rng = RandomNumberGenerator.new()
 	game._rng.seed = int(game.state.get("seed", 0))
 	var rng_text: String = str(game.state.get("rng_state_text", ""))

@@ -22,11 +22,29 @@ func make_facility_map() -> Dictionary:
 		"price_per_level": 100, "reserved_hex": "c8002c019001f4015802"}]
 	return raw
 
+func make_company_map() -> Dictionary:
+	var raw := Fixture.make()
+	raw.nodes[5].type_and_idx = 6001
+	raw.nodes[5].event_code = 0
+	raw.companies = [{"id": 1, "display_name": "測試企業", "company_type": 3,
+		"commerce_type": 3, "stock_index": 0, "stock_value": 400000, "toll_fee": 150,
+		"monthly_profit": 0, "cumulative_profit": 0, "treasury": 5000, "source_owner": 0,
+		"owner": 0, "name_bytes_hex": "746573742d636f6d70616e7900000000"}]
+	raw.stock_rows = []
+	for index in range(12):
+		raw.stock_rows.append({"index": index, "name": "測試股票 %d" % (index + 1),
+			"company_id": 1 if index == 0 else 0, "market_supply": 5000 if index == 0 else 10000,
+			"turn_supply": 0, "base_price": 100.0, "previous_price": 100.0, "price": 100.0,
+			"volatility": 1.0, "momentum": 0.0, "shock": 0.0, "suspension": 0, "event": 0,
+			"source_initial_link": 1 if index == 0 else 0})
+	return raw
+
 func _initialize() -> void:
 	var raw := Fixture.make()
 	var normalized := Maps.normalize_map(raw)
 	expect(normalized.ok, "Synthetic source map normalizes")
 	var definition: Dictionary = normalized.definition
+	expect(definition.stock_rows.is_empty() and not definition.supports_original_companies, "Legacy map without stock rows remains loadable and unsupported")
 	expect(definition.board[1].adjacent == [0, 2, 3], "Source node IDs become zero-based runtime edges")
 	expect(definition.start_position == 1, "Prison endpoint is excluded from initial placement")
 	expect(definition.board[2].cost == 1000 and definition.board[2].upgrade_cost == 300, "Land and house prices remain distinct")
@@ -78,6 +96,24 @@ func _initialize() -> void:
 	if facility_catalog_result.ok:
 		expect(facility_catalog_result.maps[0].board[4].fee_by_level == [100, 200, 300, 400, 500, 600], "Legacy facility cache reconstructs six prices")
 	DirAccess.remove_absolute(facility_path)
+	var company_raw := make_company_map()
+	var company_result := Maps.normalize_map(company_raw)
+	expect(company_result.ok, "Company source metadata normalizes")
+	if company_result.ok:
+		var company_definition: Dictionary = company_result.definition
+		expect(company_definition.supports_original_companies, "Complete stock and company links advertise company capability")
+		expect(company_definition.stock_rows.size() == 12 and company_definition.stock_rows[0].company_id == 1, "Twelve stock rows retain runtime links")
+		expect(company_definition.companies[0].stock_index == 0 and company_definition.companies[0].stock_value == 400000, "Company financial source fields are retained")
+		expect(company_definition.board[5].kind == "unsupported", "Company node keeps its legacy board kind")
+		expect(company_definition.board[5].source_company_id == 1 and company_definition.board[5].company_node_index == 5, "Company node receives stable source metadata")
+		expect(company_definition.board[5].company_name == "測試企業", "Company node exposes source display name separately")
+	var inconsistent_company := make_company_map()
+	inconsistent_company.stock_rows[0].company_id = 2
+	var inconsistent_result := Maps.normalize_map(inconsistent_company)
+	expect(inconsistent_result.ok and not inconsistent_result.definition.supports_original_companies, "Inconsistent company links fail closed without rejecting browse data")
+	var malformed_company := make_company_map()
+	malformed_company.stock_rows.pop_back()
+	expect(not Maps.normalize_map(malformed_company).ok, "Company stock table must have twelve rows")
 	var unnamed := Fixture.make()
 	unnamed.lands[0].erase("display_name")
 	unnamed.lands[0].name_bytes_hex = "0".repeat(32)

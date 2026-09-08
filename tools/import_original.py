@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,18 @@ MAP_HEADER_FIELDS = (
     "landscapes_count",
     "landscapes_offset",
 )
+
+# ``rich4.exe`` keeps a twelve-row template for each map.  The table is in the
+# data section rather than in a PE resource, so the importer validates the
+# image mapping before reading it.  The row layout is the original packed
+# 0x24-byte structure (u32 name pointer, two u16 status/supply pairs, then
+# five float values).
+STOCK_ROW_COUNT = 12
+STOCK_ROW_SIZE = 0x24
+STOCK_TABLE_VA = {
+    "Game": 0x47CE92,
+    "MultiverseJourney": 0x47F072,
+}
 
 
 class ImportErrorBase(Exception):
@@ -140,6 +153,23 @@ class MkfArchive:
             "entry_count": len(self.entries),
             "entries": [entry.as_dict() for entry in self.entries],
         }
+
+
+@dataclass(frozen=True)
+class PeSection:
+    """The PE fields needed to translate image VAs into file offsets."""
+
+    name: str
+    virtual_address: int
+    virtual_size: int
+    raw_offset: int
+    raw_size: int
+
+    @property
+    def span(self) -> int:
+        # A number of old Borland/Watcom images leave VirtualSize at zero.
+        # RawSize is still the file-backed span in that case.
+        return max(self.virtual_size, self.raw_size)
 
 
 def _u32(data: bytes, offset: int, *, context: str) -> int:
@@ -262,6 +292,208 @@ def _name_fields(raw: bytes) -> dict[str, Any]:
         except UnicodeError:
             pass
     return result
+
+
+def _parse_pe_sections(path: Path, data: bytes) -> tuple[int, tuple[PeSection, ...]]:
+    """Read the small PE32 header needed by the source stock table parser."""
+
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        raise FormatError(f"{path}: executable is not a DOS/PE image")
+    pe_offset = _u32(data, 0x3C, context=str(path))
+    if pe_offset < 0x40 or pe_offset + 24 > len(data):
+        raise FormatError(f"{path}: PE header offset is outside the file")
+    if data[pe_offset : pe_offset + 4] != b"PE\0\0":
+        raise FormatError(f"{path}: PE signature is invalid")
+    section_count = struct.unpack_from("<H", data, pe_offset + 6)[0]
+    optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+    if section_count == 0 or section_count > 96:
+        raise FormatError(f"{path}: unreasonable PE section count {section_count}")
+    optional_offset = pe_offset + 24
+    optional_end = optional_offset + optional_size
+    if optional_end > len(data) or optional_size < 32:
+        raise FormatError(f"{path}: PE optional header is truncated")
+    optional_magic = struct.unpack_from("<H", data, optional_offset)[0]
+    if optional_magic != 0x10B:
+        raise FormatError(f"{path}: expected a PE32 optional header")
+    image_base = struct.unpack_from("<I", data, optional_offset + 28)[0]
+    if image_base == 0:
+        raise FormatError(f"{path}: PE image base is zero")
+    sections_offset = optional_end
+    sections_end = sections_offset + section_count * 40
+    if sections_end > len(data):
+        raise FormatError(f"{path}: PE section table is truncated")
+    sections: list[PeSection] = []
+    for index in range(section_count):
+        start = sections_offset + index * 40
+        raw_name = data[start : start + 8].split(b"\0", 1)[0]
+        name = raw_name.decode("ascii", errors="replace") or f"section-{index}"
+        virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+            "<4I", data, start + 8
+        )
+        raw_end = raw_offset + raw_size
+        if raw_size and raw_offset and (raw_offset < sections_end or raw_end > len(data)):
+            raise FormatError(f"{path}: PE section {name} raw span is invalid")
+        if virtual_address + max(virtual_size, raw_size) > 0x100000000:
+            raise FormatError(f"{path}: PE section {name} virtual span overflows")
+        if raw_offset == 0:
+            # The source's old linker records the uninitialised .bss span in
+            # SizeOfRawData while leaving PointerToRawData at zero.  Preserve
+            # that virtual span, but mark the section as having no file bytes.
+            virtual_size = max(virtual_size, raw_size)
+            raw_size = 0
+        sections.append(
+            PeSection(
+                name=name,
+                virtual_address=virtual_address,
+                virtual_size=virtual_size,
+                raw_offset=raw_offset,
+                raw_size=raw_size,
+            )
+        )
+    return image_base, tuple(sections)
+
+
+def _pe_va_to_file_offset(
+    path: Path,
+    data: bytes,
+    image_base: int,
+    sections: tuple[PeSection, ...],
+    virtual_address: int,
+    *,
+    context: str,
+) -> tuple[int, PeSection]:
+    """Translate one image VA while rejecting virtual-only section tails."""
+
+    if virtual_address < image_base:
+        raise FormatError(f"{path}: {context} VA {virtual_address:#x} precedes image base")
+    rva = virtual_address - image_base
+    matches = [
+        section
+        for section in sections
+        if section.span and section.virtual_address <= rva < section.virtual_address + section.span
+    ]
+    if len(matches) != 1:
+        raise FormatError(f"{path}: {context} VA {virtual_address:#x} is not uniquely mapped")
+    section = matches[0]
+    delta = rva - section.virtual_address
+    if delta >= section.raw_size:
+        raise FormatError(f"{path}: {context} VA {virtual_address:#x} is not file-backed")
+    file_offset = section.raw_offset + delta
+    if file_offset >= len(data):
+        raise FormatError(f"{path}: {context} file offset is outside the image")
+    return file_offset, section
+
+
+def _read_pe_c_string(
+    path: Path, data: bytes, offset: int, section: PeSection, *, context: str
+) -> bytes:
+    """Read a NUL-terminated source string within its file-backed section."""
+
+    section_end = section.raw_offset + section.raw_size
+    if offset < section.raw_offset or offset >= section_end:
+        raise FormatError(f"{path}: {context} name pointer is outside its section")
+    end = data.find(b"\0", offset, section_end)
+    if end < 0:
+        raise FormatError(f"{path}: {context} name is not NUL-terminated")
+    raw = data[offset:end]
+    if not raw or len(raw) > 128:
+        raise FormatError(f"{path}: {context} name length is invalid")
+    return raw
+
+
+def parse_stock_groups(path: Path, *, edition: str) -> list[list[dict[str, Any]]]:
+    """Decode the edition's static twelve-stock templates from ``rich4.exe``.
+
+    The executable is owner-provided input and never copied to generated data.
+    ``company_id`` initially reflects the source +0x04 word.  ``import_source``
+    replaces it with the run-time map-company link established by the original
+    ``rich4_init_stock_commercial`` routine while preserving that raw word as
+    ``source_initial_link``.
+    """
+
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise InputError(f"cannot read {path}: {exc}") from exc
+    table_va = STOCK_TABLE_VA.get(edition)
+    group_count = {"Game": 4, "MultiverseJourney": 8}.get(edition)
+    if table_va is None or group_count is None:
+        raise FormatError(f"{path}: no stock table is defined for edition {edition}")
+    image_base, sections = _parse_pe_sections(path, data)
+    table_offset, _ = _pe_va_to_file_offset(
+        path,
+        data,
+        image_base,
+        sections,
+        table_va,
+        context="stock table",
+    )
+    table_size = group_count * STOCK_ROW_COUNT * STOCK_ROW_SIZE
+    if table_offset + table_size > len(data):
+        raise FormatError(f"{path}: stock table is truncated")
+
+    groups: list[list[dict[str, Any]]] = []
+    for group_index in range(group_count):
+        rows: list[dict[str, Any]] = []
+        for row_index in range(STOCK_ROW_COUNT):
+            start = table_offset + (group_index * STOCK_ROW_COUNT + row_index) * STOCK_ROW_SIZE
+            name_pointer = _u32(data, start, context=f"stock row {group_index}:{row_index}")
+            name_offset, name_section = _pe_va_to_file_offset(
+                path,
+                data,
+                image_base,
+                sections,
+                name_pointer,
+                context=f"stock row {group_index}:{row_index} name",
+            )
+            name_bytes = _read_pe_c_string(
+                path,
+                data,
+                name_offset,
+                name_section,
+                context=f"stock row {group_index}:{row_index}",
+            )
+            name_fields = _name_fields(name_bytes)
+            display_name = name_fields.get("display_name")
+            if not isinstance(display_name, str) or not display_name:
+                raise FormatError(
+                    f"{path}: stock row {group_index}:{row_index} name is not valid CP950"
+                )
+            source_initial_link = struct.unpack_from("<H", data, start + 4)[0]
+            suspension = data[start + 6]
+            event = data[start + 7]
+            market_supply, turn_supply = struct.unpack_from("<2H", data, start + 8)
+            base_price, previous_price, price, volatility, momentum, shock = struct.unpack_from(
+                "<6f", data, start + 0x0C
+            )
+            if market_supply > 10000 or turn_supply > market_supply:
+                raise FormatError(f"{path}: stock row {group_index}:{row_index} supply is invalid")
+            if not all(math.isfinite(value) for value in (base_price, previous_price, price, volatility, momentum, shock)):
+                raise FormatError(f"{path}: stock row {group_index}:{row_index} has a non-finite value")
+            if not all(1.0 <= value <= 9999.0 for value in (base_price, previous_price, price)):
+                raise FormatError(f"{path}: stock row {group_index}:{row_index} price is invalid")
+            if not 0.0 <= volatility <= 1000.0 or not -10.0 <= momentum <= 10.0 or not -100.0 <= shock <= 100.0:
+                raise FormatError(f"{path}: stock row {group_index}:{row_index} dynamics are invalid")
+            rows.append(
+                {
+                    "index": row_index,
+                    "name": display_name,
+                    "company_id": source_initial_link,
+                    "market_supply": market_supply,
+                    "turn_supply": turn_supply,
+                    "base_price": base_price,
+                    "previous_price": previous_price,
+                    "price": price,
+                    "volatility": volatility,
+                    "momentum": momentum,
+                    "shock": shock,
+                    "suspension": suspension,
+                    "event": event,
+                    "source_initial_link": source_initial_link,
+                }
+            )
+        groups.append(rows)
+    return groups
 
 
 def _map_section_bounds(
@@ -406,21 +638,61 @@ def _parse_map_companies(payload: bytes, offset: int, count: int) -> list[dict[s
     for record_id in range(1, count + 1):
         start = offset + record_id * size
         x, y = struct.unpack_from("<HH", payload, start)
-        records.append(
+        record: dict[str, Any] = {"id": record_id, "x": x, "y": y}
+        record.update(_name_fields(payload[start + 4 : start + 20]))
+        source_owner = payload[start + 24]
+        company_type = payload[start + 26]
+        record.update(
             {
-                "id": record_id,
-                "x": x,
-                "y": y,
-                "owner": payload[start + 24],
-                "commerce_type": payload[start + 26],
+                "owner": source_owner,
+                "source_owner": source_owner,
+                "stock_index": payload[start + 25],
+                "company_type": company_type,
+                # Keep the importer-v1 key used by existing map consumers.
+                "commerce_type": company_type,
+                "field_0x1b": payload[start + 27],
                 "toll_fee": struct.unpack_from("<H", payload, start + 34)[0],
+                "stock_value": struct.unpack_from("<I", payload, start + 36)[0],
+                "monthly_profit": struct.unpack_from("<I", payload, start + 40)[0],
+                "cumulative_profit": struct.unpack_from("<I", payload, start + 44)[0],
+                "treasury": struct.unpack_from("<I", payload, start + 48)[0],
                 "reserved_hex": (
                     payload[start + 4 : start + 24] + payload[start + 27 : start + 34]
                     + payload[start + 36 : start + 52]
                 ).hex(),
             }
         )
+        records.append(record)
     return records
+
+
+def _link_stock_rows(
+    rows: Sequence[dict[str, Any]], companies: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Apply the run-time stock-index-to-company mapping used by the game."""
+
+    by_stock_index: dict[int, int | None] = {}
+    for company in companies:
+        stock_index = company.get("stock_index")
+        company_id = company.get("id")
+        if not isinstance(stock_index, int) or not 0 <= stock_index < STOCK_ROW_COUNT:
+            continue
+        if not isinstance(company_id, int) or not 1 <= company_id <= 1999:
+            continue
+        if stock_index in by_stock_index:
+            # A duplicate index cannot be resolved without inventing an
+            # identity.  Leave both affected stock links explicitly unlinked.
+            by_stock_index[stock_index] = None
+        else:
+            by_stock_index[stock_index] = company_id
+    linked: list[dict[str, Any]] = []
+    for row in rows:
+        normalized = dict(row)
+        index = row.get("index")
+        company_id = by_stock_index.get(index, 0) if isinstance(index, int) else 0
+        normalized["company_id"] = company_id if isinstance(company_id, int) else 0
+        linked.append(normalized)
+    return linked
 
 
 def _parse_map_landscapes(payload: bytes, offset: int, count: int) -> list[dict[str, Any]]:
@@ -658,6 +930,39 @@ def import_source(
         edition_map_number = 0
         files = [_inventory_file(path, source_root) for path in _iter_regular_files(edition_path)]
         archives: list[dict[str, Any]] = []
+        stock_groups: list[list[dict[str, Any]]] | None = None
+        stock_status: dict[str, Any] | None = None
+        executable_path = _find_casefolded(edition_path, "rich4.exe")
+        if executable_path is not None and edition_name in STOCK_TABLE_VA:
+            executable_record = next(
+                record
+                for record in files
+                if record["path"] == _path_for_json(executable_path, source_root)
+            )
+            try:
+                stock_groups = parse_stock_groups(executable_path, edition=edition_name)
+                stock_status = {
+                    "status": "available",
+                    "source_file": executable_record["path"],
+                    "source_file_sha256": executable_record["sha256"],
+                    "group_count": len(stock_groups),
+                    "row_count": len(stock_groups) * STOCK_ROW_COUNT,
+                }
+            except FormatError as exc:
+                # Map extraction remains useful when a local executable is a
+                # different build.  Preserve the failure as inventory
+                # metadata instead of fabricating stock rows.
+                stock_status = {
+                    "status": "invalid",
+                    "source_file": executable_record["path"],
+                    "source_file_sha256": executable_record["sha256"],
+                    "error": str(exc),
+                }
+        elif executable_path is not None:
+            stock_status = {
+                "status": "unsupported_edition",
+                "source_file": _path_for_json(executable_path, source_root),
+            }
         map_path = _find_casefolded(edition_path, "map.mkf")
         if map_path is None:
             raise InputError(f"edition {edition_name} lost its map.mkf during import")
@@ -687,6 +992,10 @@ def import_source(
                 edition_map_number += 1
                 parsed["map_number"] = edition_map_number
                 parsed["source_file_sha256"] = file_record["sha256"]
+                if stock_groups is not None and edition_map_number <= len(stock_groups):
+                    parsed["stock_rows"] = _link_stock_rows(
+                        stock_groups[edition_map_number - 1], parsed["companies"]
+                    )
                 if extract_map_payloads:
                     filename = f"map-{edition_map_number:02d}.bin"
                     relative = Path("raw") / _safe_component(edition_name) / filename
@@ -704,14 +1013,15 @@ def import_source(
                         raise InputError(f"cannot write extracted map {target}: {exc}") from exc
                     parsed["payload_file"] = relative.as_posix()
                 map_catalog.append(parsed)
-        editions.append(
-            {
-                "name": edition_name,
-                "path": _path_for_json(edition_path, source_root),
-                "files": files,
-                "archives": archives,
-            }
-        )
+        edition_record: dict[str, Any] = {
+            "name": edition_name,
+            "path": _path_for_json(edition_path, source_root),
+            "files": files,
+            "archives": archives,
+        }
+        if stock_status is not None:
+            edition_record["stock"] = stock_status
+        editions.append(edition_record)
 
     manifest: dict[str, Any] = {
         "schema": "richman4.original-assets/v1",

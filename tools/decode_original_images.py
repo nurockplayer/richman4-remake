@@ -15,11 +15,14 @@ import binascii
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 import struct
 import sys
+import tempfile
 from typing import Any, Iterable, Sequence
+import uuid
 import zlib
 
 
@@ -748,6 +751,131 @@ def _write_json(path: Path, value: Any) -> None:
         raise InputError(f"cannot write {path}: {exc}") from exc
 
 
+def _archive_files(edition_path: Path) -> list[Path]:
+    try:
+        return sorted(
+            (
+                child
+                for child in edition_path.iterdir()
+                if child.is_file()
+                and not child.is_symlink()
+                and child.suffix.casefold() == ".mkf"
+            ),
+            key=lambda path: path.name.casefold(),
+        )
+    except OSError as exc:
+        raise InputError(f"cannot inspect {edition_path}: {exc}") from exc
+
+
+def _preflight_output_keys(
+    discovered: Sequence[tuple[str, Path]], source: Path
+) -> None:
+    """Reject archive names that would share a sanitized image directory."""
+
+    seen: dict[tuple[str, str], str] = {}
+    for edition_name, edition_path in discovered:
+        edition_component = _safe_component(edition_name)
+        for archive_path in _archive_files(edition_path):
+            archive_component = _safe_component(archive_path.stem)
+            key = (edition_component.casefold(), archive_component.casefold())
+            try:
+                display_path = archive_path.relative_to(source).as_posix()
+            except ValueError as exc:
+                raise InputError(f"archive escaped source root: {archive_path}") from exc
+            previous = seen.get(key)
+            if previous is not None:
+                raise InputError(
+                    "sanitized image output collision: "
+                    f"{previous} and {display_path}"
+                )
+            seen[key] = display_path
+
+
+def _path_present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _delete_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _cleanup_path(path: Path) -> None:
+    try:
+        _delete_path(path)
+    except OSError:
+        pass
+
+
+def _publish_staged_images(
+    staged_images: Path, staged_manifest: Path, output: Path
+) -> None:
+    """Replace tool-owned images and manifest together, restoring on failure."""
+
+    images = output / "images"
+    manifest = output / "manifest.json"
+    image_backup = output / f".images-backup-{uuid.uuid4().hex}"
+    manifest_backup = output / f".manifest-backup-{uuid.uuid4().hex}"
+    old_images_moved = False
+    old_manifest_moved = False
+    images_installed = False
+    manifest_installed = False
+    try:
+        if _path_present(manifest):
+            os.replace(manifest, manifest_backup)
+            old_manifest_moved = True
+        if _path_present(images):
+            os.replace(images, image_backup)
+            old_images_moved = True
+        os.replace(staged_images, images)
+        images_installed = True
+        os.replace(staged_manifest, manifest)
+        manifest_installed = True
+    except OSError as exc:
+        rollback_errors: list[str] = []
+        manifest_clear = not _path_present(manifest)
+        if manifest_installed:
+            try:
+                _delete_path(manifest)
+                manifest_clear = not _path_present(manifest)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"new manifest cleanup failed: {rollback_exc}")
+
+        image_rollback_ok = manifest_clear
+        if images_installed:
+            try:
+                _delete_path(images)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"new image cleanup failed: {rollback_exc}")
+                image_rollback_ok = False
+        if old_images_moved and image_rollback_ok:
+            if _path_present(images):
+                image_rollback_ok = False
+                rollback_errors.append("new image remains during rollback")
+            else:
+                try:
+                    os.replace(image_backup, images)
+                except OSError as rollback_exc:
+                    image_rollback_ok = False
+                    rollback_errors.append(f"image restore failed: {rollback_exc}")
+        if old_manifest_moved and image_rollback_ok and not _path_present(manifest):
+            try:
+                os.replace(manifest_backup, manifest)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"manifest restore failed: {rollback_exc}")
+        detail = f"cannot publish decoded images: {exc}"
+        if rollback_errors:
+            detail += "; " + "; ".join(rollback_errors)
+        raise InputError(detail) from exc
+    else:
+        if old_images_moved:
+            _cleanup_path(image_backup)
+        if old_manifest_moved:
+            _cleanup_path(manifest_backup)
+
+
 def decode_source(
     source: Path,
     output: Path,
@@ -772,111 +900,112 @@ def decode_source(
         if not discovered:
             raise InputError("requested edition was not found")
 
-    archive_records: list[dict[str, Any]] = []
-    visual_records: list[dict[str, Any]] = []
-    manifest_invalidated = False
-    for edition_name, edition_path in discovered:
-        mkf_files = sorted(
-            (
-                child
-                for child in edition_path.iterdir()
-                if child.is_file()
-                and not child.is_symlink()
-                and child.suffix.casefold() == ".mkf"
-            ),
-            key=lambda path: path.name.casefold(),
+    _preflight_output_keys(discovered, source)
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise InputError(f"cannot create output directory {output}: {exc}") from exc
+    try:
+        staging_images = Path(
+            tempfile.mkdtemp(prefix=".images-staging-", dir=output)
         )
-        for archive_path in mkf_files:
-            archive = parse_mkf(archive_path, max_resource_bytes=max_resource_bytes)
-            archive_records.append(archive.as_dict(source))
-            for entry in archive.entries:
-                decoded = decode_entry(archive, entry)
-                visual = parse_visual_resource(
-                    decoded,
-                    entry,
-                    max_dimension=max_dimension,
-                    max_chunks=max_chunks,
-                )
-                if visual is None:
-                    continue
+    except OSError as exc:
+        raise InputError(f"cannot create image staging directory {output}: {exc}") from exc
+    staged_manifest = output / f".manifest-staging-{uuid.uuid4().hex}.json"
+    try:
+        archive_records: list[dict[str, Any]] = []
+        visual_records: list[dict[str, Any]] = []
+        for edition_name, edition_path in discovered:
+            mkf_files = _archive_files(edition_path)
+            edition_dir = _safe_component(edition_name)
+            for archive_path in mkf_files:
+                archive = parse_mkf(archive_path, max_resource_bytes=max_resource_bytes)
+                archive_records.append(archive.as_dict(source))
                 archive_name = _safe_component(archive_path.stem)
-                edition_dir = _safe_component(edition_name)
-                resource_dir = (
-                    output
-                    / "images"
-                    / edition_dir
-                    / archive_name
-                    / f"resource-{entry.index:04d}"
-                )
-                image_records: list[dict[str, Any]] = []
-                for chunk in visual.chunks:
-                    if not manifest_invalidated:
-                        # A later decode failure may leave partial PNGs. Never
-                        # leave the previous manifest certifying those bytes.
-                        try:
-                            (output / "manifest.json").unlink(missing_ok=True)
-                        except OSError as exc:
-                            raise InputError(f"cannot invalidate output manifest: {exc}") from exc
-                        manifest_invalidated = True
-                    png_path = resource_dir / f"chunk-{chunk.index:04d}.png"
-                    write_png(
-                        png_path,
-                        chunk,
-                        visual,
-                        pixel_format=pixel_format,
-                        transparent_index_zero=transparent_index_zero,
+                for entry in archive.entries:
+                    decoded = decode_entry(archive, entry)
+                    visual = parse_visual_resource(
+                        decoded,
+                        entry,
+                        max_dimension=max_dimension,
+                        max_chunks=max_chunks,
                     )
-                    image_records.append(
+                    if visual is None:
+                        continue
+                    resource_dir = (
+                        staging_images
+                        / edition_dir
+                        / archive_name
+                        / f"resource-{entry.index:04d}"
+                    )
+                    image_records: list[dict[str, Any]] = []
+                    for chunk in visual.chunks:
+                        png_path = resource_dir / f"chunk-{chunk.index:04d}.png"
+                        write_png(
+                            png_path,
+                            chunk,
+                            visual,
+                            pixel_format=pixel_format,
+                            transparent_index_zero=transparent_index_zero,
+                        )
+                        image_records.append(
+                            {
+                                "chunk_index": chunk.index,
+                                "path": (
+                                    Path("images")
+                                    / png_path.relative_to(staging_images)
+                                ).as_posix(),
+                                "width": chunk.width,
+                                "height": chunk.height,
+                                "x": chunk.x,
+                                "y": chunk.y,
+                                "sha256": hashlib.sha256(png_path.read_bytes()).hexdigest(),
+                            }
+                        )
+                    visual_records.append(
                         {
-                            "chunk_index": chunk.index,
-                            "path": png_path.relative_to(output).as_posix(),
-                            "width": chunk.width,
-                            "height": chunk.height,
-                            "x": chunk.x,
-                            "y": chunk.y,
-                            "sha256": hashlib.sha256(png_path.read_bytes()).hexdigest(),
+                            "edition": edition_name,
+                            "archive": archive_path.relative_to(source).as_posix(),
+                            "archive_sha256": hashlib.sha256(archive.data).hexdigest(),
+                            "resource_index": entry.index,
+                            "signature": visual.signature,
+                            "uncompressed_size": entry.uncompressed_size,
+                            "stored_size": entry.stored_size,
+                            "compression": entry.compression,
+                            "image_data_offset": entry.image_data_offset,
+                            "image_data_size": entry.image_data_size,
+                            "chunk_count": visual.chunk_count,
+                            "start_offset": visual.start_offset,
+                            "pixel_format": pixel_format,
+                            "transparent_index_zero": transparent_index_zero
+                            if visual.signature == "SPR"
+                            else None,
+                            "images": image_records,
                         }
                     )
-                visual_records.append(
-                    {
-                        "edition": edition_name,
-                        "archive": archive_path.relative_to(source).as_posix(),
-                        "archive_sha256": hashlib.sha256(archive.data).hexdigest(),
-                        "resource_index": entry.index,
-                        "signature": visual.signature,
-                        "uncompressed_size": entry.uncompressed_size,
-                        "stored_size": entry.stored_size,
-                        "compression": entry.compression,
-                        "image_data_offset": entry.image_data_offset,
-                        "image_data_size": entry.image_data_size,
-                        "chunk_count": visual.chunk_count,
-                        "start_offset": visual.start_offset,
-                        "pixel_format": pixel_format,
-                        "transparent_index_zero": transparent_index_zero
-                        if visual.signature == "SPR"
-                        else None,
-                        "images": image_records,
-                    }
-                )
 
-    manifest = {
-        "schema": "richman4.original-images/v1",
-        "version": SCHEMA_VERSION,
-        "tool_version": TOOL_VERSION,
-        "source_name": source.name,
-        "limits": {
-            "max_resource_bytes": max_resource_bytes,
-            "max_dimension": max_dimension,
-            "max_chunks": max_chunks,
-        },
-        "pixel_format": pixel_format,
-        "transparent_index_zero": transparent_index_zero,
-        "archives": archive_records,
-        "visual_resources": visual_records,
-        "gnd_resources_skipped": True,
-    }
-    _write_json(output / "manifest.json", manifest)
-    return manifest
+        manifest = {
+            "schema": "richman4.original-images/v1",
+            "version": SCHEMA_VERSION,
+            "tool_version": TOOL_VERSION,
+            "source_name": source.name,
+            "limits": {
+                "max_resource_bytes": max_resource_bytes,
+                "max_dimension": max_dimension,
+                "max_chunks": max_chunks,
+            },
+            "pixel_format": pixel_format,
+            "transparent_index_zero": transparent_index_zero,
+            "archives": archive_records,
+            "visual_resources": visual_records,
+            "gnd_resources_skipped": True,
+        }
+        _write_json(staged_manifest, manifest)
+        _publish_staged_images(staging_images, staged_manifest, output)
+        return manifest
+    finally:
+        _cleanup_path(staging_images)
+        _cleanup_path(staged_manifest)
 
 
 def build_parser() -> argparse.ArgumentParser:

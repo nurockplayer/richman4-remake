@@ -4,20 +4,25 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zlib
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import decode_original_images as decoder  # noqa: E402
 from decode_original_images import (  # noqa: E402
     CodecError,
     FormatError,
     ImageError,
+    InputError,
     MkfEntry,
+    _preflight_output_keys,
     decode_source,
     decompress_private,
     parse_mkf,
@@ -134,7 +139,7 @@ def read_png_rgba(data: bytes) -> tuple[int, int, bytes]:
 
 
 class DecodeOriginalImagesTests(unittest.TestCase):
-    def test_failed_rerun_does_not_keep_manifest_for_replaced_images(self) -> None:
+    def test_late_corrupt_archive_preserves_previous_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "Game"
             root.mkdir()
@@ -145,14 +150,132 @@ class DecodeOriginalImagesTests(unittest.TestCase):
             manifest = decode_source(root, output)
             image_path = output / manifest["visual_resources"][0]["images"][0]["path"]
             previous_image = image_path.read_bytes()
+            manifest_path = output / "manifest.json"
+            previous_manifest = manifest_path.read_bytes()
             changed = bytearray(spr)
             struct.pack_into("<H", changed, 26, 0x03E0)
             (root / "a.mkf").write_bytes(make_mkf([(bytes(changed), len(changed), 24, 512)]))
             (root / "map.mkf").write_bytes(b"truncated")
             with self.assertRaises(FormatError):
                 decode_source(root, output)
-            self.assertNotEqual(image_path.read_bytes(), previous_image)
+            self.assertEqual(image_path.read_bytes(), previous_image)
+            self.assertEqual(manifest_path.read_bytes(), previous_manifest)
+
+    def test_sanitized_archive_collision_fails_before_output_writes(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            for name in ("a b.mkf", "a_b.mkf"):
+                (root / name).write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            with self.assertRaises(InputError):
+                decode_source(root, output)
+            self.assertFalse(output.exists())
+
+    def test_casefolded_archive_collision_is_rejected_by_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            first = root / "Panel.mkf"
+            second = root / "Panel.MKF"
+            with patch(
+                "decode_original_images._archive_files",
+                return_value=[first, second],
+            ):
+                with self.assertRaises(InputError):
+                    _preflight_output_keys([("Game", root)], root)
+
+    def test_removed_visual_archive_replaces_images_with_empty_publish(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            panel = root / "Panel.mkf"
+            panel.write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            decode_source(root, output)
+            unrelated = output / "keep-me.txt"
+            unrelated.write_text("preserve", encoding="utf-8")
+            panel.unlink()
+            manifest = decode_source(root, output)
+            self.assertEqual(manifest["visual_resources"], [])
+            self.assertTrue((output / "images").is_dir())
+            self.assertEqual(list((output / "images").rglob("*.png")), [])
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "preserve")
+            self.assertEqual(
+                json.loads((output / "manifest.json").read_text())[
+                    "visual_resources"
+                ],
+                [],
+            )
+
+    def test_manifest_install_failure_rolls_back_matching_images_and_manifest(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            panel = root / "Panel.mkf"
+            panel.write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            decoder.decode_source(root, output)
+            image_path = next((output / "images").rglob("*.png"))
+            previous_image = image_path.read_bytes()
+            manifest_path = output / "manifest.json"
+            previous_manifest = manifest_path.read_bytes()
+            real_replace = decoder.os.replace
+            failed = False
+
+            def fail_manifest_install(source: os.PathLike[str], destination: os.PathLike[str]) -> None:
+                nonlocal failed
+                if Path(destination).name == "manifest.json" and not failed:
+                    failed = True
+                    raise OSError("manifest install failed")
+                real_replace(source, destination)
+
+            with patch.object(decoder.os, "replace", side_effect=fail_manifest_install):
+                with self.assertRaises(InputError):
+                    decoder.decode_source(root, output)
+            self.assertEqual(image_path.read_bytes(), previous_image)
+            self.assertEqual(manifest_path.read_bytes(), previous_manifest)
+
+    def test_image_rollback_failure_leaves_manifest_absent_and_backups(self) -> None:
+        spr = make_spr()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Game"
+            root.mkdir()
+            panel = root / "Panel.mkf"
+            panel.write_bytes(make_mkf([(spr, len(spr), 24, 512)]))
+            (root / "map.mkf").write_bytes(make_mkf([(b"plain", 5, 0, 0)]))
+            output = Path(temporary) / "decoded"
+            decoder.decode_source(root, output)
+            real_replace = decoder.os.replace
+            manifest_failed = False
+
+            def fail_image_restore(source: os.PathLike[str], destination: os.PathLike[str]) -> None:
+                nonlocal manifest_failed
+                source_name = Path(source).name
+                destination_name = Path(destination).name
+                if destination_name == "manifest.json" and source_name.startswith(
+                    ".manifest-staging-"
+                ):
+                    manifest_failed = True
+                    raise OSError("manifest install failed")
+                if manifest_failed and destination_name == "images" and source_name.startswith(
+                    ".images-backup-"
+                ):
+                    raise OSError("image restore failed")
+                real_replace(source, destination)
+
+            with patch.object(decoder.os, "replace", side_effect=fail_image_restore):
+                with self.assertRaises(InputError):
+                    decoder.decode_source(root, output)
             self.assertFalse((output / "manifest.json").exists())
+            self.assertTrue(any(output.glob(".images-backup-*")))
+            self.assertTrue(any(output.glob(".manifest-backup-*")))
 
     def test_private_codec_decodes_initial_tree_literal_and_rejects_truncation(
         self,

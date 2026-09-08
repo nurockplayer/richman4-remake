@@ -21,9 +21,13 @@ python3 tools/decode_original_images.py \
 * `images/<edition>/<archive>/resource-XXXX/chunk-XXXX.png`：每個通過
   結構檢查的 `SPR` 或 `SMP` 圖塊。
 
-重新匯入會在第一張 PNG 寫入前移除舊的 `manifest.json`，只有整批成功後
-才發佈新 manifest。中途失敗可能留下部分 PNG；缺少 manifest 時不得將
-該目錄視為有效匯入結果，修正來源後重新執行即可。
+重新匯入會先在輸出目錄建立暫存 `images/`，完成所有解碼並寫好暫存
+manifest 後，才替換工具管理的 `output/images/` 與 `manifest.json`。因此
+來源移除 archive 或 chunk，或成功結果沒有任何可視資源時，舊 PNG 都會被
+整批替換掉，並發布空的 `images/` 與新 manifest；輸出根目錄的其他檔案會
+保留。解碼或發佈失敗會清理暫存內容並嘗試回復上一個有效的 images 與
+manifest，不會刪除或移動來源檔案。edition 與 archive 名稱在寫入前會先
+經過清理及不分大小寫的輸出路徑碰撞檢查。
 
 預設以原版常見的 RGB555 解讀 16 位元像素（`--pixel-format rgb555`），
 並把 `SPR` palette index `0` 輸出為透明像素。可選格式為 `rgb565`、

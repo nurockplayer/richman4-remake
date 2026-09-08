@@ -38,6 +38,7 @@ func run() -> void:
 		expect(false,"UI reaction fixture is pending")
 		await finish(ui);return
 	expect(ui.trap_popup.visible and ui._human_trap_response_pending(),"human response popup opens during opponent turn")
+	expect(ui.trap_popup.size.y<=400,"response prompt wraps without stretching popup past compact height")
 	expect(not ui._is_human_turn(),"response does not change current AI caster")
 	expect(ui.trap_target_option.item_count==3,"all other live players offered as redirect targets")
 	expect(ui.roll_button.disabled and ui.cards_button.disabled and ui.stocks_button.disabled and ui.end_turn_button.disabled,"main actions disabled during response")

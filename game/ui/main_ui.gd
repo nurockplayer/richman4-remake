@@ -704,6 +704,7 @@ func _build_popups() -> void:
 	trap_box.add_child(_make_label("使用嫁禍卡？", 19, TEXT_MAIN))
 	trap_prompt_label = _make_label("", 13, TEXT_MAIN)
 	trap_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	trap_prompt_label.custom_minimum_size.x = 500
 	trap_box.add_child(trap_prompt_label)
 	trap_target_option = OptionButton.new()
 	trap_target_option.name = "TrapRedirectTarget"

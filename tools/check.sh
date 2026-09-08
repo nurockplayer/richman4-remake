@@ -45,6 +45,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/gods_map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/gods_review_regressions.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/gods_facility_ui.gd

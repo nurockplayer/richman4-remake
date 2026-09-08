@@ -54,6 +54,17 @@ func run() -> void:
 	expect(drawn is Array and drawn.is_empty(), "map preview clears live god markers")
 	ui._update_property_card({"kind": "property", "index": 2, "cost": 1000, "land_price": 1000, "house_price": 300, "building_level": 2, "owner": -1})
 	expect(ui.current_property_detail.text.contains("1,600"), "unowned angel-improved house shows total purchase price")
+	ui.state["phase"] = "await_action"
+	ui.state["last_roll"] = []
+	ui.state["action_options"] = ["end_turn"]
+	ui.state.players[0]["god_id"] = 9
+	ui.state.players[0]["hospital_days"] = 0
+	ui._update_all()
+	expect(ui.action_hint_label.text.contains("休息") and not ui.action_hint_label.text.contains("影響停留地產"), "final rest day does not promise an angel property effect")
+	expect(ui.buy_button.disabled and ui.upgrade_button.disabled and not ui.end_turn_button.disabled, "resting controls allow ending the turn without land actions")
+	ui.state["phase"] = "await_roll"
+	ui.state.players[0]["god_id"] = 1
+	ui.state.players[0]["hospital_days"] = 3
 	ui.state["version"] = 5
 	ui._update_all()
 	expect(ui.board_view.god_objects_data.is_empty() and not labels(ui.players_list).contains("小財神"), "legacy saves ignore foreign god fields")

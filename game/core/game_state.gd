@@ -674,8 +674,16 @@ func _detach_god(god_id: int, reason: String = "detached", respawn: bool = true)
 
 func _detach_player_god(player_id: int, reason: String = "replaced") -> void:
 	var god_id: int = _player_god_id(player_id)
-	if god_id > 0:
+	if god_id <= 0:
+		return
+	if _god_object_index(god_id) >= 0:
 		_detach_god(god_id, reason, true)
+	else:
+		# Keep the player-side reference from becoming a save-invalid ghost when
+		# an older or partially recovered save omitted the object itself.
+		var player: Dictionary = _player(player_id)
+		if not player.is_empty():
+			player["god_id"] = 0
 
 
 func _attach_god(player_id: int, god_id: int) -> bool:
@@ -707,6 +715,7 @@ func _sync_attached_gods() -> void:
 	var objects: Variant = state.get("god_objects", [])
 	if typeof(objects) != TYPE_ARRAY:
 		return
+	var detached_ids: Array = []
 	for actor in objects:
 		if typeof(actor) != TYPE_DICTIONARY:
 			continue
@@ -715,10 +724,15 @@ func _sync_attached_gods() -> void:
 			continue
 		var player: Dictionary = _player(owner_id)
 		if player.is_empty() or not bool(player.get("alive", false)):
-			actor["owner"] = -1
-			actor["days"] = 0
+			detached_ids.append(int(actor.get("id", 0)))
 			continue
 		actor["node"] = int(player.get("position", actor.get("node", -1)))
+	for player in _players():
+		if typeof(player) == TYPE_DICTIONARY and not bool(player.get("alive", false)):
+			player["god_id"] = 0
+	for god_id in detached_ids:
+		if _god_object_index(god_id) >= 0:
+			_detach_god(god_id, "owner_unavailable", true)
 
 
 func _encounter_dog(player_id: int, node_id: int) -> void:
@@ -1619,12 +1633,15 @@ func roll(dice_count: int = -1) -> Dictionary:
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法擲骰")
 	var hospital_days: int = int(player.get("hospital_days", 0))
-	if hospital_days > 0:
+	if _is_gods() and hospital_days > 0:
 		player["hospital_days"] = hospital_days - 1
 		state["last_roll"] = []
 		state["last_total"] = 0
 		state["extra_roll"] = false
 		state["doubles_count"] = 0
+		state["property_action_used"] = true
+		state["bank_access"] = false
+		state["bank_landing"] = false
 		if _is_facilities():
 			state["last_roll_total"] = 0
 		state["phase"] = "await_action"
@@ -1765,7 +1782,10 @@ func _graph_consume_roadblock(player_id: int, node_id: int) -> bool:
 
 func _graph_continue_movement(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
-	if player.is_empty():
+	if player.is_empty() or not bool(player.get("alive", false)):
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
 		return
 	var remaining: int = int(state.get("remaining_steps", 0))
 	var roll_total: int = int(state.get("last_total", 0))
@@ -1808,7 +1828,12 @@ func _graph_continue_movement(player_id: int) -> void:
 		}
 		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
 		_process_god_step(player_id, next_node)
-		if int(player.get("hospital_days", 0)) > 0:
+		if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
+			state["route_options"] = []
+			state["pending_movement"] = {}
+			state["remaining_steps"] = 0
+			return
+		if _is_gods() and int(player.get("hospital_days", 0)) > 0:
 			state["remaining_steps"] = 0
 			break
 		if _graph_consume_roadblock(player_id, next_node):
@@ -1857,7 +1882,12 @@ func choose_route(route: int) -> Dictionary:
 	}
 	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
 	_process_god_step(player_id, route)
-	if int(player.get("hospital_days", 0)) > 0:
+	if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
+		return _result(true, "已選擇路線", {"route": route})
+	if _is_gods() and int(player.get("hospital_days", 0)) > 0:
 		state["remaining_steps"] = 0
 	var hit_roadblock: bool = _graph_consume_roadblock(player_id, route)
 	if hit_roadblock:
@@ -2053,6 +2083,33 @@ func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_obje
 	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false)
 
 
+func _god_property_fee_waiver_reason(owner_id: int) -> String:
+	if not _is_gods():
+		return ""
+	var owner: Dictionary = _player(owner_id)
+	if owner.is_empty() or not bool(owner.get("alive", false)):
+		return ""
+	if int(owner.get("hospital_days", 0)) > 0:
+		return "hospital"
+	if _player_god_id(owner_id) == 15:
+		return "death"
+	return ""
+
+
+func _record_god_property_fee_waived(debtor_id: int, owner_id: int, reason: String, kind: String, tile_id: int = -1, source_object_id: int = -1) -> void:
+	var payload: Dictionary = {
+		"player_id": debtor_id,
+		"owner_id": owner_id,
+		"reason": reason,
+		"kind": kind,
+	}
+	if tile_id >= 0:
+		payload["tile_id"] = tile_id
+	if source_object_id > 0:
+		payload["source_object_id"] = source_object_id
+	_record_event("property_fee_waived", payload)
+
+
 func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
 	if not _is_facilities() or not _is_graph() or visited_tile.get("kind", "") != "facility":
 		return
@@ -2088,6 +2145,12 @@ func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
 		payload["admitted"] = true
 		payload["reason"] = "park_no_effect"
 		_record_event("facility_service", payload)
+		return
+	var fee_waiver_reason: String = _god_property_fee_waiver_reason(owner_id)
+	if not fee_waiver_reason.is_empty():
+		payload["reason"] = "owner_unavailable"
+		_record_event("facility_service", payload)
+		_record_god_property_fee_waived(player_id, owner_id, fee_waiver_reason, "facility", tile_id, source_object_id)
 		return
 	if not _facility_service_admitted(tile):
 		payload["reason"] = "sealed" if _facility_is_sealed(tile) else "facility_unavailable"
@@ -2142,6 +2205,8 @@ func _move_player(player_id: int, steps: int) -> void:
 
 func _resolve_landing(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.is_empty():
 		state["phase"] = "await_action"
@@ -2196,6 +2261,10 @@ func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 		if amount == 0 and not _is_gods() and int(debtor.get("rent_shield", 0)) > 0:
 			debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
 			_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
+		return
+	var fee_waiver_reason: String = _god_property_fee_waiver_reason(creditor_id)
+	if not fee_waiver_reason.is_empty():
+		_record_god_property_fee_waived(debtor_id, creditor_id, fee_waiver_reason, "property")
 		return
 	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, amount, "rent")
 	if _is_gods() and adjusted_amount <= 0:
@@ -2274,7 +2343,24 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
-	var was_current_roll: bool = int(state.get("current_player", -1)) == debtor_id and state.get("phase", "") == "await_roll"
+	var debtor_is_current: bool = int(state.get("current_player", -1)) == debtor_id
+	var was_current_movement: bool = debtor_is_current and state.get("phase", "") in ["await_roll", "await_route"]
+	if _is_gods():
+		# A bankrupt holder can no longer keep an attached god. Detach before the
+		# alive flag changes so the owner-side reference and its paired respawn stay
+		# consistent even when this charge occurs during graph movement.
+		var player_god_id: int = _player_god_id(debtor_id)
+		if player_god_id > 0:
+			_detach_god(player_god_id, "bankrupt", true)
+		# Recover from a partially inconsistent in-memory state where the object
+		# points at the player but the player-side god_id was already lost.
+		var owner_god_ids: Array = []
+		for actor in state.get("god_objects", []):
+			if typeof(actor) == TYPE_DICTIONARY and int(actor.get("owner", -1)) == debtor_id:
+				owner_god_ids.append(int(actor.get("id", 0)))
+		for owner_god_id in owner_god_ids:
+			if _god_object_index(owner_god_id) >= 0:
+				_detach_god(owner_god_id, "bankrupt", true)
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
 	var loan: int = int(debtor.get("loan", 0))
 	if loan > 0:
@@ -2287,16 +2373,24 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	debtor["loan_due_day"] = 0
 	debtor["alive"] = false
 	debtor["bankrupt"] = true
+	# Do not let the bankrupt current player continue a pending route or expose
+	# its bank state to the next actor. An unrelated debtor may be charged while
+	# another player is moving; preserve that mover's route and bank state.
+	if debtor_is_current:
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
+		state["bank_access"] = false
+		state["bank_landing"] = false
 	var auctions: Array = state.get("bankruptcy_auctions", [])
 	auctions.append(auction)
 	state["bankruptcy_auctions"] = auctions
 	_record_event("bankruptcy", {"player_id": debtor_id, "creditor_id": creditor_id, "debt": debt, "reason": reason, "auction_id": auction["auction_id"]})
 	_check_game_over()
-	# A landing charge happens while the phase is still await_roll. Advance
-	# immediately so a non-final bankruptcy can never leave a dead player as the
-	# current actor for a renderer or an AI scheduler. Loan-debt bankruptcy from
+	# A landing or route charge advances immediately so a non-final bankruptcy
+	# cannot leave a dead player as the current actor. Loan-debt bankruptcy from
 	# end_turn is advanced by that caller after its final bookkeeping instead.
-	if was_current_roll and state.get("phase", "") != "game_over":
+	if was_current_movement and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
 
 
@@ -2691,6 +2785,7 @@ func _upgrade_property(player_id: int) -> Dictionary:
 		var source_object_id: int = int(facility.get("source_object_id", -1))
 		var next_level: int = facility_level + 1
 		_update_facility_records(source_object_id, {"building_level": next_level})
+		_apply_fortune_construction_bonus(player_id, _facility_record(int(player.get("position", -1))))
 		state["property_action_used"] = true
 		_recalculate_property_values()
 		_record_event("facility_upgraded", {"player_id": player_id, "facility_id": _facility_canonical_index(int(player.get("position", -1))), "source_object_id": source_object_id, "facility_type": facility_type, "level": next_level, "price": facility_price})

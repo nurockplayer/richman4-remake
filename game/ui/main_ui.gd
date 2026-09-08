@@ -1761,6 +1761,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "請選擇行進方向"
 	elif phase == "await_roll":
 		action_hint_label.text = "住院休養中，按休養推進回合" if _has_original_gods() and int(player.get("hospital_days", 0)) > 0 else "輪到你了，請擲骰"
+	elif _has_original_gods() and phase == "await_action" and _as_array(state.get("last_roll", [])).is_empty():
+		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
 		action_hint_label.text = "%s將在結束回合時影響停留地產" % OriginalGods.name_for(int(player.god_id))
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [7, 8, 15]:
@@ -2084,6 +2086,10 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s將費用由 %s 調整為 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("from_amount", 0))), _format_money(int(event.get("to_amount", 0)))]
 		"god_charge_waived":
 			return "%s免除費用 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("amount", 0)))]
+		"property_fee_waived":
+			var fee_name := "設施費" if event.get("kind", "") == "facility" else "租金"
+			var owner_status := "住院" if event.get("reason", "") == "hospital" else "死神附身"
+			return "地主%s，本次免收%s" % [owner_status, fee_name]
 		"god_fortune_construction":
 			return "%s額外加蓋%s至第 %d 級" % [OriginalGods.name_for(int(event.get("god_id", 0))), _tile_name(int(event.get("tile_id", -1))), int(event.get("to_level", 0))]
 		"god_property_effect":

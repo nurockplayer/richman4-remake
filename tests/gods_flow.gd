@@ -55,8 +55,8 @@ func _definition() -> Dictionary:
 	return loaded.get("definition", {})
 
 
-func _new_gods_game() -> Game:
-	return Game.new_game_on_board(123, 2, _definition(), {
+func _new_gods_game(player_count: int = 2) -> Game:
+	return Game.new_game_on_board(123, player_count, _definition(), {
 		"original_facilities": true,
 		"original_gods": true,
 		"start_date": {"year": 1998, "month": 1, "day": 1},
@@ -149,6 +149,41 @@ func _test_cash_and_cards() -> void:
 		odd_game.state["players"][0]["cards"] = ["均富", "均貧", "購地", "停留", "烏龜"].slice(0, card_count)
 		_attach(odd_game, 0, 8)
 		_expect_equal(odd_game.state["players"][0]["cards"].size(), card_count - int(floor(float(card_count) / 2.0)), "large unlucky god floors half-card loss for %d cards" % card_count)
+
+
+func _test_non_current_bankruptcy_preserves_movement() -> void:
+	var game: Game = _new_gods_game(3)
+	if game == null:
+		return
+	# The mover is player 0. Let small wealth god 1 bankrupt player 1 while the
+	# mover is between graph steps, then verify that player 0's pending movement
+	# and bank state survive the unrelated bankruptcy.
+	_reset_actors(game)
+	var wealth: Dictionary = game._god_object(1)
+	wealth["node"] = 1
+	var mover: Dictionary = game.state["players"][0]
+	var debtor: Dictionary = game.state["players"][1]
+	mover["position"] = 1
+	mover["previous_position"] = 0
+	debtor["cash"] = 0
+	debtor["deposit"] = 0
+	game.state["current_player"] = 0
+	game.state["phase"] = "await_route"
+	game.state["last_total"] = 2
+	game.state["remaining_steps"] = 1
+	game.state["pending_movement"] = {"player_id": 0, "current_node": 1, "previous_node": 0}
+	game.state["route_options"] = [2]
+	game.state["bank_access"] = true
+	game.state["bank_landing"] = true
+	game._process_god_step(0, 1)
+	_expect(not bool(debtor["alive"]), "small wealth god can bankrupt a non-current player during movement")
+	_expect_equal(game.state["remaining_steps"], 1, "unrelated bankruptcy preserves mover remaining steps")
+	_expect_equal(game.state["pending_movement"], {"player_id": 0, "current_node": 1, "previous_node": 0}, "unrelated bankruptcy preserves mover pending movement")
+	_expect_equal(game.state["route_options"], [2], "unrelated bankruptcy preserves mover route options")
+	_expect(bool(game.state["bank_access"]) and bool(game.state["bank_landing"]), "unrelated bankruptcy preserves mover bank state")
+	game._graph_continue_movement(0)
+	_expect_equal(int(mover["position"]), 2, "mover continues after unrelated bankruptcy")
+	_expect_equal(game.state["phase"], "await_roll", "completed movement returns to await_roll")
 
 
 func _test_rent_and_build_effects() -> void:
@@ -375,6 +410,7 @@ func _test_lifecycle_and_gates() -> void:
 func _initialize() -> void:
 	_test_spawn_and_step_pickup()
 	_test_cash_and_cards()
+	_test_non_current_bankruptcy_preserves_movement()
 	_test_rent_and_build_effects()
 	_test_facility_charge_effects()
 	_test_land_god_and_dog()

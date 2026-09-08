@@ -1513,7 +1513,7 @@ func _update_all() -> void:
 	var players: Array = state.get("players", [])
 	var board: Array = state.get("board", [])
 	if board_view != null and board_view.has_method("set_game_data"):
-		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])))
+		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}))
 	_update_header(phase, current_index)
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())
@@ -1763,6 +1763,13 @@ func _update_cards_popup() -> void:
 					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
 				row.add_child(target_option)
+			var tile_option: OptionButton = null
+			if card_id == "拆除":
+				tile_option = _make_inventory_tile_picker(card_id)
+				row.add_child(tile_option)
+			if card_id == "購地":
+				var current_tile := _current_tile()
+				row.add_child(_make_label("%s · %s" % [str(current_tile.get("name", "目前位置")), _format_money(int(current_tile.get("cost", 0)))], 11, TEXT_MUTED))
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
 				if symbol_option != null:
@@ -1770,6 +1777,8 @@ func _update_cards_popup() -> void:
 					params["symbol"] = symbol_names[symbol_option.get_selected_id()]
 				if target_option != null:
 					params["target_id"] = target_option.get_selected_id()
+				if tile_option != null:
+					params["tile_id"] = tile_option.get_selected_id()
 				var result := _invoke_game("choose_action", ["use_card", params])
 				_append_local_log("使用卡片 %s：%s" % [card_id, _result_text(result, "已送出卡片指令。")])
 				_handle_result(result)
@@ -1777,6 +1786,12 @@ func _update_cards_popup() -> void:
 			)
 			var implemented := _item_implemented("card", card_id)
 			use.disabled = not implemented or not _has_action_option(options, "use_card")
+			use.name = "UseCard_" + card_id
+			if tile_option != null and tile_option.disabled:
+				use.disabled = true
+			if card_id == "購地":
+				var current_tile := _current_tile()
+				use.disabled = use.disabled or str(current_tile.get("kind", "")) != "property" or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or int(current_tile.get("cost", 0)) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
 			if not implemented:
 				use.text = "尚未還原"
 			row.add_child(use)
@@ -1945,7 +1960,40 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 		"stock_sold":
 			return "賣出 %s × %d" % [str(event.get("symbol", "")), int(event.get("quantity", 0))]
 		"card_used":
-			return "使用卡片：%s" % str(event.get("card_id", ""))
+			var card_name := _inventory_item_name("card", str(event.get("card_id", "")))
+			if event.has("tile_id") or event.has("property_id"):
+				return "使用%s：%s" % [card_name, _tile_name(int(event.get("tile_id", event.get("property_id", -1))))]
+			return "使用%s" % card_name
+		"tool_used":
+			var tool_name := _inventory_item_name("tool", str(event.get("tool_id", "")))
+			if event.get("effect", "") == "remote_dice":
+				return "使用%s：下次移動 %d 點" % [tool_name, int(event.get("value", 0))]
+			if event.has("tile_id"):
+				return "使用%s：%s" % [tool_name, _tile_name(int(event.get("tile_id", -1)))]
+			return "使用%s" % tool_name
+		"vehicle_selected":
+			var names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
+			return "%s · %d 顆骰子" % [str(names.get(str(event.get("vehicle", "walking")), "交通工具")), int(event.get("dice_count", 1))]
+		"item_bought", "item_sold":
+			var item_name := _inventory_item_name(str(event.get("item_kind", "")), str(event.get("item_id", "")))
+			return "%s %s × %d · %d 點券" % ["買入" if event_type == "item_bought" else "出售", item_name, int(event.get("quantity", 1)), int(event.get("price", event.get("sale_price", 0)))]
+		"points_landed", "points_passed":
+			return "取得 %d 點券" % int(event.get("points", 0))
+		"card_passed", "event_drawn":
+			if event.has("error"):
+				return "本次未取得卡片"
+			var card_id := str(event.get("card_id", ""))
+			if InventoryCatalogue.card(card_id).is_empty():
+				return "抽到事件：%s" % str(event.get("name", card_id))
+			var detail := "取得%s" % _inventory_item_name("card", card_id)
+			var evicted := str(event.get("evicted_card_id", ""))
+			if not evicted.is_empty():
+				detail += " · 背包已滿，退回%s" % _inventory_item_name("card", evicted)
+			return detail
+		"event_draw_failed":
+			return "本次未取得卡片"
+		"roadblock_hit":
+			return "遇到路障，停在%s並移除路障" % _tile_name(int(event.get("tile_id", -1)))
 		"game_over":
 			return "本局結束"
 		"turn_started":
@@ -1955,6 +2003,10 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 
 func _tile_name(index: int) -> String:
 	return str(_tile_for_index(index).get("name", "格位 %02d" % (index + 1)))
+
+func _inventory_item_name(kind: String, item_id: String) -> String:
+	var record: Dictionary = InventoryCatalogue.card(item_id) if kind == "card" else InventoryCatalogue.tool(item_id)
+	return str(record.get("name", item_id))
 
 func _roll_text(result: Dictionary) -> String:
 	var dice: Array = _as_array(result.get("last_roll", result.get("dice", state.get("last_roll", []))))
@@ -2165,10 +2217,16 @@ func _append_tool_inventory() -> void:
 			for value in range(1, 7):
 				value_option.add_item("%d 點" % value, value)
 			row.add_child(value_option)
+		var tile_option: OptionButton = null
+		if ["路障", "機器工人"].has(item_id):
+			tile_option = _make_inventory_tile_picker(item_id)
+			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:
 			var params: Dictionary = {"tool_id": item_id}
 			if value_option != null:
 				params["value"] = value_option.get_selected_id()
+			if tile_option != null:
+				params["tile_id"] = tile_option.get_selected_id()
 			var result := _invoke_game("choose_action", ["use_tool", params])
 			_append_local_log("使用道具 %s：%s" % [item_id, _result_text(result, "已送出道具指令。")])
 			_handle_result(result)
@@ -2177,6 +2235,8 @@ func _append_tool_inventory() -> void:
 		use.name = "UseTool_" + item_id
 		var implemented := _item_implemented("tool", item_id)
 		use.disabled = not implemented or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
+		if tile_option != null and tile_option.disabled:
+			use.disabled = true
 		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car"):
 			use.disabled = true
 			use.text = "使用中"
@@ -2186,3 +2246,31 @@ func _append_tool_inventory() -> void:
 		cards_popup_list.add_child(row)
 	if not has_tools:
 		cards_popup_list.add_child(_make_label("目前沒有道具。", 12, TEXT_MUTED))
+
+func _make_inventory_tile_picker(item_id: String) -> OptionButton:
+	var picker := OptionButton.new()
+	picker.name = "Target_" + item_id
+	picker.custom_minimum_size = Vector2(220, 34)
+	picker.add_theme_font_size_override("font_size", 11)
+	var candidates: Array = []
+	if game_state != null and game_state.has_method("inventory_target_tiles"):
+		candidates = _as_array(game_state.call("inventory_target_tiles", item_id))
+	var visible: Array = _as_array(board_view.call("visible_node_indices")) if board_view != null and board_view.has_method("visible_node_indices") else []
+	var board := _as_array(state.get("board", []))
+	var barriers: Dictionary = state.get("roadblocks", {})
+	for candidate in candidates:
+		var index := int(candidate)
+		if index < 0 or index >= board.size() or not visible.has(index):
+			continue
+		var tile: Dictionary = board[index]
+		var label := "%s · 節點 %d" % [str(tile.get("name", "道路")), index + 1]
+		if barriers.has(str(index)):
+			label = "路障 · " + label
+		elif str(tile.get("kind", "")) == "property":
+			label += " · %d 級" % int(tile.get("building_level", 0))
+		picker.add_item(label, index)
+	if picker.item_count == 0:
+		picker.add_item("畫面內沒有可用目標", -1)
+		picker.disabled = true
+		picker.tooltip_text = "關閉背包後，可縮放或平移地圖，再重新選擇目標。"
+	return picker

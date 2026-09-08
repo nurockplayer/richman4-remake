@@ -140,6 +140,18 @@ func _test_original_graph_view(definition: Dictionary) -> void:
 	changed_geometry.board[0].x += 500
 	view.set_game_data(changed_geometry.board, [], 0, changed_geometry)
 	_expect(view.map_pan == Vector2.ZERO, "same identity with replaced coordinates resets viewport")
+	view.set_game_data(definition.board, [], 0, definition, [], {"1": 0})
+	_expect(view.roadblocks_data == {"1": 0}, "board receives roadblock overlay without changing source geometry")
+	_expect(view.visible_node_indices().has(1), "visible target list includes onscreen node")
+	view.pan_by(Vector2(10000, 10000))
+	_expect(view.visible_node_indices().is_empty(), "visible target list follows panned viewport")
+	view.reset_view()
+	_expect(view.visible_node_indices().has(1), "reset restores target visibility")
+	view.set_game_data(definition.board, [], 0, definition)
+	_expect(view.roadblocks_data.is_empty(), "legacy signature clears stale barriers")
+	view.set_game_data(definition.board, [], 0, definition, [], {"1": 0})
+	view.set_preview_definition(definition)
+	_expect(view.roadblocks_data.is_empty(), "new-game preview clears active barriers")
 	view.queue_free()
 
 func _test_legacy_perimeter() -> void:

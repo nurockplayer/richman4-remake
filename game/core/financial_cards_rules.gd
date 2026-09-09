@@ -340,7 +340,9 @@ static func _source_matches(data: Dictionary, kind: String, node_id: int, credit
 static func _settle_fee(game: Object, payer_id: int, creditor_id: int, amount: int, kind: String) -> bool:
 	if amount < 0 or not FEE_KINDS.has(kind):
 		return false
-	if creditor_id >= 0 and not _can_credit_player(game, creditor_id, amount):
+	var payer: Dictionary = game._player(payer_id)
+	var payable := mini(amount, int(payer.get("cash", 0)) + int(payer.get("deposit", 0)))
+	if creditor_id >= 0 and not _can_credit_player(game, creditor_id, payable):
 		return false
 	game._charge_amount(payer_id, amount, creditor_id, kind, false)
 	return true

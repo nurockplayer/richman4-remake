@@ -4719,7 +4719,9 @@ func _financial_fee_gate(debtor_id: int, amount: int, creditor_id: int, kind: St
 		return true
 	# The bounded player-cash representation is enforced at the financial fee
 	# entrance. Generic event/god charges retain their original primitive.
-	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - amount:
+	var debtor: Dictionary = _player(debtor_id)
+	var payable := mini(amount, int(debtor.get("cash", 0)) + int(debtor.get("deposit", 0)))
+	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - payable:
 		_record_event("payment_rejected", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount, "kind": kind, "error": "cash_cap"})
 		return false
 	var offer: Dictionary = FinancialRules.maybe_offer_free(self, debtor_id, creditor_id, amount, node_id, kind, free_allowed)

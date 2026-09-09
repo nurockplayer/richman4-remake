@@ -140,6 +140,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/news_public_tax.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_bank_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/news_timing.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_timing.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/movement_presentation.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/movement_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/movement_continuation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_contract_regressions.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_state_contract.gd

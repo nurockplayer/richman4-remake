@@ -3,6 +3,12 @@ extends PopupPanel
 ## Presents completed simulation results. Closing never mutates game state.
 var _summary: RichTextLabel
 var _last_draw := -1
+var display_seconds := 1.6
+var _generation := 0
+
+func cancel_presentation() -> void:
+	_generation += 1
+	hide()
 
 func _init() -> void:
 	name = "FatePopup"
@@ -43,7 +49,7 @@ func sync_snapshot(snapshot: Dictionary) -> void:
 	var fate: Variant = snapshot.get("fate", {})
 	if typeof(fate) != TYPE_DICTIONARY or fate.get("last", {}).is_empty():
 		_last_draw = -1
-		hide()
+		cancel_presentation()
 		return
 	var last: Dictionary = fate.last
 	# Read the last resolved draw, since an ineligible scan preserves fate.last.
@@ -61,3 +67,9 @@ func sync_snapshot(snapshot: Dictionary) -> void:
 	_summary.text = str(last.get("summary", ""))
 	var viewport_size: Vector2 = get_tree().root.get_visible_rect().size
 	popup_centered(Vector2i(mini(660, int(viewport_size.x) - 48), mini(400, int(viewport_size.y) - 48)))
+	_generation += 1
+	var generation := _generation
+	get_tree().create_timer(maxf(0.01, display_seconds)).timeout.connect(func():
+		if generation == _generation:
+			hide()
+	)

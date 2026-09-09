@@ -13,6 +13,7 @@ const GameCalendar = preload("res://game/core/game_calendar.gd")
 const InventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const InventoryRules = preload("res://game/core/inventory_rules.gd")
 const NewsPanel = preload("res://game/ui/news_panel.gd")
+const MovementPresentation = preload("res://game/ui/movement_presentation.gd")
 const FatePanel = preload("res://game/ui/fate_panel.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
@@ -157,6 +158,10 @@ var _company_purchase_button: Button
 var _company_service_target: OptionButton
 var _company_service_type: OptionButton
 var _company_service_button: Button
+var _presentation_busy := false
+var _presentation_generation := 0
+var _presentation_result: Dictionary = {}
+var _presentation_owner: Object
 
 func _ready() -> void:
 	_build_interface()
@@ -168,6 +173,8 @@ func _process(_delta: float) -> void:
 	_maybe_schedule_ai_turn()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _presentation_busy:
+		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -265,6 +272,7 @@ func _build_header() -> Control:
 	setup_summary_label.clip_text = true
 	meta_column.add_child(setup_summary_label)
 	seed_label = _make_label("SEED 136622", 10, TEXT_MUTED)
+	seed_label.hide()
 	seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(seed_label)
 
@@ -326,8 +334,10 @@ func _build_playfield() -> Control:
 		board_view.tile_selected.connect(_on_tile_selected)
 	if board_view.has_signal("route_selected"):
 		board_view.route_selected.connect(_on_route_selected)
+	if board_view.has_signal("movement_finished"):
+		board_view.movement_finished.connect(_on_movement_finished)
 
-	var board_footer := _make_label("原版圖像資產為本機研究來源；目前以向量繪製還原版面。", 10, TEXT_MUTED)
+	var board_footer := _make_label("滾輪縮放 · 中／右鍵拖曳平移", 10, TEXT_MUTED)
 	board_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	board_column.add_child(board_footer)
 
@@ -1394,6 +1404,7 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_refresh_log_only()
 		return false
 	else:
+		_cancel_presentation()
 		game_state = candidate
 		_active_map_definition = selected_definition
 		_local_log.clear()
@@ -1536,6 +1547,7 @@ func _load_game() -> void:
 		_append_local_log("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
 		_refresh_log_only()
 		return
+	_cancel_presentation()
 	game_state = restored
 	_adopt_map_from_snapshot(parsed)
 	_local_log.clear()
@@ -1776,23 +1788,73 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return not _presentation_busy and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _presentation_busy:
+		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
 	if method != "run_ai_turn" and not _is_human_turn() and not is_trap_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
+		var before := _read_snapshot().duplicate(true)
 		var result: Variant = game_state.callv(method, args)
-		return result if result is Dictionary else {}
+		if result is Dictionary:
+			result["_presentation_before"] = before
+			result["_presentation_generation"] = _presentation_generation
+			result["_presentation_owner"] = game_state
+			return result
+		return {}
 	return {"ok": false, "message": "模擬核心未載入；目前無法執行此操作。"}
 
 func _handle_result(result: Dictionary) -> void:
+	if _presentation_busy:
+		return
+	if result.has("_presentation_generation"):
+		if int(result._presentation_generation) != _presentation_generation or result.get("_presentation_owner") != game_state:
+			return
+		var after: Dictionary = result.get("state", _read_snapshot())
+		var moves := MovementPresentation.plan(result.get("_presentation_before", {}), after)
+		if not moves.is_empty() and board_view != null and board_view.has_method("play_movement"):
+			_presentation_busy = true
+			_presentation_result = result
+			_presentation_owner = game_state
+			board_view.route_options = []
+			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
+			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
+			board_view.play_movement(moves)
+			return
 	if result.is_empty():
 		_append_local_log("模擬層未回傳事件；請查看目前回合狀態。")
 	_refresh_from_state(result)
 
+func _cancel_presentation() -> void:
+	_presentation_generation += 1
+	_presentation_busy = false
+	_presentation_result = {}
+	_presentation_owner = null
+	_ai_pending = false
+	if board_view != null and board_view.has_method("cancel_movement"):
+		board_view.cancel_movement(true)
+	if news_popup != null:
+		news_popup.cancel_presentation()
+	if fate_popup != null:
+		fate_popup.cancel_presentation()
+
+func _on_movement_finished() -> void:
+	if not _presentation_busy:
+		return
+	var result := _presentation_result
+	var same_game := _presentation_owner == game_state and int(result.get("_presentation_generation", -1)) == _presentation_generation
+	_presentation_busy = false
+	_presentation_result = {}
+	_presentation_owner = null
+	if same_game:
+		_refresh_from_state(result)
+
 func _refresh_from_state(result: Dictionary = {}) -> void:
+	if _presentation_busy:
+		return
 	var snapshot := _read_snapshot()
 	if result.has("snapshot") and result["snapshot"] is Dictionary:
 		snapshot = result["snapshot"]
@@ -2014,7 +2076,7 @@ func _update_property_card(tile: Dictionary) -> void:
 func _update_actions(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var game_over := phase == "game_over"
-	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var human_turn := not _presentation_busy and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
@@ -2090,7 +2152,7 @@ func _update_route_choices(phase: String, current_index: int) -> void:
 	var options := _as_array(state.get("route_options", []))
 	var player: Dictionary = _current_player()
 	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and phase != "game_over"
-	if phase != "await_route" or options.is_empty():
+	if _presentation_busy or phase != "await_route" or options.is_empty():
 		route_status_label.text = ""
 		return
 	var remaining := int(state.get("remaining_steps", options.size()))
@@ -2170,6 +2232,8 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
+	if _presentation_busy:
+		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
@@ -2179,10 +2243,14 @@ func _maybe_schedule_ai_turn() -> void:
 		return
 	_ai_pending = true
 	var timer := get_tree().create_timer(0.82)
-	timer.timeout.connect(_on_ai_timer_timeout)
+	timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
 
-func _on_ai_timer_timeout() -> void:
+func _on_ai_timer_timeout(generation := -1) -> void:
+	if generation >= 0 and generation != _presentation_generation:
+		return
 	_ai_pending = false
+	if _presentation_busy:
+		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():

@@ -167,3 +167,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/fate_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_graph.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_public_charge.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/fate_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/financial_fees.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/financial_tax.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/financial_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/financial_ui.gd

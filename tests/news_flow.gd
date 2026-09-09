@@ -271,21 +271,17 @@ func _test_status_effects() -> void:
 		# Keep the landing actor on the news node and place a separate active
 		# status holder on its canonical facility, so post-effect save checks can
 		# verify both movement and status invariants independently.
-		var player: Dictionary = game.state.players[1]
-		if event_id in [0, 1]:
-			player["prison_days"] = 6
-			player["position"] = 4
-			player["previous_position"] = -1
-		else:
-			player["hospital_days"] = 6
-			player["position"] = 0
-			player["previous_position"] = -1
+		var status_kind := "prison" if event_id in [0, 1] else "hospital"
+		expect(game._admit_player_status(1, status_kind, 6).get("ok", false), "first news status target enters through existing admission")
+		expect(game._admit_player_status(2, status_kind, 4).get("ok", false), "second news status target enters through existing admission")
 		_valid_before_effect(game, "status-%d" % event_id)
 		_land_news(game, "status-%d" % event_id)
 		_expect_last(game, event_id, "status-%d" % event_id)
 		var field := "prison_days" if event_id in [0, 1] else "hospital_days"
 		var expected := 128 if event_id in [0, 2] else 9
-		expect(int(player.get(field, -1)) == expected, "status-%d applies source counter mutation" % event_id)
+		expect(int(game.state.players[1].get(field, -1)) == expected, "status-%d applies source counter mutation" % event_id)
+		expect(int(game.state.players[2].get(field, -1)) == (128 if event_id in [0, 2] else 7), "status-%d affects every matching status holder" % event_id)
+		expect(int(game.state.players[0].get(field, -1)) == 0 and int(game.state.players[3].get(field, -1)) == 0, "status-%d preserves players outside the facility" % event_id)
 
 
 func _clear_assets(game: Object) -> void:

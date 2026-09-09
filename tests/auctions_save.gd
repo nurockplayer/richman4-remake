@@ -221,6 +221,23 @@ func _test_malformed_records_fail_closed() -> void:
 	wrong_target["pending_auction"]["node_id"] = game.state["board"].size() - 1
 	_invalid_record(wrong_target, "pending wrong target kind")
 
+	# A pending record must keep the target bound to the caster's current tile,
+	# even when the moved-to tile is itself a valid auction target.  Keep the
+	# target's own opening bid canonical so this assertion isolates that binding.
+	var away_target := clean.duplicate(true)
+	var away_node_id := 3
+	var away_tile: Dictionary = game.state["board"][away_node_id]
+	var away_base := int(away_tile.get("land_price", away_tile.get("cost", 0)))
+	var away_level := int(away_tile.get("building_level", 0))
+	var away_price_index := int(game.call("_facility_price_index"))
+	var away_opening := int(float(away_base) * (1.0 + float(away_level) * 0.5)) * away_price_index
+	away_target["pending_auction"]["node_id"] = away_node_id
+	away_target["pending_auction"]["opening_bid"] = away_opening
+	away_target["pending_auction"]["current_bid"] = away_opening
+	away_target["pending_auction"]["highest_bidder_id"] = -1
+	away_target["pending_auction"]["bidder_id"] = 1
+	_invalid_record(away_target, "pending valid target must remain at caster position")
+
 	var wrong_opening := clean.duplicate(true)
 	wrong_opening["pending_auction"]["opening_bid"] = int(pending.get("opening_bid", 0)) + 1
 	_invalid_record(wrong_opening, "pending opening bid mismatch")

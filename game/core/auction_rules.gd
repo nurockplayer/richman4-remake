@@ -155,7 +155,11 @@ static func ai_turn(game: Object, max_steps: int = 64) -> Dictionary:
 			return game._result(false, str(result.get("message", "AI 拍賣回應失敗")), {"player_id": bidder_id, "iterations": steps, "completed": false, "auction": true})
 		if not response(game).is_empty() and not bool(game._player(int(response(game).get("bidder_id", -1))).get("is_ai", false)):
 			return game._result(true, "等待人類玩家回應拍賣", {"player_id": int(response(game).get("bidder_id", -1)), "awaiting_response": true, "iterations": steps, "completed": false, "auction": true})
-	return game._result(false, "AI 拍賣在限制內未完成", {"iterations": steps, "completed": false, "auction": true})
+	# A long but valid all-AI auction may need several bounded calls.  Yield to
+	# the public turn loop as successful ongoing work so the caller can resume
+	# from the still-pending record without treating the safety budget as a
+	# gameplay failure.
+	return game._result(true, "AI 拍賣仍在進行", {"iterations": steps, "completed": false, "auction": true, "awaiting_response": false})
 
 
 static func validate_save(data: Dictionary, player_count: int, board: Variant, phase: String, action_options: Variant, inventory_save: bool) -> Array:
@@ -230,6 +234,9 @@ static func _validate_static_shape(game: Object, data: Dictionary, pending: Dict
 	var caster: Dictionary = players[caster_id] if caster_id >= 0 and caster_id < players.size() and typeof(players[caster_id]) == TYPE_DICTIONARY else {}
 	if caster.is_empty() or not bool(caster.get("alive", false)) or bool(caster.get("bankrupt", false)):
 		errors.append("pending auction caster unavailable")
+	var caster_position: Variant = caster.get("position", null)
+	if not _valid_json_int(caster_position, 0, board.size() - 1) or int(caster_position) != node_id:
+		errors.append("pending auction caster position mismatch")
 	if typeof(caster.get("cards", null)) != TYPE_ARRAY or not caster.get("cards", []).has(CARD_ID):
 		errors.append("pending auction missing reserved card")
 	var target: Dictionary = game._tile_at(node_id)

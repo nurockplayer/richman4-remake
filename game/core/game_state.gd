@@ -6575,6 +6575,12 @@ func run_ai_turn() -> Dictionary:
 	var safety: int = 0
 	var route_safety: int = 0
 	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		# Card actions can create an auction while _ai_action is running.  Dispatch
+		# the newly pending auction before the loop retries ordinary actions or
+		# attempts to end the turn; the auction owns the bidder control flow until
+		# it settles or reaches a human bidder.
+		if not AuctionRules.response(self).is_empty():
+			return AuctionRules.ai_turn(self)
 		if not _pending_finance().is_empty():
 			return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 		if _trap_pending():

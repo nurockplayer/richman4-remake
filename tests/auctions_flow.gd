@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_test_owner_participation_and_no_sale()
 	_test_sale_accounting_and_self_owner()
 	_test_capacity_no_deadlock()
+	_test_ai_initiated_bounded_auction()
 	_test_pending_blockers()
 	_test_mixed_human_ai_wait()
 	print("Original auction flow checks: %d, failures: %d, behavior_reds: %d" % [checks, failures, behavior_reds])
@@ -567,6 +568,51 @@ func _test_pending_blockers() -> void:
 	var malformed := _public_respond(game, {"increment": "100", "cancel": false}, "pending-malformed-response")
 	_expect(not bool(malformed.get("ok", false)), "pending rejects string increment")
 	_expect_json_equal(game.to_json(), malformed_before, "malformed auction response is byte-atomic")
+
+
+func _test_ai_initiated_bounded_auction() -> void:
+	# Start through the public AI turn with no pre-existing pending record.  The
+	# high opening bid forces more than one 64-step auction slice while every
+	# intermediate snapshot remains save-valid.
+	var game: Object = Fixture.new_game(7865)
+	if game == null:
+		return
+	for player_id in range(4):
+		game.set_player_ai(player_id, true)
+	var target := _property_node(game)
+	Fixture.set_property_state(game, target, -1, 5)
+	game.state["price_index"] = 3
+	Fixture.prepare(game, 0, target)
+	# Reserve the landing property action so the AI reaches its card fallback.
+	game.state["property_action_used"] = true
+	game.call("_set_action_options", 0)
+	var staged := Fixture.stage_card(game, 0)
+	_expect(bool(staged.get("ok", false)), "AI initiation stages auction card")
+	_expect(_pending(game).is_empty(), "AI initiation begins without a pre-existing pending auction")
+	var first_result := _public_ai(game, "AI initiated auction")
+	_expect(bool(first_result.get("ok", false)), "public AI turn starts and services auction")
+	var pending := _pending(game)
+	_expect(not pending.is_empty(), "AI card action creates a pending auction")
+	if pending.is_empty():
+		return
+	_expect(bool(first_result.get("auction", false)), "AI result identifies auction work")
+
+	var calls := 1
+	while not pending.is_empty() and calls < 16:
+		var validation := Fixture.validate(game)
+		_expect(bool(validation.get("ok", false)), "long AI auction intermediate save remains valid")
+		var result := _public_ai(game, "long-AI-auction-%d" % calls)
+		_expect(bool(result.get("ok", false)), "bounded AI auction slice succeeds")
+		calls += 1
+		pending = _pending(game)
+	_expect(pending.is_empty(), "long all-AI auction eventually settles")
+	var final_validation := Fixture.validate(game)
+	_expect(bool(final_validation.get("ok", false)), "settled AI auction save remains valid")
+	var bid_events := 0
+	for event_value in game.state.get("event_log", []):
+		if typeof(event_value) == TYPE_DICTIONARY and event_value.get("type", "") == "auction_bid":
+			bid_events += 1
+	_expect(bid_events > 64, "long AI auction exceeds one 64-step slice")
 
 
 func _run_mixed_human_ai_case(seed_value: int, caster_id: int, label: String) -> void:

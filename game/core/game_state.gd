@@ -35,6 +35,7 @@ const NewsEvents = preload("res://game/core/news_events.gd")
 const FateEvents = preload("res://game/core/fate_events.gd")
 const SleepRules = preload("res://game/core/sleep_rules.gd")
 const FinancialRules = preload("res://game/core/financial_cards_rules.gd")
+const AllianceRules = preload("res://game/core/alliance_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -799,6 +800,10 @@ func financial_response() -> Dictionary:
 
 func tax_target_players(caster_id: int) -> Array:
 	return FinancialRules.tax_target_players(self, caster_id)
+
+
+func alliance_target_players(caster_id: int) -> Array:
+	return AllianceRules.target_players(self, caster_id)
 
 
 func _trap_pending() -> bool:
@@ -3146,6 +3151,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 			return _is_inventory() and _is_statuses()
 		if FinancialRules.is_financial_card(item_id):
 			return _is_inventory()
+		if AllianceRules.is_alliance_card(item_id):
+			return _is_inventory()
 		if BUILDING_CARD_IDS.has(item_id):
 			return _is_building_cards()
 		if GOD_CARD_IDS.has(item_id):
@@ -4435,6 +4442,9 @@ func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_obje
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
+	if AllianceRules.are_allied(self, debtor_id, creditor_id):
+		_record_event("alliance_fee_waived", {"player_id": debtor_id, "creditor_id": creditor_id, "kind": "facility", "amount": amount})
+		return
 	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, amount, "facility")
 	if _is_gods() and adjusted_amount <= 0:
 		_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": "facility", "amount": amount})
@@ -4512,6 +4522,12 @@ func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
 		payload["admitted"] = true
 		payload["reason"] = "park_no_effect"
 		_record_event("facility_service", payload)
+		return
+	if AllianceRules.are_allied(self, player_id, owner_id):
+		payload["reason"] = "alliance"
+		payload["alliance_waived"] = true
+		_record_event("facility_service", payload)
+		_record_event("alliance_fee_waived", {"player_id": player_id, "creditor_id": owner_id, "kind": "facility", "tile_id": tile_id, "source_object_id": source_object_id})
 		return
 	var fee_waiver_reason: String = _god_property_fee_waiver_reason(owner_id)
 	if not fee_waiver_reason.is_empty():
@@ -4676,21 +4692,34 @@ func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 			debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
 			_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
 		return
+	if AllianceRules.are_allied(self, debtor_id, creditor_id):
+		_record_event("alliance_fee_waived", {"player_id": debtor_id, "creditor_id": creditor_id, "kind": "rent", "amount": amount})
+		return
+	var rent_tile: Dictionary = _tile_at(int(debtor.get("position", -1)))
+	var rent_contributions: Array = AllianceRules.rent_contributions(self, rent_tile, creditor_id, amount)
+	var nominal_amount: int = amount
+	if rent_contributions.size() > 1:
+		nominal_amount = 0
+		for contribution_value in rent_contributions:
+			if typeof(contribution_value) == TYPE_DICTIONARY:
+				nominal_amount += max(0, int(contribution_value.get("amount", 0)))
+		if nominal_amount <= 0:
+			nominal_amount = amount
 	var fee_waiver_reason: String = _god_property_fee_waiver_reason(creditor_id)
 	if not fee_waiver_reason.is_empty():
 		_record_god_property_fee_waived(debtor_id, creditor_id, fee_waiver_reason, "property")
 		return
-	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, amount, "rent")
+	var adjusted_amount: int = _god_adjust_charge_amount(debtor_id, nominal_amount, "rent")
 	if _is_gods() and adjusted_amount <= 0:
-		_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": "rent", "amount": amount})
+		_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": "rent", "amount": nominal_amount})
 		return
 	if int(debtor.get("rent_shield", 0)) > 0:
 		debtor["rent_shield"] = int(debtor["rent_shield"]) - 1
-		_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
+		_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": nominal_amount})
 		return
 	if not _financial_fee_gate(debtor_id, adjusted_amount, creditor_id, "rent", int(debtor.get("position", -1))):
 		return
-	_charge_amount(debtor_id, adjusted_amount, creditor_id, "rent", false)
+	_settle_financial_fee(debtor_id, creditor_id, adjusted_amount, "rent")
 
 
 func _god_charge_amount_value(debtor_id: int, amount: int, reason: String) -> int:
@@ -4716,14 +4745,59 @@ func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> i
 	return adjusted_amount
 
 
+func _financial_fee_recipients(debtor_id: int, creditor_id: int, amount: int, kind: String) -> Array:
+	if amount < 0:
+		return []
+	if kind != "rent":
+		return [{"creditor_id": creditor_id, "amount": amount}]
+	var debtor: Dictionary = _player(debtor_id)
+	var node_id: int = int(debtor.get("position", -1))
+	return AllianceRules.recipient_shares(self, debtor_id, creditor_id, amount, node_id)
+
+
+func _financial_fee_recipient_caps_ok(debtor_id: int, creditor_id: int, amount: int, kind: String) -> bool:
+	if amount < 0:
+		return false
+	var debtor: Dictionary = _player(debtor_id)
+	if debtor.is_empty():
+		return false
+	var payable: int = mini(amount, int(debtor.get("cash", 0)) + int(debtor.get("deposit", 0)))
+	for recipient_value in _financial_fee_recipients(debtor_id, creditor_id, payable, kind):
+		if typeof(recipient_value) != TYPE_DICTIONARY:
+			return false
+		var recipient_id: int = int(recipient_value.get("creditor_id", -1))
+		var recipient_amount: int = max(0, int(recipient_value.get("amount", 0)))
+		if recipient_amount <= 0:
+			continue
+		if recipient_id < 0:
+			continue
+		if not _valid_player(recipient_id, true):
+			return false
+		if int(_player(recipient_id).get("cash", 0)) > FinancialRules.MAX_CASH - recipient_amount:
+			return false
+	return true
+
+
+func _financial_fee_expected_amount(debtor_id: int, creditor_id: int, kind: String, node_id: int) -> int:
+	if kind != "rent":
+		return -1
+	var tile: Dictionary = _tile_at(node_id)
+	var base_amount: int = _calculate_rent(tile, creditor_id)
+	var contributions: Array = AllianceRules.rent_contributions(self, tile, creditor_id, base_amount)
+	if contributions.size() > 1:
+		base_amount = 0
+		for contribution_value in contributions:
+			if typeof(contribution_value) == TYPE_DICTIONARY:
+				base_amount += max(0, int(contribution_value.get("amount", 0)))
+	return _god_charge_amount_value(debtor_id, base_amount, "rent")
+
+
 func _financial_fee_gate(debtor_id: int, amount: int, creditor_id: int, kind: String, node_id: int, free_allowed: bool = true) -> bool:
 	if amount <= 0:
 		return true
 	# The bounded player-cash representation is enforced at the financial fee
 	# entrance. Generic event/god charges retain their original primitive.
-	var debtor: Dictionary = _player(debtor_id)
-	var payable := mini(amount, int(debtor.get("cash", 0)) + int(debtor.get("deposit", 0)))
-	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - payable:
+	if not _financial_fee_recipient_caps_ok(debtor_id, creditor_id, amount, kind):
 		_record_event("payment_rejected", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount, "kind": kind, "error": "cash_cap"})
 		return false
 	var offer: Dictionary = FinancialRules.maybe_offer_free(self, debtor_id, creditor_id, amount, node_id, kind, free_allowed)
@@ -4738,6 +4812,34 @@ func _financial_fee_gate(debtor_id: int, amount: int, creditor_id: int, kind: St
 	if bool(offer.get("awaiting_response", false)):
 		return false
 	return true
+
+
+func _settle_financial_fee(debtor_id: int, creditor_id: int, amount: int, kind: String) -> void:
+	if amount <= 0:
+		return
+	var debtor: Dictionary = _player(debtor_id)
+	if debtor.is_empty() or not bool(debtor.get("alive", false)):
+		return
+	var recipients: Array = _financial_fee_recipients(debtor_id, creditor_id, amount, kind)
+	if recipients.size() < 2:
+		_charge_amount(debtor_id, amount, creditor_id, kind, false)
+		return
+	var payable: int = mini(amount, int(debtor.get("cash", 0)) + int(debtor.get("deposit", 0)))
+	if payable > 0:
+		var cash_available: int = int(debtor.get("cash", 0))
+		if payable > cash_available:
+			_withdraw_internal(debtor_id, payable - cash_available)
+		var paid_recipients: Array = _financial_fee_recipients(debtor_id, creditor_id, payable, kind)
+		for recipient_value in paid_recipients:
+			if typeof(recipient_value) != TYPE_DICTIONARY:
+				continue
+			var recipient_id: int = int(recipient_value.get("creditor_id", -1))
+			var recipient_amount: int = max(0, int(recipient_value.get("amount", 0)))
+			if recipient_amount > 0:
+				_pay_from_player(debtor_id, recipient_amount, recipient_id)
+		_record_event("payment", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": payable, "reason": kind})
+	if payable < amount:
+		_declare_bankruptcy(debtor_id, creditor_id, amount, kind)
 
 
 func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true) -> void:
@@ -4794,6 +4896,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
+	AllianceRules.clear_for_player(self, debtor_id)
 	var debtor_is_current: bool = int(state.get("current_player", -1)) == debtor_id
 	var was_current_movement: bool = debtor_is_current and state.get("phase", "") in ["await_roll", "await_route"]
 	if _is_gods():
@@ -5017,8 +5120,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			var selected_item_kind: Variant = null
 			var selected_item_id: Variant = null
 			var selected_cancel: Variant = false
-			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id):
-				# Keep raw values for theft, sleep, and finance boundaries so malformed
+			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id) or AllianceRules.is_alliance_card(card_id):
+				# Keep raw values for theft, sleep, finance, and alliance boundaries so malformed
 				# target and cancel fields are rejected instead of coerced.
 				selected_target = params.get("target_id", null)
 				selected_item_kind = params.get("item_kind", null)
@@ -5028,7 +5131,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 				selected_target = int(params.get("target_id", player_id))
 				selected_cancel = bool(params.get("cancel", false))
 			var card_result: Dictionary = _use_card(player_id, card_id, selected_target, str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), selected_cancel, params.get("facility_type", null), params.get("visible_tile_ids", null), selected_item_kind, selected_item_id)
-			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id) or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id) or AllianceRules.is_alliance_card(card_id) or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5791,6 +5894,8 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 		return SleepRules.use_card(self, player_id, card_id, target_id, cancel)
 	if FinancialRules.is_financial_card(card_id):
 		return FinancialRules.use_card(self, player_id, card_id, target_id, cancel)
+	if AllianceRules.is_alliance_card(card_id):
+		return AllianceRules.use_card(self, player_id, target_id, cancel)
 	if card_id == "搶奪":
 		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)
 	# All non-theft callers provide the legacy integer target and boolean
@@ -6111,6 +6216,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	state["current_player"] = next_id
 	_admit_loan_block(_player(next_id))
 	_engineering_admit(next_id)
+	AllianceRules.admit_player(self, next_id)
 	if _is_research():
 		# The action guard belongs to the newly admitted turn. Production is
 		# processed once here, after ownership changes and before the next roll.
@@ -6672,6 +6778,18 @@ func _ai_action(player_id: int) -> void:
 					inventory_card_params["target_id"] = int(tax_targets[0])
 				elif card_id == "免費":
 					continue
+				elif AllianceRules.is_alliance_card(card_id):
+					var alliance_target: int = -1
+					for candidate_value in alliance_target_players(player_id):
+						if typeof(candidate_value) != TYPE_INT:
+							continue
+						var candidate_id: int = int(candidate_value)
+						if not AllianceRules.are_allied(self, player_id, candidate_id):
+							alliance_target = candidate_id
+							break
+					if alliance_target < 0:
+						continue
+					inventory_card_params["target_id"] = alliance_target
 				if card_id == "陷害":
 					var trap_target: int = _ai_trap_target(player_id)
 					if trap_target < 0:
@@ -8711,6 +8829,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d vehicle ownership invalid" % index)
 				if vehicle_valid and vehicle_value != EngineeringVehicle.VEHICLE_ID and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
+
+	var alliance_errors: Array = AllianceRules.validate_save(data, player_count, inventory_save)
+	errors.append_array(alliance_errors)
 
 	if status_save:
 		var hospital_node: int = _status_node_index_in_board(board, "hospital")

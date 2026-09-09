@@ -302,6 +302,9 @@ static func _pending_runtime_context(game: Object, pending: Dictionary) -> bool:
 		var owner: Dictionary = game._player(int(creditor_id))
 		if not bool(owner.get("alive", false)):
 			return false
+		if kind == "rent" and game.has_method("_financial_fee_expected_amount"):
+			if int(amount) != int(game._financial_fee_expected_amount(payer_id, int(creditor_id), kind, int(node_id))):
+				return false
 	elif kind == "company":
 		if int(creditor_id) > -2:
 			return false
@@ -342,9 +345,14 @@ static func _settle_fee(game: Object, payer_id: int, creditor_id: int, amount: i
 		return false
 	var payer: Dictionary = game._player(payer_id)
 	var payable := mini(amount, int(payer.get("cash", 0)) + int(payer.get("deposit", 0)))
-	if creditor_id >= 0 and not _can_credit_player(game, creditor_id, payable):
+	if game.has_method("_financial_fee_recipient_caps_ok") and not game._financial_fee_recipient_caps_ok(payer_id, creditor_id, amount, kind):
 		return false
-	game._charge_amount(payer_id, amount, creditor_id, kind, false)
+	if not game.has_method("_financial_fee_recipient_caps_ok") and creditor_id >= 0 and not _can_credit_player(game, creditor_id, payable):
+		return false
+	if game.has_method("_settle_financial_fee"):
+		game._settle_financial_fee(payer_id, creditor_id, amount, kind)
+	else:
+		game._charge_amount(payer_id, amount, creditor_id, kind, false)
 	return true
 
 

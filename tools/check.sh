@@ -112,6 +112,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_guard.gd
 
+# Original 飛彈 and 核子飛彈 target, save and backpack UI acceptance.
+run_checked "$GODOT_BIN" --headless --path . --script tests/missiles_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/missiles_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/missiles_ui.gd
+
 # Original 拍賣 card bidding, settlement, save continuation and UI.
 run_checked "$GODOT_BIN" --headless --path . --script tests/auctions_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/auctions_save.gd

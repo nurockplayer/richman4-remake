@@ -3541,7 +3541,7 @@ func _append_tool_inventory() -> void:
 				value_option.add_item("%d 點" % value, value)
 			row.add_child(value_option)
 		var tile_option: OptionButton = null
-		if ["路障", "機器工人"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
+		if ["路障", "機器工人", "飛彈", "核子飛彈"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
 			tile_option = _make_inventory_tile_picker(item_id)
 			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:

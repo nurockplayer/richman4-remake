@@ -2239,8 +2239,20 @@ func _update_cards_popup() -> void:
 					angel_option.visible = target.get("kind", "") == "facility" and int(target.get("building_level", 0)) == 0
 				tile_option.item_selected.connect(refresh_angel_type)
 				refresh_angel_type.call()
+			var summon_visible_nodes: Array = []
+			var summon_target: Dictionary = {}
+			if card_id == "請神符":
+				if board_view != null and board_view.has_method("visible_node_indices"):
+					summon_visible_nodes = _as_array(board_view.call("visible_node_indices"))
+				if game_state != null and game_state.has_method("god_card_target"):
+					summon_target = game_state.call("god_card_target", int(state.get("current_player", -1)), summon_visible_nodes)
+				var preview := _make_label("畫面內沒有可請來的神明" if summon_target.is_empty() else "請來：" + OriginalGods.name_for(int(summon_target.get("id", 0))), 11, TEXT_MUTED)
+				preview.name = "SummonGodTarget"
+				row.add_child(preview)
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
+				if card_id == "請神符":
+					params["visible_tile_ids"] = summon_visible_nodes
 				if angel_option != null and angel_option.visible:
 					params["facility_type"] = angel_option.get_selected_id()
 				if remodel_option != null:
@@ -2263,6 +2275,14 @@ func _update_cards_popup() -> void:
 			use.name = "UseCard_" + card_id
 			if (tile_option != null and tile_option.disabled) or (target_option != null and target_option.disabled):
 				use.disabled = true
+			if card_id == "請神符":
+				use.disabled = use.disabled or summon_target.is_empty()
+				use.tooltip_text = "自動請來畫面內最近的神明；可關閉背包後平移或縮放地圖。"
+			if card_id == "送神符":
+				use.disabled = use.disabled or (int(_current_player().get("bomb_steps", 0)) <= 0 and int(_current_player().get("god_id", 0)) not in [5, 6, 7, 8, 10])
+				use.tooltip_text = "送走自己的壞神，並清除攜帶的定時炸彈。"
+			if card_id in ["送神符", "請神符"]:
+				use.disabled = use.disabled or not _player_rest_status(_current_player()).is_empty()
 			if card_id == "購地":
 				var current_tile := _current_tile()
 				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or _inventory_purchase_price(current_tile) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))

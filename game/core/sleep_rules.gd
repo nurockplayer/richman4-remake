@@ -344,6 +344,8 @@ static func run_turn(game: Object) -> Dictionary:
 	var player: Dictionary = game._player(player_id)
 	if game.state.get("phase", "") == "game_over" or not bool(player.get("alive", false)) or not game._sleep_active(player):
 		return game._error("目前玩家沒有睡眠回合")
+	if not game.state.get("pending_finance", {}).is_empty():
+		return game._result(true, "等待人類玩家回應金融付款", {"awaiting_response": true, "completed": false, "player_id": player_id})
 	if game._trap_pending():
 		return game._error("請先回應卡片")
 	if game.state.get("phase", "") == "await_roll":
@@ -408,4 +410,6 @@ static func run_turn(game: Object) -> Dictionary:
 			_:
 				return game._error("睡眠回合階段無效")
 		if not bool(result.get("ok", false)): return result
+		if not game.state.get("pending_finance", {}).is_empty():
+			return game._result(true, "等待人類玩家回應金融付款", {"awaiting_response": true, "completed": false, "player_id": player_id})
 	return game._result(true, "睡眠回合完成", {"completed": true})

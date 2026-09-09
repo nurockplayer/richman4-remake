@@ -115,6 +115,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_g
 # Original 搶奪 card transfer, save continuation and picker integration.
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/theft_eviction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_lifecycle.gd

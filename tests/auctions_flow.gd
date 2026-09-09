@@ -23,14 +23,13 @@ var capability_reported := false
 func _initialize() -> void:
 	_test_fixture_and_capability()
 	_test_invalid_and_cancel_boundaries()
-	if capability_available:
-		_test_entry_and_opening()
-		_test_increment_and_cash_limit()
-		_test_owner_participation_and_no_sale()
-		_test_sale_accounting_and_self_owner()
-		_test_capacity_no_deadlock()
-		_test_pending_blockers()
-		_test_mixed_human_ai_wait()
+	_test_entry_and_opening()
+	_test_increment_and_cash_limit()
+	_test_owner_participation_and_no_sale()
+	_test_sale_accounting_and_self_owner()
+	_test_capacity_no_deadlock()
+	_test_pending_blockers()
+	_test_mixed_human_ai_wait()
 	print("Original auction flow checks: %d, failures: %d, behavior_reds: %d" % [checks, failures, behavior_reds])
 	quit(1 if failures else 0)
 
@@ -141,6 +140,17 @@ func _start(game: Object, label: String) -> Dictionary:
 	return _public_choose(game, "use_card", {"card_id": CARD_ID, "cancel": false}, label)
 
 
+func _start_or_red(game: Object, label: String) -> bool:
+	var result := _start(game, label)
+	if bool(result.get("ok", false)):
+		return true
+	if capability_available:
+		_expect(false, "%s starts auction" % label)
+	elif not bool(result.get("fixture_invalid", false)):
+		_behavior_red("qualified %s start unavailable" % label)
+	return false
+
+
 func _pending(game: Object) -> Dictionary:
 	if not game.has_method("auction_response"):
 		return {}
@@ -218,23 +228,7 @@ func _test_invalid_and_cancel_boundaries() -> void:
 		_expect_equal(Fixture.card_supply(cancel), cancel_supply, "pre-start cancel keeps card reserved in hand")
 
 
-func _test_entry_and_opening() -> void:
-	var game: Object = Fixture.new_game(7810)
-	if game == null:
-		return
-	Fixture.set_property_state(game, _property_node(game), -1, 1)
-	game.state["price_index"] = 3
-	Fixture.prepare(game, 0, _property_node(game))
-	var staged := Fixture.stage_card(game, 0)
-	_expect(bool(staged.get("ok", false)), "opening test stages card")
-	var phase_before: String = str(game.state.get("phase", ""))
-	var current_before: int = int(game.state.get("current_player", -1))
-	var result := _start(game, "start-opening")
-	_expect(bool(result.get("ok", false)), "valid residential target starts auction")
-	var pending := _pending(game)
-	_expect(not pending.is_empty(), "valid auction exposes pending record")
-	if pending.is_empty():
-		return
+func _check_opening_pending(game: Object, pending: Dictionary, phase_before: String, current_before: int) -> void:
 	var expected_keys := ["caster_id", "node_id", "opening_bid", "current_bid", "highest_bidder_id", "bidder_id", "participants", "withdrawn"]
 	_expect_equal(pending.size(), expected_keys.size(), "pending record has exactly eight fields")
 	for key in expected_keys:
@@ -255,6 +249,25 @@ func _test_entry_and_opening() -> void:
 	_expect_equal(int(pending.get("bidder_id", -1)), int(participants[0]) if not participants.is_empty() else -1, "first bidder is the lowest participant")
 	_drain_passes(game, "opening-cleanup")
 
+
+func _test_entry_and_opening() -> void:
+	var game: Object = Fixture.new_game(7810)
+	if game == null:
+		return
+	Fixture.set_property_state(game, _property_node(game), -1, 1)
+	game.state["price_index"] = 3
+	Fixture.prepare(game, 0, _property_node(game))
+	var staged := Fixture.stage_card(game, 0)
+	_expect(bool(staged.get("ok", false)), "opening test stages card")
+	var phase_before: String = str(game.state.get("phase", ""))
+	var current_before: int = int(game.state.get("current_player", -1))
+	var started := _start_or_red(game, "valid residential target")
+	if started:
+		var pending := _pending(game)
+		_expect(not pending.is_empty(), "valid auction exposes pending record")
+		if not pending.is_empty():
+			_check_opening_pending(game, pending, phase_before, current_before)
+
 	var target_cases := [{"owner": -1, "label": "unowned"}, {"owner": 1, "label": "other-owned"}, {"owner": 0, "label": "self-owned"}]
 	for target_case in target_cases:
 		var target_game: Object = Fixture.new_game(7811 + int(target_case.owner) + 1)
@@ -264,9 +277,14 @@ func _test_entry_and_opening() -> void:
 		Fixture.prepare(target_game, 0, _property_node(target_game))
 		var target_staged := Fixture.stage_card(target_game, 0)
 		_expect(bool(target_staged.get("ok", false)), "%s target stages card" % str(target_case.label))
-		var target_result := _start(target_game, "start-%s" % str(target_case.label))
-		_expect(bool(target_result.get("ok", false)), "%s target starts auction" % str(target_case.label))
-		_expect_equal(int(_pending(target_game).get("node_id", -1)), _property_node(target_game), "%s target pending node" % str(target_case.label))
+		var target_started := _start_or_red(target_game, "%s target" % str(target_case.label))
+		if not target_started:
+			continue
+		var target_pending := _pending(target_game)
+		_expect(not target_pending.is_empty(), "%s target exposes pending" % str(target_case.label))
+		if target_pending.is_empty():
+			continue
+		_expect_equal(int(target_pending.get("node_id", -1)), _property_node(target_game), "%s target pending node" % str(target_case.label))
 
 	var facility: Object = Fixture.new_game(7815)
 	if facility == null:
@@ -275,9 +293,14 @@ func _test_entry_and_opening() -> void:
 	Fixture.prepare(facility, 0, _facility_node(facility))
 	var facility_staged := Fixture.stage_card(facility, 0)
 	_expect(bool(facility_staged.get("ok", false)), "facility target stages card")
-	var facility_result := _start(facility, "start-facility")
-	_expect(bool(facility_result.get("ok", false)), "facility target starts auction")
-	_expect_equal(int(_pending(facility).get("node_id", -1)), _facility_node(facility), "facility pending keeps entrance node")
+	var facility_started := _start_or_red(facility, "facility target")
+	if not facility_started:
+		return
+	var facility_pending := _pending(facility)
+	_expect(not facility_pending.is_empty(), "facility target exposes pending")
+	if facility_pending.is_empty():
+		return
+	_expect_equal(int(facility_pending.get("node_id", -1)), _facility_node(facility), "facility pending keeps entrance node")
 
 
 func _test_increment_and_cash_limit() -> void:
@@ -289,9 +312,11 @@ func _test_increment_and_cash_limit() -> void:
 	Fixture.prepare(game, 0, _property_node(game))
 	var staged := Fixture.stage_card(game, 0)
 	_expect(bool(staged.get("ok", false)), "increment test stages card")
-	var result := _start(game, "start-increments")
-	_expect(bool(result.get("ok", false)), "increment test starts")
+	var started := _start_or_red(game, "increment test")
+	if not started:
+		return
 	var pending := _pending(game)
+	_expect(not pending.is_empty(), "increment test exposes pending")
 	if pending.is_empty():
 		return
 	var bidder_id := int(pending.get("bidder_id", -1))
@@ -324,11 +349,13 @@ func _test_owner_participation_and_no_sale() -> void:
 	Fixture.prepare(owner_game, 0, _property_node(owner_game))
 	var owner_staged := Fixture.stage_card(owner_game, 0)
 	_expect(bool(owner_staged.get("ok", false)), "owner participation stages card")
-	var owner_result := _start(owner_game, "owner-participation")
-	_expect(bool(owner_result.get("ok", false)), "owner participation auction starts")
-	var owner_pending := _pending(owner_game)
-	_expect(owner_pending.get("participants", []).has(1), "current owner remains an eligible bidder")
-	_drain_passes(owner_game, "owner-cleanup")
+	var owner_started := _start_or_red(owner_game, "owner participation")
+	if owner_started:
+		var owner_pending := _pending(owner_game)
+		_expect(not owner_pending.is_empty(), "owner participation exposes pending")
+		if not owner_pending.is_empty():
+			_expect(owner_pending.get("participants", []).has(1), "current owner remains an eligible bidder")
+			_drain_passes(owner_game, "owner-cleanup")
 
 	var no_sale: Object = Fixture.new_game(7831)
 	if no_sale == null:
@@ -341,18 +368,21 @@ func _test_owner_participation_and_no_sale() -> void:
 	Fixture.prepare(no_sale, 0, property_id)
 	var no_sale_staged := Fixture.stage_card(no_sale, 0)
 	_expect(bool(no_sale_staged.get("ok", false)), "property no-sale stages card")
-	var no_sale_result := _start(no_sale, "property-no-sale")
-	_expect(bool(no_sale_result.get("ok", false)), "property no-sale starts")
-	_drain_passes(no_sale, "property-no-sale-passes")
-	var after_target := Fixture.target_snapshot(no_sale, property_id)
-	_expect_equal(after_target.get("owner", null), -1, "property no-sale clears owner")
-	_expect_equal(after_target.get("building_level", null), before_target.get("building_level", null), "property no-sale preserves level")
-	for key in ["is_chain_store", "cost", "land_price", "house_price", "upgrade_cost", "type_and_idx"]:
-		if before_target.has(key):
-			_expect_equal(after_target.get(key, null), before_target[key], "property no-sale preserves " + key)
-	_expect_equal(Fixture.cash_deposit_snapshot(no_sale), before_money, "property no-sale does not move cash or deposits")
-	_expect_equal(Fixture.card_supply(no_sale), before_supply + 1, "property no-sale consumes card exactly once")
-	_expect(not no_sale.state["players"][0]["cards"].has(CARD_ID), "property no-sale removes reserved card")
+	var no_sale_started := _start_or_red(no_sale, "property no-sale")
+	if no_sale_started:
+		var no_sale_pending := _pending(no_sale)
+		_expect(not no_sale_pending.is_empty(), "property no-sale exposes pending")
+		if not no_sale_pending.is_empty():
+			_drain_passes(no_sale, "property-no-sale-passes")
+			var after_target := Fixture.target_snapshot(no_sale, property_id)
+			_expect_equal(after_target.get("owner", null), -1, "property no-sale clears owner")
+			_expect_equal(after_target.get("building_level", null), before_target.get("building_level", null), "property no-sale preserves level")
+			for key in ["is_chain_store", "cost", "land_price", "house_price", "upgrade_cost", "type_and_idx"]:
+				if before_target.has(key):
+					_expect_equal(after_target.get(key, null), before_target[key], "property no-sale preserves " + key)
+			_expect_equal(Fixture.cash_deposit_snapshot(no_sale), before_money, "property no-sale does not move cash or deposits")
+			_expect_equal(Fixture.card_supply(no_sale), before_supply, "property no-sale restores pre-grant card supply")
+			_expect(not no_sale.state["players"][0]["cards"].has(CARD_ID), "property no-sale removes reserved card")
 
 	var facility: Object = Fixture.new_game(7832)
 	if facility == null:
@@ -365,16 +395,19 @@ func _test_owner_participation_and_no_sale() -> void:
 	Fixture.prepare(facility, 0, _facility_node(facility))
 	var facility_staged := Fixture.stage_card(facility, 0)
 	_expect(bool(facility_staged.get("ok", false)), "facility no-sale stages card")
-	var facility_result := _start(facility, "facility-no-sale")
-	_expect(bool(facility_result.get("ok", false)), "facility no-sale starts")
-	_drain_passes(facility, "facility-no-sale-passes")
-	var facility_nodes := Fixture.facility_nodes(facility, source_id)
-	for index in range(facility_nodes.size()):
-		var after := Fixture.target_snapshot(facility, int(facility_nodes[index]))
-		_expect_equal(after.get("owner", null), -1, "facility no-sale clears entrance owner")
-		for key in ["building_level", "facility_type", "facility_state", "research_tool", "research_turns", "land_price", "type_and_idx"]:
-			if facility_before[index].has(key):
-				_expect_equal(after.get(key, null), facility_before[index][key], "facility no-sale preserves " + key)
+	var facility_started := _start_or_red(facility, "facility no-sale")
+	if facility_started:
+		var facility_pending := _pending(facility)
+		_expect(not facility_pending.is_empty(), "facility no-sale exposes pending")
+		if not facility_pending.is_empty():
+			_drain_passes(facility, "facility-no-sale-passes")
+			var facility_nodes := Fixture.facility_nodes(facility, source_id)
+			for index in range(facility_nodes.size()):
+				var after := Fixture.target_snapshot(facility, int(facility_nodes[index]))
+				_expect_equal(after.get("owner", null), -1, "facility no-sale clears entrance owner")
+				for key in ["building_level", "facility_type", "facility_state", "research_tool", "research_turns", "land_price", "type_and_idx"]:
+					if facility_before[index].has(key):
+						_expect_equal(after.get(key, null), facility_before[index][key], "facility no-sale preserves " + key)
 
 
 func _first_bid_and_finish(game: Object, label: String) -> Dictionary:
@@ -404,19 +437,21 @@ func _test_sale_accounting_and_self_owner() -> void:
 	_expect(bool(staged.get("ok", false)), "sale stages card")
 	var cash_before := Fixture.cash_deposit_snapshot(sale)
 	var bank_before := int(sale.state["bank"].get("deposits", 0))
-	var sale_result := _start(sale, "sale")
-	_expect(bool(sale_result.get("ok", false)), "sale starts")
-	var outcome := _first_bid_and_finish(sale, "sale")
-	if outcome.is_empty():
-		return
-	var winner := int(outcome["winner"])
-	var amount := int(outcome["bid"])
-	var cash_after := Fixture.cash_deposit_snapshot(sale)
-	_expect_equal(cash_after[winner][0], cash_before[winner][0] - amount, "winner pays current bid from cash")
-	_expect_equal(cash_after[0][1], cash_before[0][1] + amount, "caster receives proceeds in deposit")
-	_expect_equal(int(sale.state["bank"].get("deposits", 0)), bank_before + amount, "bank deposit aggregate increases by bid")
-	_expect_equal(int(sale.state["board"][target].get("owner", -1)), winner, "sale assigns property to winner")
-	_expect_equal(cash_after[1], cash_before[1], "previous owner receives no direct payout")
+	var sale_started := _start_or_red(sale, "sale")
+	if sale_started:
+		var sale_pending := _pending(sale)
+		_expect(not sale_pending.is_empty(), "sale exposes pending")
+		if not sale_pending.is_empty():
+			var outcome := _first_bid_and_finish(sale, "sale")
+			if not outcome.is_empty():
+				var winner := int(outcome["winner"])
+				var amount := int(outcome["bid"])
+				var cash_after := Fixture.cash_deposit_snapshot(sale)
+				_expect_equal(cash_after[winner][0], cash_before[winner][0] - amount, "winner pays current bid from cash")
+				_expect_equal(cash_after[0][1], cash_before[0][1] + amount, "caster receives proceeds in deposit")
+				_expect_equal(int(sale.state["bank"].get("deposits", 0)), bank_before + amount, "bank deposit aggregate increases by bid")
+				_expect_equal(int(sale.state["board"][target].get("owner", -1)), winner, "sale assigns property to winner")
+				_expect_equal(cash_after[1], cash_before[1], "previous owner receives no direct payout")
 
 	var self_sale: Object = Fixture.new_game(7841)
 	if self_sale == null:
@@ -427,15 +462,17 @@ func _test_sale_accounting_and_self_owner() -> void:
 	var self_staged := Fixture.stage_card(self_sale, 0)
 	_expect(bool(self_staged.get("ok", false)), "self-owner sale stages card")
 	var self_cash_before := Fixture.cash_deposit_snapshot(self_sale)
-	var self_start := _start(self_sale, "self-owner-sale")
-	_expect(bool(self_start.get("ok", false)), "self-owner sale starts")
-	var self_outcome := _first_bid_and_finish(self_sale, "self-owner-sale")
-	if self_outcome.is_empty():
-		return
-	var self_amount := int(self_outcome["bid"])
-	_expect_equal(int(self_sale.state["board"][self_target].get("owner", -1)), 0, "self-owner sale keeps owner")
-	_expect_equal(int(self_sale.state["players"][0].get("cash", 0)), self_cash_before[0][0] - self_amount, "self-owner still pays bid")
-	_expect_equal(int(self_sale.state["players"][0].get("deposit", 0)), self_cash_before[0][1] + self_amount, "self-owner still receives caster deposit")
+	var self_started := _start_or_red(self_sale, "self-owner sale")
+	if self_started:
+		var self_pending := _pending(self_sale)
+		_expect(not self_pending.is_empty(), "self-owner sale exposes pending")
+		if not self_pending.is_empty():
+			var self_outcome := _first_bid_and_finish(self_sale, "self-owner-sale")
+			if not self_outcome.is_empty():
+				var self_amount := int(self_outcome["bid"])
+				_expect_equal(int(self_sale.state["board"][self_target].get("owner", -1)), 0, "self-owner sale keeps owner")
+				_expect_equal(int(self_sale.state["players"][0].get("cash", 0)), self_cash_before[0][0] - self_amount, "self-owner still pays bid")
+				_expect_equal(int(self_sale.state["players"][0].get("deposit", 0)), self_cash_before[0][1] + self_amount, "self-owner still receives caster deposit")
 
 
 func _test_capacity_no_deadlock() -> void:
@@ -446,14 +483,36 @@ func _test_capacity_no_deadlock() -> void:
 	Fixture.prepare(game, 0, _property_node(game))
 	var staged := Fixture.stage_card(game, 0)
 	_expect(bool(staged.get("ok", false)), "capacity test stages card")
-	var start := _start(game, "capacity")
-	_expect(bool(start.get("ok", false)), "capacity test starts")
-	var before: String = game.to_json()
-	var bid := _public_respond(game, {"increment": 100, "cancel": false}, "capacity-reject")
-	_expect(not bool(bid.get("ok", false)), "caster deposit headroom rejects prospective bid")
-	_expect_json_equal(game.to_json(), before, "capacity rejection is byte-atomic")
-	var terminal := _drain_passes(game, "capacity-passes")
-	_expect(terminal.is_empty(), "capacity rejection can pass to a no-sale terminal")
+	var started := _start_or_red(game, "capacity")
+	if started:
+		var pending := _pending(game)
+		_expect(not pending.is_empty(), "capacity test exposes pending")
+		if not pending.is_empty():
+			var before: String = game.to_json()
+			var bid := _public_respond(game, {"increment": 100, "cancel": false}, "capacity-reject")
+			_expect(not bool(bid.get("ok", false)), "caster deposit headroom rejects prospective bid")
+			_expect_json_equal(game.to_json(), before, "capacity rejection is byte-atomic")
+			var terminal := _drain_passes(game, "capacity-passes")
+			_expect(terminal.is_empty(), "capacity rejection can pass to a no-sale terminal")
+
+	var bank_cash_game: Object = Fixture.new_game(7852)
+	if bank_cash_game == null:
+		return
+	bank_cash_game.state["bank"]["cash"] = MAX_CASH - 50
+	Fixture.prepare(bank_cash_game, 0, _property_node(bank_cash_game))
+	var bank_cash_staged := Fixture.stage_card(bank_cash_game, 0)
+	_expect(bool(bank_cash_staged.get("ok", false)), "bank cash capacity test stages card")
+	var bank_cash_started := _start_or_red(bank_cash_game, "bank cash capacity")
+	if bank_cash_started:
+		var bank_cash_pending := _pending(bank_cash_game)
+		_expect(not bank_cash_pending.is_empty(), "bank cash capacity test exposes pending")
+		if not bank_cash_pending.is_empty():
+			var bank_cash_before: String = bank_cash_game.to_json()
+			var bank_cash_bid := _public_respond(bank_cash_game, {"increment": 100, "cancel": false}, "bank-cash-capacity-reject")
+			_expect(not bool(bank_cash_bid.get("ok", false)), "bank cash headroom rejects prospective bid")
+			_expect_json_equal(bank_cash_game.to_json(), bank_cash_before, "bank cash capacity rejection is byte-atomic")
+			var bank_cash_terminal := _drain_passes(bank_cash_game, "bank-cash-capacity-passes")
+			_expect(bank_cash_terminal.is_empty(), "bank cash capacity rejection can pass to a no-sale terminal")
 
 	var ai_game: Object = Fixture.new_game(7851)
 	if ai_game == null:
@@ -464,14 +523,17 @@ func _test_capacity_no_deadlock() -> void:
 	Fixture.prepare(ai_game, 0, _property_node(ai_game))
 	var ai_staged := Fixture.stage_card(ai_game, 0)
 	_expect(bool(ai_staged.get("ok", false)), "AI capacity test stages card")
-	var ai_start := _start(ai_game, "ai-capacity")
-	_expect(bool(ai_start.get("ok", false)), "AI capacity test starts")
-	for step in range(32):
-		if _pending(ai_game).is_empty():
-			break
-		var ai_result := _public_ai(ai_game, "ai-capacity-%d" % step)
-		_expect(bool(ai_result.get("ok", false)), "AI capacity step returns without deadlock")
-	_expect(_pending(ai_game).is_empty(), "all-AI capacity case terminates")
+	var ai_started := _start_or_red(ai_game, "AI capacity")
+	if ai_started:
+		var ai_pending := _pending(ai_game)
+		_expect(not ai_pending.is_empty(), "AI capacity test exposes pending")
+		if not ai_pending.is_empty():
+			for step in range(32):
+				if _pending(ai_game).is_empty():
+					break
+				var ai_result := _public_ai(ai_game, "ai-capacity-%d" % step)
+				_expect(bool(ai_result.get("ok", false)), "AI capacity step returns without deadlock")
+			_expect(_pending(ai_game).is_empty(), "all-AI capacity case terminates")
 
 
 func _test_pending_blockers() -> void:
@@ -481,17 +543,23 @@ func _test_pending_blockers() -> void:
 	Fixture.prepare(game, 0, _property_node(game))
 	var staged := Fixture.stage_card(game, 0)
 	_expect(bool(staged.get("ok", false)), "pending blocker test stages card")
-	var start := _start(game, "blockers")
-	_expect(bool(start.get("ok", false)), "pending blocker auction starts")
-	if _pending(game).is_empty():
+	var started := _start_or_red(game, "pending blocker")
+	if not started:
 		return
-	for action in ["roll", "route", "end_turn", "other_card"]:
+	var pending := _pending(game)
+	_expect(not pending.is_empty(), "pending blocker exposes pending")
+	if pending.is_empty():
+		return
+	for action in ["roll", "route", "end_turn", "deposit", "withdraw", "use_tool", "other_card"]:
 		var before: String = game.to_json()
 		var result: Dictionary
 		match action:
 			"roll": result = _public_roll(game, "pending-roll")
 			"route": result = _public_route(game, "pending-route")
 			"end_turn": result = _public_end_turn(game, "pending-end-turn")
+			"deposit": result = _public_choose(game, "deposit", {"amount": 100}, "pending-deposit")
+			"withdraw": result = _public_choose(game, "withdraw", {"amount": 100}, "pending-withdraw")
+			"use_tool": result = _public_choose(game, "use_tool", {"tool_id": "遙控骰子", "value": 4}, "pending-use-tool")
 			_: result = _public_choose(game, "use_card", {"card_id": "停留"}, "pending-other-card")
 		_expect(not bool(result.get("ok", false)), "pending rejects unrelated %s" % action)
 		_expect_json_equal(game.to_json(), before, "pending unrelated %s is byte-atomic" % action)
@@ -501,40 +569,52 @@ func _test_pending_blockers() -> void:
 	_expect_json_equal(game.to_json(), malformed_before, "malformed auction response is byte-atomic")
 
 
-func _test_mixed_human_ai_wait() -> void:
-	var game: Object = Fixture.new_game(7870)
+func _run_mixed_human_ai_case(seed_value: int, caster_id: int, label: String) -> void:
+	var game: Object = Fixture.new_game(seed_value)
 	if game == null:
 		return
 	game.set_player_ai(0, true)
 	game.set_player_ai(1, false)
 	game.set_player_ai(2, true)
 	game.set_player_ai(3, true)
-	Fixture.prepare(game, 0, _property_node(game))
-	var staged := Fixture.stage_card(game, 0)
-	_expect(bool(staged.get("ok", false)), "mixed human/AI test stages card")
-	var start := _start(game, "mixed")
-	_expect(bool(start.get("ok", false)), "mixed human/AI auction starts")
-	if _pending(game).is_empty():
+	Fixture.prepare(game, caster_id, _property_node(game))
+	var staged := Fixture.stage_card(game, caster_id)
+	_expect(bool(staged.get("ok", false)), "%s stages card" % label)
+	var started := _start_or_red(game, label)
+	if not started:
 		return
-	var ai_step := _public_ai(game, "mixed-first-ai")
-	_expect(bool(ai_step.get("ok", false)), "AI bidder advances without a human response")
 	var pending := _pending(game)
+	_expect(not pending.is_empty(), "%s exposes pending" % label)
+	if pending.is_empty():
+		return
+	_expect_equal(int(pending.get("caster_id", -1)), caster_id, "%s preserves caster identity" % label)
+	_expect_equal(int(pending.get("bidder_id", -1)), 0, "%s starts at lowest AI bidder" % label)
+	var ai_step := _public_ai(game, "%s-first-ai" % label)
+	_expect(bool(ai_step.get("ok", false)), "%s AI bidder advances without a human response" % label)
+	pending = _pending(game)
 	if pending.is_empty():
 		return
 	var human_id := int(pending.get("bidder_id", -1))
-	_expect_equal(human_id, 1, "mixed auction waits at ascending human bidder")
-	_expect(bool(ai_step.get("awaiting_response", false)), "AI loop reports human wait")
-	var human_pass := _public_respond(game, {"increment": 0, "cancel": true}, "mixed-human-pass")
-	_expect(bool(human_pass.get("ok", false)), "human pass resumes mixed auction")
+	_expect_equal(human_id, 1, "%s waits at ascending human bidder" % label)
+	_expect(bool(ai_step.get("awaiting_response", false)), "%s AI loop reports human wait" % label)
+	var human_pass := _public_respond(game, {"increment": 0, "cancel": true}, "%s-human-pass" % label)
+	_expect(bool(human_pass.get("ok", false)), "%s human pass resumes mixed auction" % label)
 	for step in range(32):
 		if _pending(game).is_empty():
 			break
 		var current := _pending(game)
 		var current_id := int(current.get("bidder_id", -1))
 		if current_id == 1:
-			var pass_result := _public_respond(game, {"increment": 0, "cancel": true}, "mixed-human-pass-%d" % step)
-			_expect(bool(pass_result.get("ok", false)), "human response remains available after AI rounds")
+			var pass_result := _public_respond(game, {"increment": 0, "cancel": true}, "%s-human-pass-%d" % [label, step])
+			_expect(bool(pass_result.get("ok", false)), "%s human response remains available after AI rounds" % label)
 		else:
-			var ai := _public_ai(game, "mixed-ai-%d" % step)
-			_expect(bool(ai.get("ok", false)), "AI round remains deterministic")
-	_expect(_pending(game).is_empty(), "mixed human/AI auction terminates")
+			var ai := _public_ai(game, "%s-ai-%d" % [label, step])
+			_expect(bool(ai.get("ok", false)), "%s AI round remains deterministic" % label)
+	_expect(_pending(game).is_empty(), "%s mixed human/AI auction terminates" % label)
+
+
+func _test_mixed_human_ai_wait() -> void:
+	# Cover both control identities: the original caster may be AI, or a human
+	# caster may leave the first (ascending) bidder to the AI turn loop.
+	_run_mixed_human_ai_case(7870, 0, "AI-caster mixed")
+	_run_mixed_human_ai_case(7871, 1, "human-caster mixed")

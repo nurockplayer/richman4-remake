@@ -22,9 +22,8 @@ var capability_reported := false
 func _initialize() -> void:
 	_test_clean_optional_state()
 	_test_capability()
-	if capability_available:
-		_test_pending_roundtrip_and_schema()
-		_test_malformed_records_fail_closed()
+	_test_pending_roundtrip_and_schema()
+	_test_malformed_records_fail_closed()
 	print("Original auction save checks: %d, failures: %d, behavior_reds: %d" % [checks, failures, behavior_reds])
 	quit(1 if failures else 0)
 
@@ -102,6 +101,17 @@ func _public_respond(game: Object, params: Dictionary, label: String) -> Diction
 	return game.choose_action("respond_auction", params)
 
 
+func _start_or_red(game: Object, label: String) -> bool:
+	var result := _public_choose(game, "use_card", {"card_id": CARD_ID, "cancel": false}, label)
+	if bool(result.get("ok", false)):
+		return true
+	if capability_available:
+		_expect(false, "%s starts auction" % label)
+	elif not bool(result.get("fixture_invalid", false)):
+		_behavior_red("qualified %s start unavailable" % label)
+	return false
+
+
 func _new_pending(seed_value: int) -> Object:
 	var game: Object = Fixture.new_game(seed_value)
 	if game == null:
@@ -110,8 +120,7 @@ func _new_pending(seed_value: int) -> Object:
 	Fixture.prepare(game, 0, 2)
 	var staged := Fixture.stage_card(game, 0)
 	_expect(bool(staged.get("ok", false)), "pending fixture stages 拍賣 card")
-	var started := _public_choose(game, "use_card", {"card_id": CARD_ID, "cancel": false}, "save-start")
-	_expect(bool(started.get("ok", false)), "pending fixture starts auction")
+	_start_or_red(game, "pending fixture")
 	return game
 
 
@@ -120,6 +129,8 @@ func _test_pending_roundtrip_and_schema() -> void:
 	if game == null:
 		return
 	var pending_value: Variant = game.to_dict().get("pending_auction", null)
+	if typeof(pending_value) != TYPE_DICTIONARY and not capability_available:
+		return
 	_expect(typeof(pending_value) == TYPE_DICTIONARY, "pending save stores a dictionary")
 	if typeof(pending_value) != TYPE_DICTIONARY:
 		return
@@ -230,10 +241,28 @@ func _test_malformed_records_fail_closed() -> void:
 	conflict["pending_finance"] = {"payer_id": 0}
 	_invalid_record(conflict, "pending finance conflict")
 
-	var capacity := clean.duplicate(true)
-	capacity["players"][0]["deposit"] = MAX_CASH
-	capacity["bank"]["deposits"] = MAX_CASH
-	_invalid_record(capacity, "pending settlement capacity overflow")
+	var accepted_result := _public_respond(game, {"increment": 100, "cancel": false}, "accepted-capacity-raise")
+	_expect(bool(accepted_result.get("ok", false)), "accepted capacity raise creates a pending high bid")
+	if bool(accepted_result.get("ok", false)):
+		var accepted_data: Dictionary = game.to_dict()
+		var accepted_pending_value: Variant = accepted_data.get("pending_auction", null)
+		var accepted_pending_present: bool = typeof(accepted_pending_value) == TYPE_DICTIONARY and not accepted_pending_value.is_empty()
+		_expect(accepted_pending_present, "accepted capacity raise retains a pending high bid")
+		if accepted_pending_present:
+			var accepted_pending: Dictionary = accepted_pending_value
+			var accepted_opening := int(accepted_pending.get("opening_bid", -1))
+			var accepted_current := int(accepted_pending.get("current_bid", -1))
+			var accepted_winner := int(accepted_pending.get("highest_bidder_id", -1))
+			_expect_equal(accepted_current, accepted_opening + 100, "accepted capacity raise advances current bid")
+			_expect(accepted_winner >= 0, "accepted capacity raise selects a highest bidder")
+			var accepted_validation: Dictionary = Game.validate_save(accepted_data)
+			_expect(bool(accepted_validation.get("ok", false)), "accepted high-bid pending save validates before capacity mutation")
+			if bool(accepted_validation.get("ok", false)) and accepted_current == accepted_opening + 100 and accepted_winner >= 0:
+				var capacity := accepted_data.duplicate(true)
+				var caster_id := int(accepted_pending.get("caster_id", -1))
+				capacity["players"][caster_id]["deposit"] = MAX_CASH
+				capacity["bank"]["deposits"] = MAX_CASH
+				_invalid_record(capacity, "pending settlement capacity overflow")
 
 	var participants: Array = pending.get("participants", [])
 	if participants.size() >= 2:

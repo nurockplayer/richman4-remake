@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_test_missile_damage_and_boundaries()
 	_test_missile_facility_zero_transition()
 	_test_nuclear_research_damage_and_non_global_boundary()
+	_test_nuclear_facility_receipt_uses_source_canonical()
 	_test_cancel_invalid_and_type_atomicity()
 	_test_ai_missile_determinism()
 	print("Missile flow checks: %d, failures: %d, qualified_red: %d" % [checks, failures, qualified_red])
@@ -420,6 +421,46 @@ func _test_nuclear_research_damage_and_non_global_boundary() -> void:
 	_assert_tool_event(game, NUCLEAR, CENTRE, "nuclear valid target")
 	var validation: Dictionary = Game.validate_save(game.to_dict())
 	_expect(bool(validation.get("ok", false)), "nuclear damage leaves a valid save: " + str(validation.get("errors", [])))
+
+
+func _test_nuclear_facility_receipt_uses_source_canonical() -> void:
+	var game: Object = _new_game(8130, 4)
+	if game == null:
+		return
+	_reset_players(game)
+	# Source 2's canonical facility node is board node 7.  Board node 2 is an
+	# unrelated property owned by player 2, so a source-id/index mix-up is
+	# observable in the cleared receipt.
+	Fixture.set_property(game, ORDINARY_HOUSE, 2, 2, false)
+	Fixture.set_facility(game, 1, -1, 1, 1, 0x50, 0, 0)
+	Fixture.set_facility(game, 2, 1, 2, 2, 0x50, 0, 0)
+	game.state["players"][0]["position"] = CENTRE
+	game.state["players"][1]["position"] = FAR_NODE
+	game.state["players"][2]["position"] = FAR_NODE
+	if not _stage_tool(game, 0, NUCLEAR):
+		return
+	_prepare_action(game, 0, CENTRE)
+	var result: Dictionary = _public_use(game, {"tool_id": NUCLEAR, "tile_id": CENTRE}, "nuclear facility source receipt")
+	if not _expect_success(result, "nuclear facility source receipt"):
+		return
+	var event: Dictionary = game.state.get("last_event", {})
+	var source_two_receipt: Dictionary = {}
+	for cleared_value in event.get("cleared", []):
+		if typeof(cleared_value) == TYPE_DICTIONARY and int(cleared_value.get("source_object_id", -1)) == 2:
+			source_two_receipt = cleared_value
+			break
+	_expect(not source_two_receipt.is_empty(), "nuclear facility source receipt records source 2")
+	if source_two_receipt.is_empty():
+		return
+	_expect_equal(int(source_two_receipt.get("owner", -1)), 1, "nuclear facility receipt preserves source owner")
+	_expect_equal(int(source_two_receipt.get("tile_id", -1)), 7, "nuclear facility receipt uses canonical node")
+	for index_value in Fixture.facility_indices(game, 2):
+		var facility: Dictionary = game.state["board"][int(index_value)]
+		_expect_equal(int(facility.get("owner", -1)), -1, "nuclear clears source-2 facility owner")
+		_expect_equal(int(facility.get("building_level", -1)), 0, "nuclear clears source-2 facility level")
+		_expect_equal(int(facility.get("facility_type", -1)), 0, "nuclear clears source-2 facility type")
+	var validation: Dictionary = Game.validate_save(game.to_dict())
+	_expect(bool(validation.get("ok", false)), "nuclear facility receipt leaves a valid save: " + str(validation.get("errors", [])))
 
 
 func _prepare_staged_tool(seed_value: int, tool_id: String) -> Object:

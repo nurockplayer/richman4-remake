@@ -322,7 +322,7 @@ static func _preflight(game: Object, player_snapshots: Array, facility_source_id
 	if not facility_source_ids.is_empty() and not game._is_facilities():
 		return "目標設施資料尚未開放"
 	for source_id_value in facility_source_ids:
-		if game._facility_record(int(source_id_value)).is_empty():
+		if game._facility_indices(int(source_id_value)).is_empty():
 			return "目標設施來源無效"
 	return ""
 
@@ -362,16 +362,20 @@ static func _clear_property(game: Object, property_id: int, cleared: Array) -> v
 
 
 static func _clear_facility(game: Object, source_id: int, cleared: Array) -> void:
-	var facility: Dictionary = game._facility_record(int(source_id))
+	var indices: Array = game._facility_indices(int(source_id))
+	if indices.is_empty():
+		return
+	indices.sort()
+	var canonical_index: int = game._facility_canonical_index(int(indices[0]))
+	var facility: Dictionary = game._facility_record(canonical_index)
 	if facility.is_empty():
 		return
 	var old_owner: int = int(facility.get("owner", -1))
-	var indices: Array = game._facility_indices(int(source_id))
 	game._update_facility_records(int(source_id), {"owner": -1, "building_level": 0, "facility_type": 0})
 	for player_id in range(game._players().size()):
 		for index_value in indices:
 			game._remove_property_reference(player_id, int(index_value))
-	cleared.append({"source_object_id": source_id, "tile_id": game._facility_canonical_index(int(facility.get("index", -1))), "owner": old_owner})
+	cleared.append({"source_object_id": source_id, "tile_id": canonical_index, "owner": old_owner})
 
 
 static func _has_logical_coordinates(tile: Dictionary) -> bool:

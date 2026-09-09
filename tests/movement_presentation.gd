@@ -110,6 +110,22 @@ func _test_snap_guards() -> void:
 	status["event_log"].append({"type": "status_applied", "player_id": 0, "status": "hospital"})
 	_expect(MovementPresentation.plan(before, status).is_empty(), "status interruption snaps")
 
+	for event_type in ["status_facility_passed", "status_facility_landed"]:
+		var facility_visit := valid_after.duplicate(true)
+		facility_visit["event_log"].append({
+			"type": event_type,
+			"player_id": 0,
+			"status_kind": "hospital",
+			"node": 1,
+			"name": "測試醫院",
+		})
+		_expect(not MovementPresentation.plan(before, facility_visit).is_empty(), "%s keeps ordinary facility movement animated" % event_type)
+
+	for event_type in ["hospital_started", "prison_started", "status_changed"]:
+		var status_effect := valid_after.duplicate(true)
+		status_effect["event_log"].append({"type": event_type, "player_id": 0})
+		_expect(MovementPresentation.plan(before, status_effect).is_empty(), "%s remains an unsafe interruption" % event_type)
+
 	var terminal := valid_after.duplicate(true)
 	terminal["phase"] = "game_over"
 	terminal["event_log"].append({"type": "terminal", "winner": 1})

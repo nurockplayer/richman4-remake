@@ -93,6 +93,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/research_mutations.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_landing.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_admission.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_status_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_flow.gd

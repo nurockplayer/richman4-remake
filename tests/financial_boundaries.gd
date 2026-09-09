@@ -56,5 +56,23 @@ func _initialize() -> void:
 		expect_equal(g.to_json(), before, "failed automatic redirect leaves cards cash RNG and events atomic")
 	else:
 		expect(Game.validate_save(g.to_dict()).get("ok", false), "automatic redirect overflow fallback preserves valid save")
+	g = fresh(74906)
+	for held in player(g, 1).cards.duplicate():
+		Inventory.consume_card(g.state.inventory_supply, player(g, 1).cards, held)
+	stage_card(g, 2, TAX_CARD)
+	stage_card(g, 1, SCAPEGOAT_CARD)
+	stage_card(g, 1, FREE_CARD)
+	g.set_player_ai(1, true)
+	set_cash(g, 0, 20000)
+	set_cash(g, 1, 11000)
+	set_cash(g, 2, 999999997000)
+	prepare(g, 2, "await_action", 2)
+	expect(Game.validate_save(g.to_dict()).get("ok", false), "AI free-decline redirected overflow fixture legal")
+	before = g.to_json()
+	result = use_tax(g, 1)
+	if not result.get("ok", false):
+		expect_equal(g.to_json(), before, "failed redirect after AI free decline preserves RNG as well as cards")
+	else:
+		expect(Game.validate_save(g.to_dict()).get("ok", false), "AI free-decline overflow fallback preserves valid save")
 	print("Financial boundary checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

@@ -20,6 +20,7 @@ var _pending: Dictionary = {}
 func _init() -> void:
 	name = "AuctionResponsePopup"
 	size = Vector2i(620, 410)
+	wrap_controls = false
 	var panel := StyleBoxFlat.new()
 	panel.bg_color = Color("#203447")
 	panel.border_color = Color("#54748a")
@@ -158,12 +159,12 @@ func sync(snapshot: Dictionary) -> void:
 		button.disabled = current_bid + amount > maximum_bid
 	withdraw.disabled = false
 	if not visible:
-		popup_centered()
+		popup_centered(Vector2i(620, 410))
 
 
 func _restore_unanswered() -> void:
 	if is_inside_tree() and not is_queued_for_deletion() and not _pending.is_empty() and not visible:
-		popup_centered()
+		popup_centered(Vector2i(620, 410))
 
 
 static func money(amount: int) -> String:

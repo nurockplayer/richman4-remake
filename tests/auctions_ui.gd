@@ -48,6 +48,7 @@ func run() -> void:
 		if response is Window and g.state.has("pending_auction"):
 			var pending: Dictionary = g.state.pending_auction
 			check(response.exclusive and not response.popup_window, "auction response survives passive focus loss")
+			check(response.size.y <= 410, "auction content stays within its compact dialog height")
 			var prompt: Node = response.find_child("AuctionPrompt", true, false)
 			check(prompt is Label and str(g.state.players[pending.bidder_id].name) in prompt.text, "prompt identifies current bidder")
 			var target: Node = response.find_child("AuctionTarget", true, false)

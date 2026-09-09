@@ -32,6 +32,10 @@ func run() -> void:
 	check(panel.visible and answers.is_empty(), "focus loss cannot implicitly answer")
 	panel.sync(snapshot, [])
 	check(answers.is_empty() and panel.visible, "unchanged refresh cannot answer or close")
+	panel.hide()
+	await process_frame
+	await process_frame
+	check(panel.visible and answers.is_empty(), "closing an unanswered window restores the decision without answering")
 	panel.accept.pressed.emit()
 	check(answers == [{"cancel": false}], "explicit accept sends only the selected free decision")
 	answers.clear()

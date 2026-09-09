@@ -98,6 +98,17 @@ func run() -> void:
 	expect(ui.game_state.state.players[0].get("bomb_steps",-1)==0,"actual restart clears carried countdown")
 	expect(ui.game_state.state.get("phase","")=="await_roll","actual restart starts at the roll phase")
 	expect(ui.game_state.validate_save(ui.game_state.to_dict()).get("ok",false),"restarted snapshot is valid")
+	var current_game: Object=ui.game_state
+	var current_json: String=current_game.to_json()
+	for unavailable_catalog in [[],[wrong_source]]:
+		ui._map_catalog=unavailable_catalog
+		ui._on_end_restart_pressed()
+		expect(ui.game_state==current_game and current_game.to_json()==current_json,"unavailable restart source preserves the loaded game")
+		var notice: AcceptDialog=ui.get_node_or_null("RestartUnavailableDialog")
+		expect(notice!=null and notice.visible,"unavailable restart source has a visible explanation")
+		if notice!=null:
+			expect(notice.dialog_text.contains("地圖資料") and notice.dialog_text.contains("新局"),"restart notice explains recovery and another-map choice")
+			notice.hide()
 	var legacy:=Fixture.definition()
 	expect(not ui._default_setup_options(4,legacy).get("original_hazards",false),"status-only definition keeps v8 setup")
 	finish(ui)

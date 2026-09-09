@@ -1650,12 +1650,27 @@ func _restart_game() -> void:
 	var seed_value: Variant = state.get("seed", null)
 	var options := _setup_options_from_state()
 	var restart_definition := _active_map_definition
+	var matched_source := false
 	# A loaded snapshot supplies current geometry for display, but a new match
 	# needs the matching source's capabilities and initial company/stock data.
 	for definition_value in _map_catalog:
 		if definition_value is Dictionary and str(definition_value.get("id", "")) == str(_active_map_definition.get("id", "")) and _map_source_matches(definition_value.get("source", {}), _active_map_definition.get("source", {}), true):
 			restart_definition = definition_value
+			matched_source = true
 			break
+	if bool(options.get("original_companies", false)) and not matched_source:
+		var message := "這份存檔對應的地圖資料尚未載入，無法重新開局。請恢復對應地圖資料後重新開啟遊戲，或從「新局」選擇其他可用地圖。現有棋局保持不變。"
+		_append_local_log(message)
+		_refresh_log_only()
+		var notice := get_node_or_null("RestartUnavailableDialog") as AcceptDialog
+		if notice == null:
+			notice = AcceptDialog.new()
+			notice.name = "RestartUnavailableDialog"
+			notice.title = "無法重新開局"
+			add_child(notice)
+		notice.dialog_text = message
+		notice.popup_centered(Vector2i(620, 160))
+		return
 	_new_game(seed_value, player_count, restart_definition, options)
 
 func _on_end_restart_pressed() -> void:

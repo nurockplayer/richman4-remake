@@ -257,7 +257,7 @@ func _test_graph_source_classification_and_points() -> void:
 	_expect_equal(Maps.classify_source_node(2001, 2).kind, "property", "housing retains priority over news event")
 	_expect_equal(Maps.classify_source_node(4001, 2, true).kind, "facility", "facility retains priority over news event")
 	_expect_equal(Maps.classify_source_node(6001, 2, true).kind, "unsupported", "company type does not become a generic news road")
-	_expect_equal(Maps.classify_source_node(0, 3).kind, "unsupported", "fate remains outside news scope")
+	_expect_equal(Maps.classify_source_node(0, 3).kind, "fate", "ordinary event three uses the fate dispatcher")
 
 	for source_points in [{"event_code": 10, "points": 50}, {"event_code": 11, "points": 30}, {"event_code": 12, "points": 10}]:
 		var mapped: Dictionary = _definition.duplicate(true)

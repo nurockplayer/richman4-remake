@@ -328,11 +328,19 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	for company in companies:
 		companies_by_id[int(company.id)] = company
 	var lands: Dictionary = {}
+	var ordinary_source_housing := true
 	for land in raw.lands:
 		if not land is Dictionary or not _integer(land.get("id"), 1, 1999) or lands.has(int(land.id)):
 			return _failure("住宅身分無效或重複。")
 		if (land.has("display_name") and (not land.display_name is String or land.display_name.length() > 128)) or not land.get("name_bytes_hex") is String:
 			return _failure("住宅名稱無效。")
+		# The importer exposes the source +0x18 chain-store byte when it is
+		# available.  Older caches predate that field and are intentionally
+		# treated as ordinary housing so they remain loadable.
+		if land.has("is_chain_store") and not _integer(land.get("is_chain_store"), 0, 1):
+			return _failure("住宅連鎖店欄位無效。")
+		if not land.has("is_chain_store") or int(land.get("is_chain_store", -1)) != 0:
+			ordinary_source_housing = false
 		for key in ["land_price", "house_price"]:
 			if not _integer(land.get(key), 0, 1000000):
 				return _failure("住宅價格無效。")
@@ -407,7 +415,10 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 			tile.merge({"kind": "property", "source_object_id": land_id, "name": str(land.get("display_name", "未命名住宅 %d" % land_id)),
 				"cost": int(land.land_price), "land_price": int(land.land_price), "house_price": int(land.house_price),
 				"upgrade_cost": int(land.house_price), "base_rent": int(land.rent_by_level[0]), "rent": int(land.rent_by_level[0]),
-				"rent_by_level": land.rent_by_level.duplicate(), "group": str(land.get("name_bytes_hex", "land:%d" % land_id))}, true)
+				"rent_by_level": land.rent_by_level.duplicate(), "group": str(land.get("name_bytes_hex", "land:%d" % land_id)),
+				# A new game always starts with ordinary housing.  The source byte is
+				# retained only as a capability prerequisite, never as active state.
+				"is_chain_store": false}, true)
 		elif classification.kind == "facility":
 			var facility_id := int(classification.source_object_id)
 			if not facilities.has(facility_id):
@@ -477,6 +488,11 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	# supported categories.  Keep this capability explicit so a partial map can
 	# remain loadable without advertising a selector that can never succeed.
 	var supports_original_property_cards := original_facilities and supports_original_statuses and (referenced_lands.size() >= 2 or referenced_facilities.size() >= 2)
+	# Remodel requires the complete v10 capability chain plus a source map whose
+	# housing records passed the optional chain-byte validation above.  The
+	# normalized runtime starts with every flag cleared; this capability only
+	# authorizes the v11 ruleset and does not activate a source state.
+	var supports_original_remodel := original_facilities and supports_original_property_cards and ordinary_source_housing
 	if supports_original_statuses:
 		for tile in board:
 			if int(tile.type_and_idx) in [8001,8002]:
@@ -493,5 +509,6 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。",
 		"companies": companies, "stock_rows": stock_rows,
 		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses,
-		"supports_original_hazards": supports_original_statuses, "supports_original_property_cards": supports_original_property_cards}
+		"supports_original_hazards": supports_original_statuses, "supports_original_property_cards": supports_original_property_cards,
+		"supports_original_remodel": supports_original_remodel}
 	return {"ok": true, "error": "", "definition": definition}

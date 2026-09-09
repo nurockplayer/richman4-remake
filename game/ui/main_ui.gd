@@ -30,6 +30,7 @@ const COMPANY_SAVE_VERSION := 7
 const STATUS_SAVE_VERSION := 8
 const HAZARD_SAVE_VERSION := 9
 const PROPERTY_CARD_SAVE_VERSION := 10
+const REMODEL_SAVE_VERSION := 11
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -805,6 +806,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_statuses": bool(capability_definition.get("supports_original_statuses", false)),
 		"original_hazards": bool(capability_definition.get("supports_original_hazards", false)),
 		"original_property_cards": bool(capability_definition.get("supports_original_property_cards", false)),
+		"original_remodel": bool(capability_definition.get("supports_original_remodel", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -879,13 +881,14 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_companies", false)),
 		"original_statuses": _has_original_statuses(),
 		"original_hazards": _has_original_hazards(),
 		"original_property_cards": _has_original_property_cards(),
+		"original_remodel": _has_original_remodel(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -964,6 +967,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_statuses": bool(_selected_map_definition.get("supports_original_statuses", false)),
 		"original_hazards": bool(_selected_map_definition.get("supports_original_hazards", false)),
 		"original_property_cards": bool(_selected_map_definition.get("supports_original_property_cards", false)),
+		"original_remodel": bool(_selected_map_definition.get("supports_original_remodel", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1870,8 +1874,14 @@ func _update_property_card(tile: Dictionary) -> void:
 		current_property_detail.text = details
 		return
 	if kind == "property":
-		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(int(tile.get("rent", 0))), int(tile.get("building_level", 0))]
 		var owner := int(tile.get("owner", -1))
+		var displayed_rent := int(tile.get("rent", 0))
+		if _has_original_remodel():
+			var chain := bool(tile.get("is_chain_store", false))
+			current_property_label.text += " · " + ("連鎖店" if chain else "普通住宅")
+			details += " · 最高 %d 級" % (1 if chain else 5)
+			displayed_rent = int(game_state.call("_calculate_rent", tile, owner)) if game_state != null and owner >= 0 else 0
+		details += "\n地價 %s　·　租金 %s　·　等級 %d" % [_format_money(int(tile.get("cost", 0))), _format_money(displayed_rent), int(tile.get("building_level", 0))]
 		details += "\n" + ("尚未有人持有" if owner < 0 else "持有者：玩家 %d" % (owner + 1))
 		if owner < 0 and _has_original_gods():
 			var purchase_price := (int(tile.get("land_price", tile.get("cost", 0))) + int(tile.get("building_level", 0)) * int(tile.get("house_price", tile.get("upgrade_cost", 0)))) * int(state.get("price_index", 1))
@@ -2130,8 +2140,24 @@ func _update_cards_popup() -> void:
 			if card_id == "購地":
 				var current_tile := _current_tile()
 				row.add_child(_make_label("%s · %s" % [str(current_tile.get("name", "目前位置")), _format_money(_inventory_purchase_price(current_tile))], 11, TEXT_MUTED))
+			var remodel_option: OptionButton = null
+			if card_id == "改建":
+				var current_tile := _current_tile()
+				if current_tile.get("kind", "") == "facility":
+					remodel_option = OptionButton.new()
+					remodel_option.name = "RemodelType_改建"
+					remodel_option.custom_minimum_size = Vector2(180.0, 34.0)
+					for type_id in range(5):
+						remodel_option.add_item(_facility_name(type_id) + ("（尚未開放）" if type_id == 4 else ""), type_id)
+					remodel_option.set_item_disabled(4, true)
+					remodel_option.select(clampi(int(current_tile.get("facility_type", 0)), 0, 3))
+					row.add_child(remodel_option)
+				elif current_tile.get("kind", "") == "property":
+					row.add_child(_make_label("改為普通住宅" if bool(current_tile.get("is_chain_store", false)) else "改為 1 級連鎖店", 11, TEXT_MUTED))
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
+				if remodel_option != null:
+					params["facility_type"] = remodel_option.get_selected_id()
 				if symbol_option != null:
 					var selected_stock_index := symbol_option.get_selected_id()
 					if selected_stock_index >= 0 and selected_stock_index < card_stock_symbols.size():
@@ -2155,6 +2181,10 @@ func _update_cards_popup() -> void:
 				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("owner", -1)) == int(state.get("current_player", -1)) or _inventory_purchase_price(current_tile) > int(_current_player().get("cash", 0)) or bool(state.get("property_action_used", false))
 				if _has_original_gods():
 					use.disabled = use.disabled or int(current_tile.get("owner", -1)) < 0 or not _player_rest_status(_current_player()).is_empty()
+			if card_id == "改建":
+				var current_tile := _current_tile()
+				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("building_level", 0)) <= 0 or not _player_rest_status(_current_player()).is_empty()
+				use.tooltip_text = "改建腳下設施；選擇同類型也會消耗改建卡。" if current_tile.get("kind", "") == "facility" else "改建腳下已有建物的住宅；轉為連鎖店會降至 1 級。"
 			if not implemented:
 				use.text = "尚未還原"
 			elif _has_original_statuses() and card_id in ["免罪", "復仇", "嫁禍"]:
@@ -2917,22 +2947,25 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 func _has_original_hazards() -> bool:
-	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_hazards", false))
+	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_hazards", false))
 
 func _has_original_property_cards() -> bool:
-	return int(state.get("version", 0)) == PROPERTY_CARD_SAVE_VERSION and bool(state.get("original_property_cards", false))
+	return int(state.get("version", 0)) in [PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_property_cards", false))
+
+func _has_original_remodel() -> bool:
+	return int(state.get("version", 0)) == REMODEL_SAVE_VERSION and bool(state.get("original_remodel", false))
 
 func _has_original_statuses() -> bool:
-	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 func _player_rest_status(player: Dictionary) -> Dictionary:
 	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
@@ -3140,6 +3173,8 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 			label = "路障 · " + label
 		elif str(tile.get("kind", "")) in ["property", "facility"]:
 			label += " · %d 級" % int(tile.get("building_level", 0))
+			if _has_original_remodel() and tile.get("kind", "") == "property":
+				label += " · " + ("連鎖店" if bool(tile.get("is_chain_store", false)) else "普通住宅")
 			if item_id in ["換地", "換屋"]:
 				var owner_id := int(tile.get("owner", -1))
 				label += " · " + (_player_name(owner_id) if owner_id >= 0 else "無主")

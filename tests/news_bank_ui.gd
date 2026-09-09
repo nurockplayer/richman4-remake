@@ -16,7 +16,12 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	ui.set_process(false)
-	check(ui._new_game(5422, 4, Fixture.definition(), Fixture.new_game_options()), "loan UI fixture constructs")
+	var definition: Dictionary = Fixture.definition()
+	definition.board[5].event_code = 14
+	definition.board[5].source_status_bits = 14
+	definition.board[5].kind = "bank"
+	definition.board[5].name = "測試銀行"
+	check(ui._new_game(5422, 4, definition, Fixture.new_game_options()), "loan UI fixture constructs")
 	var game: Object = ui.game_state
 	game.state.god_objects = []
 	for id in range(4): game.set_player_ai(id, false)
@@ -26,6 +31,7 @@ func run() -> void:
 	game.state.bank_access = true
 	game.state.bank_landing = true
 	game._set_action_options(0)
+	check(game.state.action_options.has("take_loan"), "source bank fixture exposes existing loan action")
 	check(Game.validate_save(game.to_dict()).get("ok", false), "bank landing fixture validates")
 	ui._refresh_from_state()
 	ui._on_bank_pressed()

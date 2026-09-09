@@ -240,8 +240,13 @@ static func _validate_static_shape(game: Object, data: Dictionary, pending: Dict
 		var expected_opening := _opening_bid(game, target)
 		if opening != expected_opening:
 			errors.append("pending auction opening bid mismatch")
+		var expected_participants := _participants(game, caster_id, target, opening)
+		if participants != expected_participants:
+			errors.append("pending auction participants mismatch")
 	if current_bid < opening:
 		errors.append("pending auction current bid below opening")
+	if current_bid > opening and (current_bid - opening) % 100 != 0:
+		errors.append("pending auction bid increment sequence invalid")
 	if (current_bid == opening and highest_id != -1) or (current_bid > opening and highest_id < 0):
 		errors.append("pending auction bid and highest bidder mismatch")
 	var active_count := 0

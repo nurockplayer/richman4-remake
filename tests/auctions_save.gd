@@ -225,6 +225,21 @@ func _test_malformed_records_fail_closed() -> void:
 	wrong_opening["pending_auction"]["opening_bid"] = int(pending.get("opening_bid", 0)) + 1
 	_invalid_record(wrong_opening, "pending opening bid mismatch")
 
+	var wrong_increment := clean.duplicate(true)
+	var increment_participants: Array = pending.get("participants", [])
+	if increment_participants.size() >= 2:
+		wrong_increment["pending_auction"]["current_bid"] = int(pending.get("opening_bid", 0)) + 1
+		wrong_increment["pending_auction"]["highest_bidder_id"] = int(increment_participants[0])
+		wrong_increment["pending_auction"]["bidder_id"] = int(increment_participants[1])
+		_invalid_record(wrong_increment, "pending non-increment bid")
+
+	var ineligible_participant := clean.duplicate(true)
+	var participant_ids: Array = pending.get("participants", [])
+	if participant_ids.size() >= 3:
+		var removed_cash_id := int(participant_ids[2])
+		ineligible_participant["players"][removed_cash_id]["cash"] = int(pending.get("opening_bid", 0))
+		_invalid_record(ineligible_participant, "pending ineligible participant")
+
 	var wrong_phase := clean.duplicate(true)
 	wrong_phase["phase"] = "await_roll"
 	_invalid_record(wrong_phase, "pending phase mismatch")

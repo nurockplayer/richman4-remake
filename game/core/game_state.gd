@@ -6049,7 +6049,7 @@ func _ai_building_card_target(player_id: int, card_id: String) -> Dictionary:
 				var destructive_facility: Dictionary = _facility_record(tile_id)
 				destructive_owner = int(destructive_facility.get("owner", destructive_owner))
 				destructive_level = int(destructive_facility.get("building_level", destructive_level))
-			if destructive_owner == player_id or destructive_level <= 0:
+			if destructive_owner < 0 or destructive_owner == player_id or destructive_level <= 0:
 				continue
 		var own_priority: int = 0
 		var score: int = 0
@@ -6079,7 +6079,7 @@ func _ai_building_card_target(player_id: int, card_id: String) -> Dictionary:
 				if int(tile.get("owner", -1)) != player_id or own_gain <= 0:
 					continue
 				own_priority = 2 if int(tile.get("owner", -1)) == player_id and own_gain > 0 else 1 if own_gain > 0 else 0
-				score = own_gain * 100 + enemy_gain
+				score = own_gain * 100 - enemy_gain
 			else:
 				score = int(tile.get("building_level", 0))
 		else:

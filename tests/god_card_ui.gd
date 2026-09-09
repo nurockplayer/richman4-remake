@@ -1,5 +1,6 @@
 extends SceneTree
 const MainScene = preload("res://game/main.tscn")
+const Game = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/god_card_fixture.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
 var checks := 0
@@ -14,6 +15,11 @@ func expect(value: bool, label: String) -> void:
 func _initialize() -> void:
 	call_deferred("run")
 
+func expect_valid_fixture(game: Object, label: String) -> void:
+	var predecessor: Dictionary = game.to_dict()
+	var validation: Dictionary = Game.validate_save(predecessor)
+	expect(validation.get("ok", false), label + ": " + str(validation.get("errors", [])))
+
 func run() -> void:
 	var ui = MainScene.instantiate()
 	root.add_child(ui)
@@ -21,17 +27,13 @@ func run() -> void:
 	await process_frame
 	ui.set_process(false)
 	var definition := Fixture.definition()
-	expect(ui._default_setup_options(4, definition).get("original_god_cards", false), "source setup enables v14 god cards")
+	expect(ui._default_setup_options(4, definition).get("original_gods", false), "source setup retains existing god capability")
 	var started: bool = ui._new_game(4814, 4, definition, Fixture.new_game_options())
-	expect(started, "actual UI factory starts v14")
+	expect(started, "actual UI factory starts without a new save schema")
 	if not started:
-		if not ui._new_game(4814, 4, definition, Fixture.v13_game_options()):
-			expect(false, "v13 predecessor permits UI RED coverage")
-			ui.queue_free()
-			quit(1)
-			return
-		ui.game_state.state.version = 14
-		ui.game_state.state["original_god_cards"] = true
+		ui.queue_free()
+		quit(1)
+		return
 	var game: Object = ui.game_state
 	for player_id in range(4):
 		game.set_player_ai(player_id, false)
@@ -49,6 +51,7 @@ func run() -> void:
 	var bomb_supply: int = int(game.state.inventory_supply.tools["定時炸彈"])
 	expect(Inventory.grant_card(game.state.inventory_supply, game.state.players[0].cards, "送神符").get("ok", false), "grant dismiss card")
 	game._set_action_options(0)
+	expect_valid_fixture(game, "dismiss UI fixture preserves existing god/bomb save invariants")
 	ui._refresh_from_state()
 	ui._on_cards_pressed()
 	var dismiss: Button = ui.cards_popup.find_child("UseCard_送神符", true, false)
@@ -68,6 +71,7 @@ func run() -> void:
 	game.state.god_objects = [{"id": 3, "owner": -1, "node": 2, "days": 0}]
 	expect(Inventory.grant_card(game.state.inventory_supply, game.state.players[0].cards, "請神符").get("ok", false), "grant summon card")
 	game._set_action_options(0)
+	expect_valid_fixture(game, "summon UI fixture preserves existing god save invariants")
 	ui._refresh_from_state()
 	ui.board_view.reset_view()
 	await process_frame
@@ -95,13 +99,13 @@ func run() -> void:
 	summon = ui.cards_popup.find_child("UseCard_請神符", true, false)
 	expect(summon != null and summon.disabled, "empty visible viewport disables summon rather than falling back to the whole map")
 	expect(game.validate_save(game.to_dict()).get("ok", false), "god-card UI state validates for JSON loading")
-	expect(ui._setup_options_from_state().get("original_god_cards", false), "snapshot setup retains god-card capability")
+	expect(ui._setup_options_from_state().get("original_gods", false), "snapshot setup retains existing god capability")
 	ui._map_catalog = [JSON.parse_string(JSON.stringify(definition))]
 	ui._update_map_selector()
 	ui._active_map_definition = {}
 	ui._adopt_map_from_snapshot(game.to_dict())
 	ui._on_end_restart_pressed()
-	expect(ui.game_state != game and ui.game_state.state.get("version", 0) == 14, "restart preserves v14")
+	expect(ui.game_state != game and ui.game_state.state.get("version", 0) == 13, "restart preserves the current save schema")
 	expect(ui.game_state.validate_save(ui.game_state.to_dict()).get("ok", false), "restarted god-card game validates")
 	ui.queue_free()
 	print("God card UI checks: %d, failures: %d" % [checks, failures])

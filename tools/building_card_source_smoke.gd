@@ -35,7 +35,11 @@ func _initialize() -> void:
 		game._update_facility_records(source_id, {"owner":1,"building_level":0,"facility_type":0})
 		game._recalculate_property_values()
 		for card in ["天使", "怪獸", "惡魔"]:
-			Inventory.grant_card(game.state.inventory_supply, game.state.players[0].cards, card)
+			if card == "惡魔":
+				game._update_facility_records(source_id, {"building_level":3,"facility_type":2})
+				game._recalculate_property_values()
+			if not Inventory.grant_card(game.state.inventory_supply, game.state.players[0].cards, card).get("ok", false):
+				fail(id + " could not stage source card " + card)
 			game._set_action_options(0)
 			var params := {"card_id":card,"tile_id":canonical}
 			if card == "天使": params["facility_type"] = 4
@@ -44,8 +48,10 @@ func _initialize() -> void:
 			fail(id + " building destruction changed landlord or left building")
 		for player_id in range(4):
 			game.set_player_ai(player_id, true)
-			for card in ["天使", "惡魔", "怪獸"]:
-				Inventory.grant_card(game.state.inventory_supply, game.state.players[player_id].cards, card)
+		# One AI receives each finite card; do not silently ignore exhausted supply.
+		for card in ["天使", "惡魔", "怪獸"]:
+			if not Inventory.grant_card(game.state.inventory_supply, game.state.players[0].cards, card).get("ok", false):
+				fail(id + " could not stage AI card " + card)
 		game._set_action_options(0)
 		var restored: Object = Game.from_dict(JSON.parse_string(game.to_json()))
 		if restored == null:

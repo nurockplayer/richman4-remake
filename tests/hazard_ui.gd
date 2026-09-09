@@ -81,7 +81,13 @@ func run() -> void:
 	var wrong_source: Dictionary=definition.duplicate(true)
 	wrong_source.source.payload_sha256="c".repeat(64)
 	wrong_source.erase("supports_original_hazards")
-	ui._map_catalog=[wrong_source,definition.duplicate(true)]
+	ui._map_catalog=[wrong_source,JSON.parse_string(JSON.stringify(definition))]
+	var fractional_source: Dictionary=definition.source.duplicate(true)
+	fractional_source.entry_index=float(definition.source.entry_index)+0.5
+	expect(not ui._map_source_matches(definition.source,fractional_source,true),"fractional source entry cannot match integer identity")
+	var string_source: Dictionary=definition.source.duplicate(true)
+	string_source.entry_index=str(definition.source.entry_index)
+	expect(not ui._map_source_matches(definition.source,string_source,true),"numeric string cannot replace source entry identity")
 	ui._update_map_selector()
 	ui._active_map_definition={}
 	ui._adopt_map_from_snapshot(game.to_dict())

@@ -1157,10 +1157,24 @@ func _snapshot_graph_definition(snapshot: Dictionary) -> Dictionary:
 		"board": board.duplicate(true), "start_position": int(snapshot.get("start_position", 0)),
 		"supports_new_game": true, "unsupported_reason": ""}
 
-func _map_source_matches(left: Variant, right: Variant) -> bool:
+func _map_source_matches(left: Variant, right: Variant, json_number_identity: bool = false) -> bool:
 	if not left is Dictionary or not right is Dictionary:
 		return false
 	for key in ["edition", "map_number", "archive", "entry_index", "payload_sha256", "source_file_sha256"]:
+		# Restart matches a JSON catalog against normalized save numbers. Keep
+		# the existing preview-selection matching behavior for other callers.
+		if json_number_identity and key in ["map_number", "entry_index"]:
+			if not left.has(key) and not right.has(key):
+				continue
+			var left_value: Variant = left.get(key)
+			var right_value: Variant = right.get(key)
+			if typeof(left_value) not in [TYPE_INT, TYPE_FLOAT] or typeof(right_value) not in [TYPE_INT, TYPE_FLOAT]:
+				return false
+			if not is_finite(float(left_value)) or not is_finite(float(right_value)) or floor(float(left_value)) != float(left_value) or floor(float(right_value)) != float(right_value):
+				return false
+			if left_value != right_value:
+				return false
+			continue
 		if str(left.get(key, "")) != str(right.get(key, "")):
 			return false
 	return true
@@ -1639,7 +1653,7 @@ func _restart_game() -> void:
 	# A loaded snapshot supplies current geometry for display, but a new match
 	# needs the matching source's capabilities and initial company/stock data.
 	for definition_value in _map_catalog:
-		if definition_value is Dictionary and str(definition_value.get("id", "")) == str(_active_map_definition.get("id", "")) and _map_source_matches(definition_value.get("source", {}), _active_map_definition.get("source", {})):
+		if definition_value is Dictionary and str(definition_value.get("id", "")) == str(_active_map_definition.get("id", "")) and _map_source_matches(definition_value.get("source", {}), _active_map_definition.get("source", {}), true):
 			restart_definition = definition_value
 			break
 	_new_game(seed_value, player_count, restart_definition, options)

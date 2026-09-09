@@ -12,6 +12,7 @@ const OriginalMaps = preload("res://game/content/original_maps.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const InventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const InventoryRules = preload("res://game/core/inventory_rules.gd")
+const NewsPanel = preload("res://game/ui/news_panel.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -85,6 +86,9 @@ var save_button: Button
 var load_button: Button
 
 var bank_popup: PopupPanel
+var bank_loan_button: Button
+var bank_loan_status: Label
+var news_popup: PopupPanel
 var bank_deposit_button: Button
 var bank_withdraw_button: Button
 var new_game_popup: PopupPanel
@@ -162,6 +166,8 @@ func _process(_delta: float) -> void:
 	_maybe_schedule_ai_turn()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if news_popup != null and news_popup.visible:
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_SPACE:
 			if roll_button != null and not roll_button.disabled:
@@ -212,6 +218,8 @@ func _build_interface() -> void:
 	root_column.add_child(_build_event_log())
 
 	_build_popups()
+	news_popup = NewsPanel.new()
+	add_child(news_popup)
 	_build_end_overlay()
 
 func _build_header() -> Control:
@@ -620,6 +628,12 @@ func _build_popups() -> void:
 	var withdraw := bank_withdraw_button
 	withdraw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bank_actions.add_child(withdraw)
+	bank_loan_status = _make_label("", 11, TEXT_GOLD)
+	bank_loan_status.name = "LoanStatus"
+	bank_box.add_child(bank_loan_status)
+	bank_loan_button = _make_button("申請貸款 $10,000", _on_loan_pressed)
+	bank_loan_button.name = "BankLoan"
+	bank_box.add_child(bank_loan_button)
 	var bank_close := _make_button("關閉", bank_popup.hide)
 	bank_box.add_child(bank_close)
 
@@ -1642,6 +1656,13 @@ func _on_withdraw_pressed() -> void:
 	_append_local_log("銀行提取 %s：%s" % [_format_money(amount), _result_text(result, "已送出提款指令。")])
 	_handle_result(result)
 
+func _on_loan_pressed() -> void:
+	if bank_loan_button.disabled:
+		return
+	var result := _invoke_game("choose_action", ["take_loan", {"amount": 10000}])
+	_append_local_log("申請貸款：%s" % _result_text(result, "已送出貸款申請。"))
+	_handle_result(result)
+
 func _on_cards_pressed() -> void:
 	if not _is_human_turn():
 		return
@@ -1692,6 +1713,10 @@ func _update_bank_popup() -> void:
 	bank_deposit_button.disabled = not _has_action_option(options, "deposit") or deposit_amount <= 0
 	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw")
 	bank_withdraw_button.text = "提取 %s" % _format_money(mini(500, int(player.get("deposit", 0))))
+	var loan_block_days := int(player.get("loan_block_days", 0))
+	var loan_blocked := loan_block_days > 0 and loan_block_days < 128
+	bank_loan_status.text = "暫停貸款 · 剩餘自己的回合 %d 次" % loan_block_days if loan_blocked else "目前貸款 %s" % _format_money(int(player.get("loan", 0)))
+	bank_loan_button.disabled = loan_blocked or not _has_action_option(options, "take_loan") or int(state.get("bank", {}).get("cash", 0)) < 10000
 
 func _on_tile_selected(index: int) -> void:
 	_selected_tile = index
@@ -1807,6 +1832,7 @@ func _update_all() -> void:
 	_update_event_log()
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
+	news_popup.sync_snapshot(state)
 	_last_rendered_phase = phase
 
 func _update_header(phase: String, current_index: int) -> void:
@@ -1972,6 +1998,8 @@ func _update_property_card(tile: Dictionary) -> void:
 		details = "%s　·　格位 %02d\n休養或服刑結束後，從這個格位繼續行動。" % ["醫院" if int(tile.type_and_idx) == 8001 else "監獄", int(tile.get("index", 0))+1]
 	elif kind == "unsupported":
 		details += "\n此格尚未還原，暫不執行其效果。"
+	elif kind == "news":
+		details += "\n停在此格會播報新聞，影響局勢。"
 	else:
 		details += "\n此格的效果由模擬層處理。"
 	current_property_detail.text = details
@@ -2135,6 +2163,8 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
+	if news_popup != null and news_popup.visible:
+		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
@@ -2146,6 +2176,8 @@ func _maybe_schedule_ai_turn() -> void:
 
 func _on_ai_timer_timeout() -> void:
 	_ai_pending = false
+	if news_popup != null and news_popup.visible:
+		return
 	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
@@ -2726,6 +2758,8 @@ func _phase_is_action() -> bool:
 
 func _kind_label(kind: String) -> String:
 	match kind:
+		"news":
+			return "新聞"
 		"facility":
 			return "商業設施"
 		"start":
@@ -2771,6 +2805,12 @@ func _event_actor(event: Dictionary) -> String:
 
 func _event_detail(event_type: String, event: Dictionary) -> String:
 	match event_type:
+		"news_applied":
+			return str(event.get("summary", "新聞效果已結算。"))
+		"news_preview":
+			return "新聞報導"
+		"news_skipped":
+			return "本次沒有可套用的新聞。"
 		"god_attached":
 			return "%s附身 · %d 天" % [OriginalGods.name_for(int(event.get("god_id", 0))), int(event.get("days", 0))]
 		"god_detached":

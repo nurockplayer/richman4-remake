@@ -660,7 +660,7 @@ func _tile_color(kind: String) -> Color:
 	match kind:
 		"start":
 			return Color("#d79b55")
-		"event", "card":
+		"event", "card", "news":
 			return Color("#bc78cf")
 		"tax", "unsupported":
 			return Color("#df6e6e")
@@ -679,6 +679,8 @@ func _tile_color(kind: String) -> Color:
 
 func _kind_label(kind: String) -> String:
 	match kind:
+		"news":
+			return "新聞"
 		"facility":
 			return "商業設施"
 		"start":

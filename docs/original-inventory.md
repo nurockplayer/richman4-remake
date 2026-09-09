@@ -188,6 +188,12 @@ v1–v9 保留原有能力；連鎖店與改建尚未接入。規則、來源與
 天使指定空設施時可選建造類型。v1–v12 保留舊可用清單，詳細來源與差異見
 [original-building-cards.md](original-building-cards.md)。
 
+## 拍賣卡
+
+原版 ID8 拍賣卡已沿用現有有限卡片供給，接通住宅／設施的待回應出價、流標、成交與
+存讀檔續接；不新增存檔版本。參與者、容量上限、AI fallback 與 UI 回應視窗的規則及
+來源邊界見 [original-auctions.md](original-auctions.md)。
+
 ## 沿用現有存檔的後續效果
 
 送神符與請神符沿用既有神明狀態；工程車沿用背包、載具與回合結算，詳見

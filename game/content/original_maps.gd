@@ -488,5 +488,6 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"board": board, "start_position": start_position, "supports_new_game": supported,
 		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。",
 		"companies": companies, "stock_rows": stock_rows,
-		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses}
+		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses,
+		"supports_original_hazards": supports_original_statuses}
 	return {"ok": true, "error": "", "definition": definition}

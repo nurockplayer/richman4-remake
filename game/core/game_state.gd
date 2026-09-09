@@ -16,6 +16,7 @@ const FACILITY_SAVE_VERSION = 5
 const GODS_SAVE_VERSION = 6
 const COMPANY_SAVE_VERSION = 7
 const STATUS_SAVE_VERSION = 8
+const HAZARD_SAVE_VERSION = 9
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -68,7 +69,7 @@ const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封"]
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
-const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "遙控骰子", "機器工人"]
+const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
 	"car": "汽車",
@@ -84,6 +85,10 @@ const VEHICLE_COSTS = {
 	"motorcycle": 3000,
 	"car": 7000,
 }
+
+const MAX_GROUND_MINES = 10
+const MAX_BOMBS = 10
+const MAX_BOMB_STEPS = 38
 
 const STOCK_SYMBOLS = ["tech", "transport", "energy"]
 const STOCK_BASE_PRICES = {
@@ -144,7 +149,7 @@ static func new_game(seed_value: int, player_count: int = 4, options: Dictionary
 		return null
 	if not options.is_empty():
 		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
-		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)) or bool(setup_options.get("original_statuses", false)):
+		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)) or bool(setup_options.get("original_statuses", false)) or bool(setup_options.get("original_hazards", false)):
 			return null
 		var setup_game = new()
 		setup_game._initialize_setup(seed_value, player_count, setup_options)
@@ -169,9 +174,13 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if options.has("original_statuses") and typeof(options.get("original_statuses")) != TYPE_BOOL:
 		return null
+	if options.has("original_hazards") and typeof(options.get("original_hazards")) != TYPE_BOOL:
+		return null
 	if bool(options.get("original_companies", false)) and not bool(definition.get("supports_original_companies", false)):
 		return null
 	if bool(options.get("original_statuses", false)) and (typeof(definition.get("supports_original_statuses")) != TYPE_BOOL or not definition.get("supports_original_statuses", false)):
+		return null
+	if bool(options.get("original_hazards", false)) and (typeof(definition.get("supports_original_hazards")) != TYPE_BOOL or not definition.get("supports_original_hazards", false)):
 		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
@@ -181,6 +190,8 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 	if bool(options.get("original_gods", false)) and not original_facilities:
 		return null
 	if bool(options.get("original_statuses", false)) and (not original_facilities or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false))):
+		return null
+	if bool(options.get("original_hazards", false)) and (not original_facilities or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false)) or not bool(options.get("original_statuses", false))):
 		return null
 	if bool(options.get("original_companies", false)) and not _company_definition_errors(definition, player_count).is_empty():
 		return null
@@ -204,7 +215,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -280,6 +291,13 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	var original_statuses: bool = bool(options.get("original_statuses", false))
 	if original_statuses and (not original_facilities or not original_gods or not original_companies):
 		return {}
+	var original_hazards: bool = false
+	if options.has("original_hazards"):
+		if typeof(options["original_hazards"]) != TYPE_BOOL:
+			return {}
+		original_hazards = bool(options["original_hazards"])
+	if original_hazards and (not original_facilities or not original_gods or not original_companies or not original_statuses):
+		return {}
 
 	return {
 		"initial_fund": initial_fund,
@@ -292,6 +310,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_gods": original_gods,
 		"original_companies": original_companies,
 		"original_statuses": original_statuses,
+		"original_hazards": original_hazards,
 	}
 
 
@@ -310,13 +329,15 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 func _configure_setup(options: Dictionary, player_count: int) -> void:
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	var original_gods: bool = bool(options.get("original_gods", false))
-	state["version"] = STATUS_SAVE_VERSION if bool(options.get("original_statuses", false)) else COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	state["version"] = HAZARD_SAVE_VERSION if bool(options.get("original_hazards", false)) else STATUS_SAVE_VERSION if bool(options.get("original_statuses", false)) else COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
 	state["original_facilities"] = original_facilities
 	state["original_gods"] = original_gods
 	if bool(options.get("original_companies", false)):
 		state["original_companies"] = true
 	if bool(options.get("original_statuses", false)):
 		state["original_statuses"] = true
+	if bool(options.get("original_hazards", false)):
+		state["original_hazards"] = true
 	if original_facilities:
 		state["price_index"] = 1
 		state["last_roll_total"] = 0
@@ -340,6 +361,9 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		for player in state["players"]:
 			player["prison_days"] = 0
 		state["pending_trap"] = {}
+	if _is_hazards():
+		for player in state["players"]:
+			player["bomb_steps"] = 0
 	var total_deposits: int = 0
 	for player in state["players"]:
 		total_deposits += int(player.get("deposit", 0))
@@ -350,6 +374,8 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		state["inventory_supply"] = OriginalInventory.new_supply()
 		state["pending_remote_dice"] = {}
 		state["roadblocks"] = {}
+		if _is_hazards():
+			state["ground_hazards"] = {}
 		var inventory_result: Dictionary = OriginalInventory.initialize_players(state["players"], state["inventory_supply"])
 		if not bool(inventory_result.get("ok", false)):
 			state = {}
@@ -381,19 +407,19 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
 
 
 func _is_facilities() -> bool:
-	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
 
 
 func _is_gods() -> bool:
-	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -541,11 +567,15 @@ func _build_players(player_count: int, start_position: int = START_POSITION, gra
 
 
 func _is_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 
 func _is_statuses() -> bool:
-	return int(state.get("version", 0)) == STATUS_SAVE_VERSION and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
+
+
+func _is_hazards() -> bool:
+	return int(state.get("version", 0)) == HAZARD_SAVE_VERSION and bool(state.get("original_hazards", false))
 
 
 func _status_key(kind: String) -> String:
@@ -852,7 +882,7 @@ func _admit_player_status(player_id: int, kind: String, added_days: int) -> Dict
 		state["route_options"] = []
 		state["remaining_steps"] = 0
 		state["pending_movement"] = {}
-		if state.get("phase", "") == "await_route":
+		if state.get("phase", "") == "await_route" or (_is_hazards() and state.get("phase", "") == "await_roll"):
 			state["phase"] = "await_action"
 	_sync_attached_gods()
 	# Insurance is charged for the admission input even when the status wraps or
@@ -1379,7 +1409,7 @@ func _god_spawn_candidates(anchor_node: int = -1, require_distance: bool = false
 	var reachable: Dictionary = _god_reachable_nodes()
 	var result: Array = []
 	for node in candidates:
-		if reachable.is_empty() or reachable.has(int(node)):
+		if (reachable.is_empty() or reachable.has(int(node))) and (not _is_hazards() or not _dynamic_road_object_at(int(node))):
 			result.append(int(node))
 	return result
 
@@ -1550,10 +1580,14 @@ func _encounter_dog(player_id: int, node_id: int) -> bool:
 	return vehicle == "walking"
 
 
-func _process_god_step(player_id: int, node_id: int) -> bool:
+func _process_god_step(player_id: int, node_id: int, final_landing: bool = true) -> bool:
 	if not _is_gods():
 		return false
 	_sync_attached_gods()
+	# v9 source checks the ordinary god/dog object only after the final edge;
+	# keeping the sync above preserves attached-god following on every edge.
+	if _is_hazards() and not final_landing:
+		return false
 	if _encounter_dog(player_id, node_id):
 		return true
 	var objects: Variant = state.get("god_objects", [])
@@ -2170,6 +2204,8 @@ func _inventory_graph_node_reachable(node_id: int) -> bool:
 func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) -> String:
 	if not _is_inventory() or not _is_graph():
 		return "此效果只適用於原版圖形地圖"
+	if item_id in ["地雷", "定時炸彈"]:
+		return _hazard_target_error(player_id, item_id, tile_id)
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return "目前玩家無法行動"
@@ -2207,6 +2243,8 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 			return "路障已達同時放置上限"
 		if roadblocks_value.has(str(target_id)):
 			return "目標道路已有路障"
+		if _is_hazards() and (_ground_hazard_at(target_id).size() > 0 or _unbound_god_at(target_id)):
+			return "目標道路已有物件"
 		for candidate in _players():
 			var candidate_position: Variant = candidate.get("position", null)
 			if _valid_bool(candidate.get("alive", null)) and bool(candidate.get("alive", false)) and _valid_int(candidate_position, 0, board.size() - 1) and int(candidate_position) == target_id:
@@ -2284,6 +2322,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 			return _is_statuses()
 		return IMPLEMENTED_CARD_IDS.has(item_id)
 	if normalized_kind == "tool":
+		if item_id in ["地雷", "定時炸彈", "機器娃娃"]:
+			return _is_hazards()
 		return IMPLEMENTED_TOOL_IDS.has(item_id)
 	return false
 
@@ -2410,6 +2450,329 @@ static func _inventory_movement_blocked(player: Dictionary) -> bool:
 		if _valid_int(player.get(field, 0), 1):
 			return true
 	return false
+
+
+func _ground_hazard_at(node_id: int) -> Dictionary:
+	if not _is_hazards():
+		return {}
+	var hazards: Variant = state.get("ground_hazards", {})
+	if typeof(hazards) != TYPE_DICTIONARY:
+		return {}
+	var value: Variant = hazards.get(str(node_id), null)
+	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func _ground_hazard_counts() -> Dictionary:
+	var counts: Dictionary = {"mine": 0, "timed_bomb": 0}
+	if not _is_hazards():
+		return counts
+	var hazards: Variant = state.get("ground_hazards", {})
+	if typeof(hazards) != TYPE_DICTIONARY:
+		return counts
+	for value in hazards.values():
+		if typeof(value) != TYPE_DICTIONARY:
+			continue
+		var kind := str(value.get("kind", ""))
+		if counts.has(kind):
+			counts[kind] = int(counts[kind]) + 1
+	return counts
+
+
+func _carried_bomb_count() -> int:
+	if not _is_hazards():
+		return 0
+	var total := 0
+	for player in _players():
+		if typeof(player) == TYPE_DICTIONARY and _valid_int(player.get("bomb_steps", 0), 1, MAX_BOMB_STEPS):
+			total += 1
+	return total
+
+
+func _hazard_route_overlap_allowed(node_id: int) -> bool:
+	if not _is_hazards() or state.get("phase", "") != "await_route":
+		return false
+	var remaining: Variant = state.get("remaining_steps", null)
+	if not _valid_int(remaining, 1, MAX_GRAPH_STEPS):
+		return false
+	var current_player_id: Variant = state.get("current_player", null)
+	if not _valid_int(current_player_id, 0, _players().size() - 1):
+		return false
+	var player: Dictionary = _player(int(current_player_id))
+	return not player.is_empty() and _valid_int(player.get("position", null), node_id, node_id)
+
+
+func _unbound_god_at(node_id: int) -> bool:
+	if not _is_gods():
+		return false
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return false
+	for actor in objects:
+		if typeof(actor) == TYPE_DICTIONARY and int(actor.get("owner", -1)) < 0 and int(actor.get("node", -1)) == node_id:
+			return true
+	return false
+
+
+func _dynamic_road_object_at(node_id: int) -> bool:
+	if not _is_graph():
+		return false
+	var roadblocks: Variant = state.get("roadblocks", {})
+	if typeof(roadblocks) == TYPE_DICTIONARY and roadblocks.has(str(node_id)):
+		return true
+	if not _ground_hazard_at(node_id).is_empty():
+		return true
+	return _unbound_god_at(node_id)
+
+
+func _hazard_return_active_vehicle(player: Dictionary) -> String:
+	if player.is_empty():
+		return ""
+	var vehicle := str(player.get("vehicle", "walking"))
+	var tool_id := _inventory_vehicle_tool_id(vehicle)
+	if not tool_id.is_empty() and _is_inventory():
+		var supply: Variant = state.get("inventory_supply", {})
+		if typeof(supply) == TYPE_DICTIONARY and typeof(supply.get("tools", null)) == TYPE_DICTIONARY:
+			var tools: Dictionary = supply["tools"]
+			tools[tool_id] = int(tools.get(tool_id, 0)) + 1
+	player["vehicle"] = "walking"
+	player["dice_count"] = 1
+	return vehicle
+
+
+func _hazard_return_tool_to_supply(tool_id: String) -> void:
+	if not _is_inventory():
+		return
+	var supply: Variant = state.get("inventory_supply", {})
+	if typeof(supply) == TYPE_DICTIONARY and typeof(supply.get("tools", null)) == TYPE_DICTIONARY:
+		var tools: Dictionary = supply["tools"]
+		tools[tool_id] = int(tools.get(tool_id, 0)) + 1
+
+
+func _hazard_consume_tool_without_supply(player: Dictionary, tool_id: String) -> bool:
+	var tools: Variant = player.get("tools", {})
+	if typeof(tools) != TYPE_DICTIONARY or int(tools.get(tool_id, 0)) <= 0:
+		return false
+	var quantity: int = int(tools.get(tool_id, 0)) - 1
+	if quantity <= 0:
+		tools.erase(tool_id)
+	else:
+		tools[tool_id] = quantity
+	return true
+
+
+func _hazard_target_error(player_id: int, item_id: String, tile_id: Variant) -> String:
+	if not _is_hazards() or not ["地雷", "定時炸彈"].has(item_id):
+		return "此危險物只適用於 v9 原作道路模式"
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return "目前玩家無法行動"
+	if state.get("phase", "") != "await_roll":
+		return "危險物只能在擲骰前使用"
+	if _inventory_movement_blocked(player):
+		return "目前移動狀態無法使用危險物"
+	var pending_remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+		return "遙控骰子已經排程"
+	var tools: Variant = player.get("tools", {})
+	if typeof(tools) != TYPE_DICTIONARY or int(tools.get(item_id, 0)) <= 0:
+		return "玩家沒有這項道具"
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY or not _valid_int(tile_id, 0, board.size() - 1):
+		return "目標格位無效"
+	var target_id := int(tile_id)
+	var tile_value: Variant = board[target_id]
+	if typeof(tile_value) != TYPE_DICTIONARY or not _is_graph_road_tile(tile_value):
+		return "危險物只能放在可通行道路"
+	if not _inventory_graph_node_reachable(target_id):
+		return "道路節點無法從起點到達"
+	if _dynamic_road_object_at(target_id):
+		return "目標道路已有物件"
+	for candidate in _players():
+		if typeof(candidate) != TYPE_DICTIONARY or not bool(candidate.get("alive", false)):
+			continue
+		if _valid_int(candidate.get("position", null), target_id, target_id):
+			return "目標道路已有存活玩家"
+	var counts := _ground_hazard_counts()
+	if item_id == "地雷" and int(counts.get("mine", 0)) >= MAX_GROUND_MINES:
+		return "地雷已達同時放置上限"
+	if item_id == "定時炸彈" and int(counts.get("timed_bomb", 0)) + _carried_bomb_count() >= MAX_BOMBS:
+		return "定時炸彈已達同時存在上限"
+	return ""
+
+
+func _hazard_first_active_player_at(node_id: int, excluding_player_id: int) -> int:
+	for candidate in _players():
+		if typeof(candidate) != TYPE_DICTIONARY:
+			continue
+		var candidate_id: int = int(candidate.get("id", -1))
+		if candidate_id == excluding_player_id or not bool(candidate.get("alive", false)):
+			continue
+		if _status_active(candidate) or int(candidate.get("bomb_steps", 0)) > 0:
+			continue
+		if _valid_int(candidate.get("position", null), node_id, node_id):
+			return candidate_id
+	return -1
+
+
+func _hazard_damage_property(node_id: int) -> Dictionary:
+	var tile: Dictionary = _tile_at(node_id)
+	if tile.is_empty():
+		return {"damaged": false, "kind": "", "from_level": 0, "to_level": 0, "tile_id": node_id}
+	var kind: String = str(tile.get("kind", ""))
+	if kind == "property":
+		var property_level: int = int(tile.get("building_level", 0))
+		if property_level <= 0:
+			return {"damaged": false, "kind": kind, "from_level": property_level, "to_level": property_level, "tile_id": node_id}
+		tile["building_level"] = property_level - 1
+		_update_tile_rent(tile)
+		_recalculate_property_values()
+		return {"damaged": true, "kind": kind, "from_level": property_level, "to_level": property_level - 1, "tile_id": node_id}
+	if kind == "facility" and _is_facilities():
+		var facility: Dictionary = _facility_record(node_id)
+		if facility.is_empty():
+			return {"damaged": false, "kind": kind, "from_level": 0, "to_level": 0, "tile_id": node_id}
+		var facility_level: int = int(facility.get("building_level", 0))
+		if facility_level <= 0:
+			return {"damaged": false, "kind": kind, "from_level": facility_level, "to_level": facility_level, "tile_id": _facility_canonical_index(node_id)}
+		var next_level: int = facility_level - 1
+		var updates: Dictionary = {"building_level": next_level}
+		# The source mode-0 helper clears the facility's raised/sealed (+18)
+		# state when the demolition reaches level zero.
+		if next_level == 0:
+			updates["facility_state"] = 0
+			updates["facility_type"] = 0
+		_update_facility_records(int(facility.get("source_object_id", -1)), updates)
+		_recalculate_property_values()
+		return {"damaged": true, "kind": kind, "from_level": facility_level, "to_level": next_level, "tile_id": _facility_canonical_index(node_id), "source_object_id": int(facility.get("source_object_id", -1))}
+	return {"damaged": false, "kind": kind, "from_level": 0, "to_level": 0, "tile_id": node_id}
+
+
+func _hazard_process_ground(player_id: int, node_id: int) -> bool:
+	if not _is_hazards():
+		return false
+	var hazards: Variant = state.get("ground_hazards", {})
+	if typeof(hazards) != TYPE_DICTIONARY:
+		return false
+	var hazard_value: Variant = hazards.get(str(node_id), null)
+	if typeof(hazard_value) != TYPE_DICTIONARY:
+		return false
+	var hazard: Dictionary = hazard_value
+	var kind: String = str(hazard.get("kind", ""))
+	if kind == "mine":
+		hazards.erase(str(node_id))
+		state["ground_hazards"] = hazards
+		_hazard_return_tool_to_supply("地雷")
+		var player: Dictionary = _player(player_id)
+		var vehicle: String = _hazard_return_active_vehicle(player)
+		_admit_player_status(player_id, "hospital", 3)
+		_record_event("mine_triggered", {"player_id": player_id, "node": node_id, "vehicle": vehicle, "hospital_days": 3})
+		return true
+	if kind == "timed_bomb":
+		var player_with_bomb: Dictionary = _player(player_id)
+		if int(player_with_bomb.get("bomb_steps", 0)) > 0:
+			return false
+		hazards.erase(str(node_id))
+		state["ground_hazards"] = hazards
+		# Picking up a bomb keeps its finite slot occupied by the carrier.
+		player_with_bomb["bomb_steps"] = MAX_BOMB_STEPS
+		_record_event("bomb_picked_up", {"player_id": player_id, "node": node_id, "remaining": MAX_BOMB_STEPS})
+	return false
+
+
+func _hazard_explode_bomb(player_id: int, node_id: int) -> bool:
+	if not _is_hazards():
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or int(player.get("bomb_steps", 0)) <= 0:
+		return false
+	player["bomb_steps"] = 0
+	# The carried bomb slot is released only when the timed object explodes.
+	_hazard_return_tool_to_supply("定時炸彈")
+	var vehicle: String = _hazard_return_active_vehicle(player)
+	var damage: Dictionary = _hazard_damage_property(node_id)
+	_admit_player_status(player_id, "hospital", 5)
+	var payload: Dictionary = {"player_id": player_id, "node": node_id, "remaining": 0, "vehicle": vehicle, "hospital_days": 5, "damage": damage}
+	_record_event("bomb_exploded", payload)
+	return true
+
+
+func _process_carried_bomb_step(player_id: int, node_id: int) -> bool:
+	if not _is_hazards():
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return false
+	var current_steps: int = int(player.get("bomb_steps", 0))
+	if current_steps <= 0:
+		return false
+	var remaining: int = current_steps - 1
+	_record_event("bomb_countdown", {"player_id": player_id, "node": node_id, "remaining": remaining})
+	if remaining <= 0:
+		return _hazard_explode_bomb(player_id, node_id)
+	player["bomb_steps"] = remaining
+	var target_id: int = _hazard_first_active_player_at(node_id, player_id)
+	if target_id >= 0:
+		player["bomb_steps"] = 0
+		var target: Dictionary = _player(target_id)
+		target["bomb_steps"] = remaining
+		_record_event("bomb_transferred", {"from_player_id": player_id, "to_player_id": target_id, "node": node_id, "remaining": remaining})
+	return false
+
+
+func _hazard_clear_unbound_gods(node_id: int) -> Array:
+	var removed: Array = []
+	if not _is_gods():
+		return removed
+	var objects: Variant = state.get("god_objects", [])
+	if typeof(objects) != TYPE_ARRAY:
+		return removed
+	for index in range(objects.size() - 1, -1, -1):
+		var actor: Variant = objects[index]
+		if typeof(actor) != TYPE_DICTIONARY or int(actor.get("owner", -1)) >= 0 or int(actor.get("node", -1)) != node_id:
+			continue
+		removed.push_back(int(actor.get("id", 0)))
+		objects.remove_at(index)
+	state["god_objects"] = objects
+	removed.sort()
+	return removed
+
+
+func _machine_doll_use(player_id: int) -> Dictionary:
+	var player: Dictionary = _player(player_id)
+	var current_node: int = int(player.get("position", -1))
+	var previous_node: int = int(player.get("previous_position", -1))
+	var path: Array = []
+	var removed_hazards: Array = []
+	var removed_roadblocks: Array = []
+	var removed_gods: Array = []
+	for _step in range(9):
+		var candidates: Array = _graph_candidates(current_node, previous_node)
+		if candidates.is_empty():
+			break
+		var selected_index: int = _rng.randi_range(0, candidates.size() - 1)
+		var next_node: int = int(candidates[selected_index])
+		previous_node = current_node
+		current_node = next_node
+		path.append(next_node)
+		var hazards: Variant = state.get("ground_hazards", {})
+		if typeof(hazards) == TYPE_DICTIONARY and hazards.has(str(next_node)):
+			var hazard: Variant = hazards.get(str(next_node), null)
+			if typeof(hazard) == TYPE_DICTIONARY:
+				removed_hazards.append({"node": next_node, "kind": str(hazard.get("kind", ""))})
+				_hazard_return_tool_to_supply("地雷" if str(hazard.get("kind", "")) == "mine" else "定時炸彈")
+				hazards.erase(str(next_node))
+				state["ground_hazards"] = hazards
+		var roadblocks: Variant = state.get("roadblocks", {})
+		if typeof(roadblocks) == TYPE_DICTIONARY and roadblocks.has(str(next_node)):
+			removed_roadblocks.append(next_node)
+			_hazard_return_tool_to_supply("路障")
+			roadblocks.erase(str(next_node))
+			state["roadblocks"] = roadblocks
+		var god_ids: Array = _hazard_clear_unbound_gods(next_node)
+		for god_id in god_ids:
+			removed_gods.append({"node": next_node, "god_id": int(god_id)})
+	_record_event("machine_doll_cleared", {"player_id": player_id, "path": path, "steps": path.size(), "removed_hazards": removed_hazards, "removed_roadblocks": removed_roadblocks, "removed_gods": removed_gods})
+	return {"path": path, "steps": path.size(), "removed_hazards": removed_hazards, "removed_roadblocks": removed_roadblocks, "removed_gods": removed_gods}
 
 
 func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
@@ -2621,7 +2984,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 	if graph_should_move:
 		dog_collision = _graph_begin_movement(player_id, total)
 	if (not _is_graph() or state.get("phase", "") != "await_route") and not dog_collision:
-		_resolve_landing(player_id)
+		# A stay/status-release turn does not traverse an edge.  Process graph
+		# objects only after an actual traversed edge so anchor objects remain
+		# preserved when the player merely stays there.
+		_resolve_landing(player_id, graph_should_move)
 	return _result(true, "擲骰完成", {"dice": dice, "total": total})
 
 
@@ -2688,6 +3054,15 @@ func _stop_graph_for_dog(player_id: int) -> void:
 	_set_action_options(player_id)
 
 
+func _stop_graph_for_hazard(player_id: int) -> void:
+	state["route_options"] = []
+	state["pending_movement"] = {}
+	state["remaining_steps"] = 0
+	if state.get("phase", "") != "game_over":
+		state["phase"] = "await_action"
+		_set_action_options(player_id)
+
+
 func _graph_consume_roadblock(player_id: int, node_id: int) -> bool:
 	if not _is_inventory():
 		return false
@@ -2698,6 +3073,8 @@ func _graph_consume_roadblock(player_id: int, node_id: int) -> bool:
 	var placer_id: int = int(placer_value) if _valid_int(placer_value, 0, max(0, _players().size() - 1)) else -1
 	roadblocks_value.erase(str(node_id))
 	state["roadblocks"] = roadblocks_value
+	if _is_hazards():
+		_hazard_return_tool_to_supply("路障")
 	_record_event("roadblock_hit", {"player_id": player_id, "tile_id": node_id, "placer_player_id": placer_id})
 	return true
 
@@ -2750,7 +3127,11 @@ func _graph_continue_movement(player_id: int) -> bool:
 		}
 		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
 		var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, next_node)
-		var dog_collision: bool = _process_god_step(player_id, next_node)
+		var bomb_collision: bool = _process_carried_bomb_step(player_id, next_node)
+		if bomb_collision:
+			_stop_graph_for_hazard(player_id)
+			return true
+		var dog_collision: bool = _process_god_step(player_id, next_node, false)
 		if dog_collision:
 			_stop_graph_for_dog(player_id)
 			return true
@@ -2809,7 +3190,11 @@ func choose_route(route: int) -> Dictionary:
 	}
 	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
 	var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, route)
-	var dog_collision: bool = _process_god_step(player_id, route)
+	var bomb_collision: bool = _process_carried_bomb_step(player_id, route)
+	if bomb_collision:
+		_stop_graph_for_hazard(player_id)
+		return _result(true, "已選擇路線", {"route": route, "bomb_collision": true})
+	var dog_collision: bool = _process_god_step(player_id, route, false)
 	if dog_collision:
 		_stop_graph_for_dog(player_id)
 		return _result(true, "已選擇路線", {"route": route})
@@ -3143,7 +3528,7 @@ func _move_player(player_id: int, steps: int) -> void:
 	_record_event("move", {"player_id": player_id, "from": old_position, "to": position, "steps": steps})
 
 
-func _resolve_landing(player_id: int) -> void:
+func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return
@@ -3153,6 +3538,19 @@ func _resolve_landing(player_id: int) -> void:
 		_set_action_options(player_id)
 		return
 	if _is_graph():
+		if _is_hazards() and process_graph_objects:
+			# Ground hazards and ordinary gods are final-landing effects in v9.
+			# A mine or a zero-count bomb moves the actor to hospital and consumes
+			# the landing, so do not also resolve the source tile.
+			if _hazard_process_ground(player_id, int(player.get("position", -1))):
+				_check_game_over()
+				return
+			if _process_god_step(player_id, int(player.get("position", -1)), true):
+				_check_game_over()
+				return
+			if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
+				_check_game_over()
+				return
 		_graph_visit_tile(player_id, tile, true)
 		if bool(player.get("alive", false)) and state.get("phase", "") != "game_over":
 			state["phase"] = "await_action"
@@ -3318,6 +3716,11 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		var bank: Dictionary = state.get("bank", {})
 		bank["loans"] = max(0, int(bank.get("loans", 0)) - loan)
 		state["bank"] = bank
+	if _is_hazards() and int(debtor.get("bomb_steps", 0)) > 0:
+		# A carried timed bomb is an active road object, so bankruptcy releases
+		# its finite slot before the player leaves the active roster.
+		debtor["bomb_steps"] = 0
+		_hazard_return_tool_to_supply("定時炸彈")
 	debtor["cash"] = 0
 	debtor["deposit"] = 0
 	debtor["loan"] = 0
@@ -3554,6 +3957,8 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	var tool_id: String = str(params.get("tool_id", ""))
 	if not IMPLEMENTED_TOOL_IDS.has(tool_id):
 		return _error("此道具效果尚未還原")
+	if tool_id in ["地雷", "定時炸彈", "機器娃娃"] and not _is_hazards():
+		return _error("此道具效果只適用於 v9 原作道路模式")
 	var tools: Dictionary = player.get("tools", {})
 	if int(tools.get(tool_id, 0)) <= 0:
 		return _error("玩家沒有這項道具")
@@ -3563,20 +3968,50 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 		return _error("目前移動狀態無法使用道具")
 	if tool_id == "機器工人" and _god_investment_blocked(player_id):
 		return _error("目前神明效果使建設失敗")
+	if tool_id == "機器娃娃":
+		var doll_consume_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
+		if not bool(doll_consume_result.get("ok", false)):
+			return _error(str(doll_consume_result.get("error", "道具無法使用")))
+		var doll_result: Dictionary = _machine_doll_use(player_id)
+		_set_action_options(player_id)
+		return _result(true, "機器娃娃已清除道路物件", {"tool_id": tool_id, "path": doll_result.get("path", []), "removed_hazards": doll_result.get("removed_hazards", []), "removed_roadblocks": doll_result.get("removed_roadblocks", []), "removed_gods": doll_result.get("removed_gods", [])})
 	if (tool_id == "機車" and str(player.get("vehicle", "walking")) == "motorcycle") or (tool_id == "汽車" and str(player.get("vehicle", "walking")) == "car"):
 		return _error("這項交通工具已經啟用")
 	var pending_remote: Variant = state.get("pending_remote_dice", {})
 	if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
 		return _error("遙控骰子已經排程")
+	if tool_id in ["地雷", "定時炸彈"]:
+		var hazard_target_value: Variant = params.get("tile_id", null)
+		var hazard_target_error: String = _inventory_target_error(player_id, tool_id, hazard_target_value)
+		if not hazard_target_error.is_empty():
+			return _error(hazard_target_error)
+		var hazard_target_id: int = int(hazard_target_value)
+		if _is_hazards():
+			if not _hazard_consume_tool_without_supply(player, tool_id):
+				return _error("玩家沒有這項道具")
+		else:
+			var hazard_consume_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
+			if not bool(hazard_consume_result.get("ok", false)):
+				return _error(str(hazard_consume_result.get("error", "道具無法使用")))
+		var hazards: Dictionary = state.get("ground_hazards", {}).duplicate(true)
+		hazards[str(hazard_target_id)] = {"kind": "mine" if tool_id == "地雷" else "timed_bomb", "placer_id": player_id}
+		state["ground_hazards"] = hazards
+		_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": hazard_target_id, "effect": "mine_placed" if tool_id == "地雷" else "timed_bomb_placed", "kind": "mine" if tool_id == "地雷" else "timed_bomb"})
+		_set_action_options(player_id)
+		return _result(true, "已使用道具", {"tool_id": tool_id, "tile_id": hazard_target_id})
 	if tool_id == "路障" or tool_id == "機器工人":
 		var target_id_value: Variant = params.get("tile_id", null)
 		var target_error: String = _inventory_target_error(player_id, tool_id, target_id_value)
 		if not target_error.is_empty():
 			return _error(target_error)
 		var target_id: int = int(target_id_value)
-		var consume_target_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
-		if not bool(consume_target_result.get("ok", false)):
-			return _error(str(consume_target_result.get("error", "道具無法使用")))
+		if _is_hazards() and tool_id == "路障":
+			if not _hazard_consume_tool_without_supply(player, tool_id):
+				return _error("玩家沒有這項道具")
+		else:
+			var consume_target_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
+			if not bool(consume_target_result.get("ok", false)):
+				return _error(str(consume_target_result.get("error", "道具無法使用")))
 		if tool_id == "路障":
 			var roadblocks: Dictionary = state.get("roadblocks", {}).duplicate(true)
 			roadblocks[str(target_id)] = player_id
@@ -4048,8 +4483,11 @@ func _inventory_demolition_card(player_id: int, tile_id: Variant) -> Dictionary:
 			effect = "demolish_building"
 		else:
 			var roadblocks: Dictionary = state.get("roadblocks", {}).duplicate(true)
+			var removed_roadblock: bool = roadblocks.has(str(target_id))
 			roadblocks.erase(str(target_id))
 			state["roadblocks"] = roadblocks
+			if removed_roadblock and _is_hazards():
+				_hazard_return_tool_to_supply("路障")
 			effect = "remove_roadblock"
 		_record_event("card_used", {"player_id": player_id, "card_id": "拆除", "tile_id": target_id, "effect": effect})
 	_set_action_options(player_id)
@@ -4937,6 +5375,46 @@ func _inventory_ai_roadblock_target(player_id: int) -> int:
 	return int(candidates[0])
 
 
+func _inventory_ai_hazard_target(player_id: int, tool_id: String) -> int:
+	if not _is_hazards() or not _is_graph() or not ["地雷", "定時炸彈"].has(tool_id):
+		return -1
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY:
+		return -1
+	var candidates: Array = []
+	for tile_id in range(board.size()):
+		if _inventory_target_error(player_id, tool_id, tile_id).is_empty():
+			candidates.append(tile_id)
+	if candidates.is_empty():
+		return -1
+	# Prefer an immediately reachable free neighbour so AI placement is useful
+	# while retaining canonical node ordering for replay.
+	var player: Dictionary = _player(player_id)
+	var current: int = int(player.get("position", -1))
+	for neighbor in _graph_candidates(current, int(player.get("previous_position", -1))):
+		if candidates.has(int(neighbor)):
+			return int(neighbor)
+	return int(candidates[0])
+
+
+func _hazard_dynamic_object_count() -> int:
+	if not _is_hazards():
+		return 0
+	var count: int = _ground_hazard_at(-1).size()
+	var hazards: Variant = state.get("ground_hazards", {})
+	if typeof(hazards) == TYPE_DICTIONARY:
+		count += hazards.size()
+	var roadblocks: Variant = state.get("roadblocks", {})
+	if typeof(roadblocks) == TYPE_DICTIONARY:
+		count += roadblocks.size()
+	var gods: Variant = state.get("god_objects", [])
+	if typeof(gods) == TYPE_ARRAY:
+		for actor in gods:
+			if typeof(actor) == TYPE_DICTIONARY and int(actor.get("owner", -1)) < 0:
+				count += 1
+	return count
+
+
 func _inventory_ai_demolition_target(player_id: int) -> int:
 	if not _is_inventory() or not _is_graph():
 		return -1
@@ -5000,6 +5478,19 @@ func _ai_roll_action(player_id: int) -> void:
 	if roadblock_target >= 0:
 		var roadblock_result: Dictionary = choose_action("use_tool", {"tool_id": "路障", "tile_id": roadblock_target})
 		if bool(roadblock_result.get("ok", false)):
+			return
+	if _is_hazards() and int(tools.get("機器娃娃", 0)) > 0 and _hazard_dynamic_object_count() > 0:
+		var doll_result: Dictionary = choose_action("use_tool", {"tool_id": "機器娃娃"})
+		if bool(doll_result.get("ok", false)):
+			return
+	for hazard_tool_id in ["地雷", "定時炸彈"]:
+		if int(tools.get(hazard_tool_id, 0)) <= 0:
+			continue
+		var hazard_target: int = _inventory_ai_hazard_target(player_id, hazard_tool_id)
+		if hazard_target < 0:
+			continue
+		var hazard_result: Dictionary = choose_action("use_tool", {"tool_id": hazard_tool_id, "tile_id": hazard_target})
+		if bool(hazard_result.get("ok", false)):
 			return
 	for tool_id in ["汽車", "機車", "遙控骰子"]:
 		if int(tools.get(tool_id, 0)) <= 0:
@@ -5423,7 +5914,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var status_save: bool = _valid_int(version_marker, STATUS_SAVE_VERSION, STATUS_SAVE_VERSION)
+	var hazards_save: bool = _valid_int(version_marker, HAZARD_SAVE_VERSION, HAZARD_SAVE_VERSION)
+	var status_save: bool = hazards_save or _valid_int(version_marker, STATUS_SAVE_VERSION, STATUS_SAVE_VERSION)
 	var companies_save: bool = status_save or _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
 	var stock_symbols: Array = OriginalStockMarket.symbols() if companies_save else STOCK_SYMBOLS
 	var gods_save: bool = status_save or companies_save or _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
@@ -5455,11 +5947,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		required_top.append_array(["original_companies", "companies", "company_purchase_remaining", "jackpot", "company_months", "company_service_pending"])
 	if status_save:
 		required_top.append_array(["original_statuses", "pending_trap"])
+	if hazards_save:
+		required_top.append_array(["original_hazards", "ground_hazards"])
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = HAZARD_SAVE_VERSION if hazards_save else STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if facility_save:
@@ -5492,6 +5986,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("statuses marker requires companies, gods and facilities")
 	elif data.get("original_statuses", false) == true:
 		errors.append("statuses marker requires v8 save")
+	if hazards_save:
+		if typeof(data.get("original_hazards")) != TYPE_BOOL or not data.get("original_hazards", false):
+			errors.append("invalid original hazards marker")
+		if not bool(data.get("original_statuses", false)) or not bool(data.get("original_companies", false)) or not bool(data.get("original_gods", false)) or not bool(data.get("original_facilities", false)):
+			errors.append("hazards marker requires statuses, companies, gods and facilities")
+	elif data.get("original_hazards", false) == true:
+		errors.append("hazards marker requires v9 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)
@@ -5782,6 +6283,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var facility_owners: Dictionary = {}
 	var inventory_card_supply: Dictionary = {}
 	var inventory_tool_supply: Dictionary = {}
+	var hazard_active_tool_counts: Dictionary = {"路障": 0, "地雷": 0, "定時炸彈": 0}
 	if inventory_save:
 		var inventory_supply: Variant = data.get("inventory_supply", null)
 		if typeof(inventory_supply) != TYPE_DICTIONARY:
@@ -6063,6 +6565,92 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					for roadblock_player in players:
 						if typeof(roadblock_player) == TYPE_DICTIONARY and _valid_bool(roadblock_player.get("alive", null)) and bool(roadblock_player.get("alive", false)) and _valid_int(roadblock_player.get("position", null), 0, graph_board_size_for_roadblocks - 1) and int(roadblock_player.get("position")) == roadblock_index:
 							errors.append("roadblock target is occupied")
+				if hazards_save and typeof(data.get("god_objects", null)) == TYPE_ARRAY:
+					for roadblock_god in data.get("god_objects", []):
+						if typeof(roadblock_god) == TYPE_DICTIONARY and _valid_int(roadblock_god.get("owner", null), -1, -1) and _valid_int(roadblock_god.get("node", null), roadblock_index, roadblock_index):
+							errors.append("roadblock target overlaps dynamic road object")
+			if hazards_save:
+				hazard_active_tool_counts["路障"] = roadblocks_value.size()
+
+	if hazards_save:
+		var ground_hazards_value: Variant = data.get("ground_hazards", null)
+		if typeof(ground_hazards_value) != TYPE_DICTIONARY:
+			errors.append("invalid ground hazards")
+		else:
+			var mine_count: int = 0
+			var bomb_ground_count: int = 0
+			var hazard_board_size: int = board.size() if typeof(board) == TYPE_ARRAY else 0
+			var hazard_route_overlap_node: int = -1
+			if phase_name == "await_route" and _valid_int(data.get("remaining_steps", null), 1, MAX_GRAPH_STEPS) and typeof(players) == TYPE_ARRAY and _valid_int(current_player, 0, max(0, player_count - 1)) and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+				var route_hazard_player: Dictionary = players[current_player]
+				if _valid_int(route_hazard_player.get("position", null), 0, max(0, hazard_board_size - 1)):
+					hazard_route_overlap_node = int(route_hazard_player.get("position"))
+			for hazard_key in ground_hazards_value.keys():
+				var hazard_index_valid: bool = typeof(hazard_key) == TYPE_STRING and str(hazard_key).is_valid_int()
+				var hazard_index: int = int(hazard_key) if hazard_index_valid else -1
+				if not hazard_index_valid or str(hazard_index) != str(hazard_key) or not _valid_int(hazard_index, 0, hazard_board_size - 1):
+					errors.append("invalid ground hazard index")
+					continue
+				var hazard_object_value: Variant = ground_hazards_value[hazard_key]
+				if typeof(hazard_object_value) != TYPE_DICTIONARY:
+					errors.append("invalid ground hazard object")
+					continue
+				var hazard_object: Dictionary = hazard_object_value
+				if hazard_object.size() != 2 or not hazard_object.has("kind") or not hazard_object.has("placer_id"):
+					errors.append("ground hazard keys are not canonical")
+				var hazard_kind: Variant = hazard_object.get("kind", null)
+				if typeof(hazard_kind) != TYPE_STRING or not ["mine", "timed_bomb"].has(str(hazard_kind)):
+					errors.append("invalid ground hazard kind")
+				elif str(hazard_kind) == "mine":
+					mine_count += 1
+					hazard_active_tool_counts["地雷"] = int(hazard_active_tool_counts.get("地雷", 0)) + 1
+				else:
+					bomb_ground_count += 1
+					hazard_active_tool_counts["定時炸彈"] = int(hazard_active_tool_counts.get("定時炸彈", 0)) + 1
+				if not _valid_int(hazard_object.get("placer_id", null), 0, max(0, player_count - 1)):
+					errors.append("invalid ground hazard placer")
+				if typeof(board) != TYPE_ARRAY or typeof(board[hazard_index]) != TYPE_DICTIONARY or not _is_graph_road_tile(board[hazard_index]):
+					errors.append("ground hazard target is not a road")
+				if not graph_reachable.has(hazard_index):
+					errors.append("ground hazard target is unreachable")
+				var hazard_roadblocks_value: Variant = data.get("roadblocks", null)
+				var hazard_god_objects_value: Variant = data.get("god_objects", null)
+				var overlaps_dynamic: bool = typeof(hazard_roadblocks_value) == TYPE_DICTIONARY and hazard_roadblocks_value.has(str(hazard_index))
+				if typeof(hazard_god_objects_value) == TYPE_ARRAY:
+					for hazard_god in hazard_god_objects_value:
+						if typeof(hazard_god) == TYPE_DICTIONARY and int(hazard_god.get("owner", -1)) < 0 and int(hazard_god.get("node", -1)) == hazard_index:
+							overlaps_dynamic = true
+				if overlaps_dynamic:
+					errors.append("ground hazard overlaps dynamic road object")
+				var hazard_status_anchor_overlap: bool = status_save and hazard_index in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
+				if typeof(players) == TYPE_ARRAY:
+					for hazard_player in players:
+						if typeof(hazard_player) != TYPE_DICTIONARY or not bool(hazard_player.get("alive", false)) or not _valid_int(hazard_player.get("position", null), hazard_index, hazard_index):
+							continue
+						# Status admission/release teleports through the canonical
+						# hospital/prison anchor without running a landing collision.
+						if hazard_status_anchor_overlap:
+							continue
+						if hazard_index == hazard_route_overlap_node:
+							continue
+						# The source timed-bomb handler is a no-op when the landing
+						# player already carries a bomb. The ground object therefore
+						# remains under that player until a later eligible landing.
+						if str(hazard_kind) == "timed_bomb" and _valid_int(hazard_player.get("bomb_steps", null), 1, MAX_BOMB_STEPS):
+							continue
+						errors.append("ground hazard target is occupied")
+			if mine_count > MAX_GROUND_MINES:
+				errors.append("too many ground mines")
+			var carried_bombs_in_save: int = 0
+			if typeof(players) == TYPE_ARRAY:
+				for hazard_player in players:
+					if typeof(hazard_player) == TYPE_DICTIONARY and _valid_int(hazard_player.get("bomb_steps", null), 1, MAX_BOMB_STEPS):
+						carried_bombs_in_save += 1
+				hazard_active_tool_counts["定時炸彈"] = bomb_ground_count + carried_bombs_in_save
+			if bomb_ground_count + carried_bombs_in_save > MAX_BOMBS:
+				errors.append("too many timed bombs")
+	elif data.has("ground_hazards") and typeof(data.get("ground_hazards")) == TYPE_DICTIONARY and not data.get("ground_hazards").is_empty():
+		errors.append("ground hazards require v9 save")
 
 	var held_inventory_cards: Dictionary = {}
 	var held_inventory_tools: Dictionary = {}
@@ -6086,6 +6674,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				required_player.append_array(["god_id", "hospital_days"])
 			if status_save:
 				required_player.append("prison_days")
+			if hazards_save:
+				required_player.append("bomb_steps")
 			if setup_save:
 				required_player.append_array(["character_id", "init_cash_ratio"])
 			for required_key in required_player:
@@ -6113,9 +6703,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cash", "deposit", "property_values", "loan"]:
 				if not _valid_int(player.get(money_key, null), 0, 1000000000000):
 					errors.append("player %d %s invalid" % [index, money_key])
-			for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
-				if not _valid_int(player.get(counter_key, null), 0, 1000000000):
-					errors.append("player %d %s invalid" % [index, counter_key])
+				for counter_key in ["position", "skip_turns", "rent_shield", "turtle_days", "stay_next", "loan_due_day", "turns_taken"]:
+					if not _valid_int(player.get(counter_key, null), 0, 1000000000):
+						errors.append("player %d %s invalid" % [index, counter_key])
+				if hazards_save and not _valid_int(player.get("bomb_steps", null), 0, MAX_BOMB_STEPS):
+					errors.append("player %d bomb_steps invalid" % index)
+				elif hazards_save and not bool(player.get("alive", false)) and int(player.get("bomb_steps", 0)) > 0:
+					errors.append("dead player cannot carry bomb")
 			if companies_save and not _valid_int(player.get("insurance_status"), 0, 128):
 				errors.append("player %d insurance_status invalid" % index)
 			if gods_save:
@@ -6319,6 +6913,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if gods_save:
 		var god_objects_value: Variant = data.get("god_objects", null)
 		var god_owner_by_id: Dictionary = {}
+		var god_route_overlap_node: int = -1
+		if hazards_save and phase_name == "await_route" and _valid_int(data.get("remaining_steps", null), 1, MAX_GRAPH_STEPS) and typeof(players) == TYPE_ARRAY and _valid_int(current_player, 0, max(0, player_count - 1)) and current_player < players.size() and typeof(players[current_player]) == TYPE_DICTIONARY:
+			var god_route_player: Dictionary = players[current_player]
+			if _valid_int(god_route_player.get("position", null), 0, max(0, board.size() - 1) if typeof(board) == TYPE_ARRAY else -1):
+				god_route_overlap_node = int(god_route_player.get("position"))
 		if typeof(god_objects_value) != TYPE_ARRAY or god_objects_value.size() > 15:
 			errors.append("invalid god_objects")
 		else:
@@ -6385,13 +6984,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 							errors.append("unattached god %d node is unreachable" % god_id)
 						if typeof(board[int(god_node_value)]) != TYPE_DICTIONARY or not OriginalGods.source_tile_eligible(board[int(god_node_value)]):
 							errors.append("unattached god %d node is not eligible" % god_id)
-					if typeof(players) == TYPE_ARRAY and _valid_int(god_node_value, 0, god_board_limit):
-						# Admission/release preserves unbound gods at source status anchors.
-						# Released players may remain there with a zero counter (stay_next).
-						var status_anchor_overlap: bool = status_save and int(god_node_value) in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
-						for god_player in players:
-							if not status_anchor_overlap and typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
-								errors.append("unattached god %d is on player" % god_id)
+						if typeof(players) == TYPE_ARRAY and _valid_int(god_node_value, 0, god_board_limit):
+							# Admission/release preserves unbound gods at source status anchors.
+							# Released players may remain there with a zero counter (stay_next).
+							var status_anchor_overlap: bool = status_save and int(god_node_value) in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
+							var route_overlap: bool = hazards_save and int(god_node_value) == god_route_overlap_node
+							for god_player in players:
+								if not status_anchor_overlap and not route_overlap and typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
+									errors.append("unattached god %d is on player" % god_id)
 			if typeof(players) == TYPE_ARRAY:
 				var god_claimed_by_player: Dictionary = {}
 				for god_player_index in range(players.size()):
@@ -6442,8 +7042,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("research tool pool is not empty %s" % tool_id)
 				continue
 			var tool_initial: int = int(record["initial_supply"])
-			var tool_held: int = int(held_inventory_tools.get(tool_id, 0))
-			if supply_quantity + tool_held != tool_initial:
+			var tool_held: int = int(held_inventory_tools.get(tool_id, 0)) + int(hazard_active_tool_counts.get(tool_id, 0))
+			var tool_total: int = supply_quantity + tool_held
+			if tool_total != tool_initial:
 				errors.append("inventory tool conservation mismatch %s" % tool_id)
 
 	if graph_save:

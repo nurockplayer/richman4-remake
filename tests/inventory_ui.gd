@@ -18,7 +18,7 @@ func run() -> void:
 	await process_frame
 	await process_frame
 	ui.set_process(false)
-	expect(int(ui.state.get("version", 0)) == (8 if bool(ui._selected_map_definition.get("supports_original_statuses", false)) else 7 if bool(ui._selected_map_definition.get("supports_original_companies", false)) else 6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "UI uses facility graph or classic inventory save for selected map")
+	expect(int(ui.state.get("version", 0)) == (9 if bool(ui._selected_map_definition.get("supports_original_hazards", false)) else 8 if bool(ui._selected_map_definition.get("supports_original_statuses", false)) else 7 if bool(ui._selected_map_definition.get("supports_original_companies", false)) else 6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "UI uses facility graph or classic inventory save for selected map")
 	ui._on_cards_pressed()
 	expect(ui.cards_popup.visible, "backpack opens before rolling")
 	await process_frame

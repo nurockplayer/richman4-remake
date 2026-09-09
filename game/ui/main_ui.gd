@@ -13,6 +13,7 @@ const GameCalendar = preload("res://game/core/game_calendar.gd")
 const InventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const InventoryRules = preload("res://game/core/inventory_rules.gd")
 const NewsPanel = preload("res://game/ui/news_panel.gd")
+const FatePanel = preload("res://game/ui/fate_panel.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -89,6 +90,7 @@ var bank_popup: PopupPanel
 var bank_loan_button: Button
 var bank_loan_status: Label
 var news_popup: PopupPanel
+var fate_popup: PopupPanel
 var bank_deposit_button: Button
 var bank_withdraw_button: Button
 var new_game_popup: PopupPanel
@@ -166,7 +168,7 @@ func _process(_delta: float) -> void:
 	_maybe_schedule_ai_turn()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if news_popup != null and news_popup.visible:
+	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_SPACE:
@@ -220,6 +222,8 @@ func _build_interface() -> void:
 	_build_popups()
 	news_popup = NewsPanel.new()
 	add_child(news_popup)
+	fate_popup = FatePanel.new()
+	add_child(fate_popup)
 	_build_end_overlay()
 
 func _build_header() -> Control:
@@ -1833,6 +1837,7 @@ func _update_all() -> void:
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
 	news_popup.sync_snapshot(state)
+	fate_popup.sync_snapshot(state)
 	_last_rendered_phase = phase
 
 func _update_header(phase: String, current_index: int) -> void:
@@ -1998,6 +2003,8 @@ func _update_property_card(tile: Dictionary) -> void:
 		details = "%s　·　格位 %02d\n休養或服刑結束後，從這個格位繼續行動。" % ["醫院" if int(tile.type_and_idx) == 8001 else "監獄", int(tile.get("index", 0))+1]
 	elif kind == "unsupported":
 		details += "\n此格尚未還原，暫不執行其效果。"
+	elif kind == "fate":
+		details += "\n停在此格會揭曉命運，影響財產或行動。"
 	elif kind == "news":
 		details += "\n停在此格會播報新聞，影響局勢。"
 	else:
@@ -2163,7 +2170,7 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
-	if news_popup != null and news_popup.visible:
+	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
@@ -2176,7 +2183,7 @@ func _maybe_schedule_ai_turn() -> void:
 
 func _on_ai_timer_timeout() -> void:
 	_ai_pending = false
-	if news_popup != null and news_popup.visible:
+	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
@@ -2758,6 +2765,8 @@ func _phase_is_action() -> bool:
 
 func _kind_label(kind: String) -> String:
 	match kind:
+		"fate":
+			return "命運"
 		"news":
 			return "新聞"
 		"facility":
@@ -2805,6 +2814,12 @@ func _event_actor(event: Dictionary) -> String:
 
 func _event_detail(event_type: String, event: Dictionary) -> String:
 	match event_type:
+		"fate_resolved":
+			return str(event.get("summary", "命運效果已結算。"))
+		"fate_preview":
+			return "命運來訪"
+		"fate_skipped":
+			return "本次沒有可套用的命運。"
 		"news_applied":
 			return str(event.get("summary", "新聞效果已結算。"))
 		"news_preview":

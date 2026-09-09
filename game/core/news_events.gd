@@ -180,6 +180,75 @@ static func has_eligible_target(game: Object, event_id: int) -> bool:
 	return false
 
 
+static func apply_landing(game: Object, player_id: int) -> void:
+	var state: Dictionary = game.state
+	var news_value: Variant = state.get("news", null)
+	var news: Dictionary
+	if news_value == null:
+		news = new_state(game._rng)
+		state["news"] = news
+	else:
+		if typeof(news_value) != TYPE_DICTIONARY:
+			game._record_event("news_skipped", {"player_id": player_id, "reason": "invalid_state"})
+			return
+		var news_validation: Dictionary = validate_state(news_value)
+		if not bool(news_validation.get("ok", false)):
+			game._record_event("news_skipped", {"player_id": player_id, "reason": "invalid_state"})
+			return
+		news = news_value
+	var order: Array = news.get("order", [])
+	var cursor_before: int = int(news.get("cursor", 0))
+	var cursor: int = cursor_before
+	var selected_id := -1
+	var selected_cursor_before := cursor_before
+	for attempt in range(COUNT):
+		var candidate_cursor: int = cursor
+		var candidate_id: int = int(order[candidate_cursor])
+		cursor = (candidate_cursor + 1) % COUNT
+		var preview_payload: Dictionary = {
+			"player_id": player_id,
+			"news_id": candidate_id,
+			"name": name_for(candidate_id),
+			"attempt": attempt + 1,
+			"cursor_before": candidate_cursor,
+			"cursor_after": cursor,
+		}
+		game._record_event("news_preview", preview_payload)
+		var skip_reason := ""
+		if not is_supported(candidate_id):
+			skip_reason = "unsupported"
+		elif not has_eligible_target(game, candidate_id):
+			skip_reason = "no_compatible_target"
+		if not skip_reason.is_empty():
+			preview_payload["reason"] = skip_reason
+			game._record_event("news_skipped", preview_payload)
+			continue
+		selected_id = candidate_id
+		selected_cursor_before = candidate_cursor
+		break
+	news["cursor"] = cursor
+	var old_draw_count: int = int(news.get("draw_count", 0))
+	news["draw_count"] = mini(1000000000, old_draw_count + 1)
+	state["news"] = news
+	if selected_id < 0:
+		game._record_event("news_skipped", {"player_id": player_id, "reason": "no_eligible", "cursor_before": cursor_before, "cursor_after": cursor})
+		return
+	var result: Dictionary = resolve(game, player_id, selected_id)
+	if not bool(result.get("ok", false)):
+		game._record_event("news_skipped", {"player_id": player_id, "news_id": selected_id, "name": name_for(selected_id), "reason": str(result.get("reason", "apply_failed")), "cursor_before": selected_cursor_before, "cursor_after": cursor})
+		return
+	var last: Dictionary = {
+		"id": selected_id,
+		"player_id": player_id,
+		"targets": result.get("targets", []).duplicate(true),
+		"changes": result.get("changes", []).duplicate(true),
+		"summary": str(result.get("summary", "新聞效果已套用")),
+	}
+	news["last"] = last
+	state["news"] = news
+	game._record_event("news_applied", {"player_id": player_id, "news_id": selected_id, "name": name_for(selected_id), "targets": last["targets"], "changes": last["changes"], "summary": last["summary"], "draw_count": int(news.get("draw_count", 0)), "cursor_before": selected_cursor_before, "cursor_after": cursor})
+
+
 static func resolve(game: Object, player_id: int, event_id: int) -> Dictionary:
 	## Apply one already-selected supported event through GameState's existing
 	## helpers.  The result intentionally contains only presentation-neutral
@@ -219,6 +288,8 @@ static func resolve(game: Object, player_id: int, event_id: int) -> Dictionary:
 			if damage_target_id < 0:
 				return {"ok": false, "reason": "no_compatible_target"}
 			var damage_group: Array = _damage_target_group(game, damage_target_id, event_id == 15)
+			if event_id == 21 and game.state.board[damage_target_id].get("kind", "") == "property":
+				damage_group = [damage_target_id] if int(game.state.board[damage_target_id].get("building_level", 0)) > 0 else []
 			if damage_group.is_empty():
 				return {"ok": false, "reason": "no_compatible_target"}
 			var damage_changes: Array = _damage_asset_group(game, damage_group)
@@ -259,6 +330,7 @@ static func resolve(game: Object, player_id: int, event_id: int) -> Dictionary:
 			summary = "%s獲得現金%d元" % [_player_name(game, stock_winner), stock_amount]
 		11, 12, 13:
 			var charged_ids: Array = []
+			var tax_plan: Array = []
 			for target_player_id in _alive_player_ids(game):
 				var taxable: int = 0
 				if event_id == 11:
@@ -267,13 +339,17 @@ static func resolve(game: Object, player_id: int, event_id: int) -> Dictionary:
 					taxable = int(floor(float(_asset_value(game, target_player_id)) * 0.05)) * int(game.state.get("price_index", 1))
 				else:
 					taxable = int(floor(_stock_value(game, target_player_id) * 0.05)) * int(game.state.get("price_index", 1))
+				tax_plan.append({"player_id": target_player_id, "amount": taxable})
+			for charge in tax_plan:
+				if game.state.get("phase", "") == "game_over":
+					break
+				var target_player_id: int = int(charge.player_id)
+				var taxable: int = int(charge.amount)
 				if taxable > 0:
 					game._charge_amount(target_player_id, taxable, -1, "news_tax")
 					changes.append({"player_id": target_player_id, "field": "cash", "amount": -taxable})
 					charged_ids.append(target_player_id)
 				targets.append(target_player_id)
-				if game.state.get("phase", "") == "game_over":
-					break
 			var tax_name := "所得稅" if event_id == 11 else "房產稅" if event_id == 12 else "股票稅"
 			summary = "%s完成%s結算" % [_player_list(game, charged_ids), tax_name]
 		16, 17:
@@ -495,6 +571,7 @@ static func _damage_asset_group(game: Object, group: Array) -> Array:
 			var updates: Dictionary = {"building_level": next_level}
 			if next_level == 0:
 				updates["facility_type"] = 0
+				updates["facility_state"] = 0
 				updates["research_tool"] = 0
 				updates["research_turns"] = 0
 			game._update_facility_records(source_id, updates)
@@ -512,16 +589,20 @@ static func _damage_asset_group(game: Object, group: Array) -> Array:
 	return changes
 
 
+static func adjusted_land_price(price: int, rising: bool) -> int:
+	# Source handlers truncate the product, then write the low unsigned 16 bits.
+	return int(floor(float(price) * (1.3 if rising else 0.7))) & 0xffff
+
+
 static func _change_asset_price(game: Object, target_id: int, rising: bool) -> Array:
 	var tile: Dictionary = game.state.board[target_id]
-	var factor: float = 1.3 if rising else 0.7
 	var changes: Array = []
 	if tile.get("kind", "") == "facility":
 		var source_id := int(tile.get("source_object_id", -1))
 		for alias_id in game._facility_indices(source_id):
 			var alias: Dictionary = game.state.board[int(alias_id)]
 			var old_price := int(alias.get("land_price", alias.get("cost", 0)))
-			var next_price := int(floor(float(old_price) * factor))
+			var next_price := adjusted_land_price(old_price, rising)
 			alias["land_price"] = next_price
 			alias["cost"] = next_price
 			alias["news_price_override"] = true
@@ -536,7 +617,7 @@ static func _change_asset_price(game: Object, target_id: int, rising: bool) -> A
 			if str(candidate.get("name", "")) != target_name:
 				continue
 			var old_price := int(candidate.get("land_price", candidate.get("cost", 0)))
-			var next_price := int(floor(float(old_price) * factor))
+			var next_price := adjusted_land_price(old_price, rising)
 			candidate["land_price"] = next_price
 			candidate["cost"] = next_price
 			changes.append({"tile_id": candidate_id, "field": "land_price", "from": old_price, "to": next_price})
@@ -621,8 +702,6 @@ static func _news_credit(game: Object, player_id: int, amount: int) -> void:
 	var player: Dictionary = game.state.players[player_id]
 	if int(player.get("cash", 0)) > 1000000000000 - amount:
 		return
-	if game._bank_can_pay(amount):
-		game._bank_subtract_cash(amount)
 	player["cash"] = int(player.get("cash", 0)) + amount
 
 
@@ -654,7 +733,8 @@ static func _apply_company(game: Object, company: Dictionary, event_id: int) -> 
 		return {"ok": false, "reason": "company_stock_missing"}
 	var row: Dictionary = game.state.market.rows[symbol]
 	row["event"] = event_code
-	OriginalStockMarket.refresh_event_price(game.state.market, symbol, rate)
+	if event_code != 0:
+		OriginalStockMarket.refresh_event_price(game.state.market, symbol, rate)
 	var company_name := str(company.get("display_name", company.get("name", "企業")))
 	var change := {"company_id": int(company.get("id", -1)), "monthly_profit": int(company.get("monthly_profit", 0)), "cumulative_profit": int(company.get("cumulative_profit", 0)), "stock": symbol, "event": event_code, "price": float(row.get("price", 0.0))}
 	var summary := "企業「%s」收益變更為%d元，連動股票%s" % [company_name, int(company.get("monthly_profit", 0)), symbol]

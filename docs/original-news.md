@@ -27,6 +27,8 @@ optional `news` 保存 `order`、`cursor`、`draw_count` 與已完成的 `last`�
 
 土地／設施沿既有 canonical mutation 與 alias 規則；稅款先計算所有適用金額，再依既有金流逐人處理，對局結束即停止。目前行動者若在新聞中破產，完成新聞結算後最多交接一次。公司新聞使用 `stock_index` 尋找連動股票，`monthly_profit`／`cumulative_profit` 與 `stock_value` 分開處理；設置 event 後即時刷新連動檔的現價、當日 history 與 index。
 
+地價漲跌先截斷乘積，再保留來源無號 16 位元欄位；住宅同名群與設施別名使用同一規則。ID21 只損害選中的來源物件，ID18 才擴及同名住宅；設施降到零級時一併清除臨時狀態。ID8–10 的現金獎勵不扣銀行準備金。ID35 的股票事件碼若迴繞成0，仍更新公司獲利，但保留原股價、history 與 index。
+
 ## 驗證入口
 
 - `tests/news_flow.gd`：抽選與效果契約。

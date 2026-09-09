@@ -4204,73 +4204,9 @@ func _apply_god_property_effect(player_id: int, tile: Dictionary, final_landing:
 func _resolve_news_landing(player_id: int) -> void:
 	if not _valid_player(player_id, true):
 		return
-	var news_value: Variant = state.get("news", null)
-	var news: Dictionary
-	if news_value == null:
-		news = NewsEvents.new_state(_rng)
-		state["news"] = news
-	else:
-		if typeof(news_value) != TYPE_DICTIONARY:
-			_record_event("news_skipped", {"player_id": player_id, "reason": "invalid_state"})
-			return
-		var news_validation: Dictionary = NewsEvents.validate_state(news_value)
-		if not bool(news_validation.get("ok", false)):
-			_record_event("news_skipped", {"player_id": player_id, "reason": "invalid_state"})
-			return
-		news = news_value
-	var order: Array = news.get("order", [])
-	var cursor_before: int = int(news.get("cursor", 0))
-	var cursor: int = cursor_before
-	var selected_id := -1
-	var selected_cursor_before := cursor_before
-	for attempt in range(NewsEvents.COUNT):
-		var candidate_cursor: int = cursor
-		var candidate_id: int = int(order[candidate_cursor])
-		cursor = (candidate_cursor + 1) % NewsEvents.COUNT
-		var preview_payload: Dictionary = {
-			"player_id": player_id,
-			"news_id": candidate_id,
-			"name": NewsEvents.name_for(candidate_id),
-			"attempt": attempt + 1,
-			"cursor_before": candidate_cursor,
-			"cursor_after": cursor,
-		}
-		_record_event("news_preview", preview_payload)
-		var skip_reason := ""
-		if not NewsEvents.is_supported(candidate_id):
-			skip_reason = "unsupported"
-		elif not NewsEvents.has_eligible_target(self, candidate_id):
-			skip_reason = "no_compatible_target"
-		if not skip_reason.is_empty():
-			preview_payload["reason"] = skip_reason
-			_record_event("news_skipped", preview_payload)
-			continue
-		selected_id = candidate_id
-		selected_cursor_before = candidate_cursor
-		break
-	news["cursor"] = cursor
-	var old_draw_count: int = int(news.get("draw_count", 0))
-	news["draw_count"] = mini(1000000000, old_draw_count + 1)
-	state["news"] = news
-	if selected_id < 0:
-		_record_event("news_skipped", {"player_id": player_id, "reason": "no_eligible", "cursor_before": cursor_before, "cursor_after": cursor})
-		return
 	_resolving_news = true
-	var result: Dictionary = NewsEvents.resolve(self, player_id, selected_id)
+	NewsEvents.apply_landing(self, player_id)
 	_resolving_news = false
-	if not bool(result.get("ok", false)):
-		_record_event("news_skipped", {"player_id": player_id, "news_id": selected_id, "name": NewsEvents.name_for(selected_id), "reason": str(result.get("reason", "apply_failed")), "cursor_before": selected_cursor_before, "cursor_after": cursor})
-		return
-	var last: Dictionary = {
-		"id": selected_id,
-		"player_id": player_id,
-		"targets": result.get("targets", []).duplicate(true),
-		"changes": result.get("changes", []).duplicate(true),
-		"summary": str(result.get("summary", "新聞效果已套用")),
-	}
-	news["last"] = last
-	state["news"] = news
-	_record_event("news_applied", {"player_id": player_id, "news_id": selected_id, "name": NewsEvents.name_for(selected_id), "targets": last["targets"], "changes": last["changes"], "summary": last["summary"], "draw_count": int(news.get("draw_count", 0)), "cursor_before": selected_cursor_before, "cursor_after": cursor})
 	var player: Dictionary = _player(player_id)
 	if not bool(player.get("alive", false)) and int(state.get("current_player", -1)) == player_id and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(player_id)
@@ -7068,8 +7004,8 @@ static func _validate_facility_price_sources(source: Variant, board: Variant) ->
 			var override_valid: bool = override_marked and _valid_int(override_source, 0, 1000000)
 			if override_valid:
 				var source_price: int = int(override_source)
-				var raised_price: int = int(floor(float(source_price) * 1.3))
-				var lowered_price: int = int(floor(float(source_price) * 0.7))
+				var raised_price: int = NewsEvents.adjusted_land_price(source_price, true)
+				var lowered_price: int = NewsEvents.adjusted_land_price(source_price, false)
 				override_valid = _valid_int(land_price_value, 0, 1000000) and int(land_price_value) in [raised_price, lowered_price]
 			if not override_valid:
 				errors.append("facility source price mismatch: land_price")

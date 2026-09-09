@@ -33,6 +33,7 @@ const OriginalGods = preload("res://game/content/original_gods.gd")
 const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
 const NewsEvents = preload("res://game/core/news_events.gd")
 const FateEvents = preload("res://game/core/fate_events.gd")
+const SleepRules = preload("res://game/core/sleep_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -158,6 +159,7 @@ const EVENT_CARDS = [
 var _settling_company_dividends := false
 var _resolving_news := false
 var _resolving_fate := false
+var _running_sleep_turn := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -731,6 +733,26 @@ func _status_active(player: Dictionary, kind: String = "") -> bool:
 	return int(player.get("hospital_days", 0)) > 0 or (_is_statuses() and int(player.get("prison_days", 0)) > 0)
 
 
+func _sleep_winter_active(player: Dictionary) -> bool:
+	return not player.is_empty() and SleepRules.is_active(player.get("winter_sleep_days", 0))
+
+
+func _sleep_dream_active(player: Dictionary) -> bool:
+	return not player.is_empty() and SleepRules.is_active(player.get("dream_days", 0))
+
+
+func _sleep_active(player: Dictionary) -> bool:
+	return _sleep_winter_active(player) or _sleep_dream_active(player)
+
+
+func _sleep_kind(player: Dictionary) -> String:
+	if _sleep_winter_active(player):
+		return "winter"
+	if _sleep_dream_active(player):
+		return "dream"
+	return ""
+
+
 func _loan_block_active(player: Dictionary) -> bool:
 	# The source counter uses 1..127 as the active refusal window.  128 is a
 	# retained release marker and therefore intentionally permits a new loan.
@@ -760,6 +782,11 @@ func _pending_trap() -> Dictionary:
 	return value if typeof(value) == TYPE_DICTIONARY else {}
 
 
+func _pending_trap_card() -> String:
+	var value: Variant = state.get("pending_trap_card", "")
+	return str(value) if typeof(value) == TYPE_STRING and str(value) == SleepRules.DREAM_CARD else ""
+
+
 func _trap_pending() -> bool:
 	return not _pending_trap().is_empty()
 
@@ -782,6 +809,44 @@ func trap_target_players(caster_id: int) -> Array:
 		targets.append(int(target_id_value))
 	targets.sort()
 	return targets
+
+
+func dream_target_players(caster_id: int) -> Array:
+	return SleepRules.dream_target_players(self, caster_id)
+
+
+func _resolve_sleep_direct(target_id: int, days: int, trigger_revenge: bool = false, caster_id: int = -1) -> Dictionary:
+	return SleepRules._resolve_sleep_direct(self, target_id, days, trigger_revenge, caster_id)
+
+
+func run_sleep_turn() -> Dictionary:
+	if _running_sleep_turn:
+		return _error("睡眠回合已在執行")
+	_running_sleep_turn = true
+	var result: Dictionary = SleepRules.run_turn(self)
+	_running_sleep_turn = false
+	return result
+
+
+func _release_status_marker(player_id: int, status_kind: String) -> void:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return
+	var status_key: String = _status_key(status_kind)
+	if status_key.is_empty():
+		return
+	player[status_key] = 0
+	state["last_roll"] = []
+	state["last_total"] = 0
+	state["extra_roll"] = false
+	state["doubles_count"] = 0
+	state["property_action_used"] = false
+	state["bank_access"] = false
+	state["bank_landing"] = false
+	if _is_facilities():
+		state["last_roll_total"] = 0
+	_sync_attached_gods()
+	_record_event("status_released", {"player_id": player_id, "status_kind": status_kind, "node": int(player.get("position", -1))})
 
 
 func _ai_trap_target(caster_id: int) -> int:
@@ -856,9 +921,10 @@ func _trap_valid_pending_context(require_human_target: bool = true) -> bool:
 	var target_value: Variant = pending.get("target_id", null)
 	if typeof(caster_value) != TYPE_INT or typeof(target_value) != TYPE_INT:
 		return false
+	var dream_pending: bool = not _pending_trap_card().is_empty()
 	var caster: Dictionary = _player(int(caster_value))
 	var target: Dictionary = _player(int(target_value))
-	if caster.is_empty() or target.is_empty() or int(caster_value) == int(target_value):
+	if caster.is_empty() or target.is_empty() or (not dream_pending and int(caster_value) == int(target_value)):
 		return false
 	if not bool(caster.get("alive", false)) or not bool(target.get("alive", false)):
 		return false
@@ -905,18 +971,20 @@ func _respond_trap(params: Dictionary) -> Dictionary:
 	var pending: Dictionary = _pending_trap()
 	var caster_id: int = int(pending["caster_id"])
 	var original_target_id: int = int(pending["target_id"])
+	var dream_pending: bool = not _pending_trap_card().is_empty()
 	var has_cancel: bool = params.has("cancel")
 	if has_cancel and typeof(params.get("cancel")) != TYPE_BOOL:
 		return _error("陷害卡回應格式無效")
 	var cancel: bool = has_cancel and bool(params.get("cancel", false))
 	if has_cancel and cancel:
 		state["pending_trap"] = {}
-		var direct_result: Dictionary = _resolve_trap_direct(original_target_id, 5, true, caster_id)
+		state.erase("pending_trap_card")
+		var direct_result: Dictionary = _resolve_sleep_direct(original_target_id, 4 if dream_pending and original_target_id == caster_id else 5, dream_pending, caster_id) if dream_pending else _resolve_trap_direct(original_target_id, 5, true, caster_id)
 		if not bool(direct_result.get("ok", false)):
 			return direct_result
-		_record_event("trap_resolved", {"caster_id": caster_id, "target_id": original_target_id, "redirected": false})
+		_record_event("trap_resolved", {"caster_id": caster_id, "target_id": original_target_id, "redirected": false, "card_id": SleepRules.DREAM_CARD if dream_pending else "陷害"})
 		_set_action_options(int(state.get("current_player", -1)))
-		return _result(true, "已接受陷害處罰", {"target_id": original_target_id, "redirected": false})
+		return _result(true, "已接受夢遊狀態" if dream_pending else "已接受陷害處罰", {"target_id": original_target_id, "redirected": false})
 	if has_cancel and not cancel and not params.has("target_id"):
 		return _error("陷害卡回應缺少目標")
 	var response_target_value: Variant = params.get("target_id", null)
@@ -933,13 +1001,14 @@ func _respond_trap(params: Dictionary) -> Dictionary:
 	if not _trap_consume_card(original_target_id, "嫁禍"):
 		return _error("嫁禍卡無法使用")
 	state["pending_trap"] = {}
+	state.erase("pending_trap_card")
 	var days: int = 4 if response_target_id == caster_id else 5
-	var direct_result: Dictionary = _resolve_trap_direct(response_target_id, days)
+	var direct_result: Dictionary = _resolve_sleep_direct(response_target_id, days) if dream_pending else _resolve_trap_direct(response_target_id, days)
 	if not bool(direct_result.get("ok", false)):
 		return direct_result
-	_record_event("trap_redirected", {"caster_id": caster_id, "from_target_id": original_target_id, "target_id": response_target_id, "days": days})
+	_record_event("trap_redirected", {"caster_id": caster_id, "from_target_id": original_target_id, "target_id": response_target_id, "days": days, "card_id": SleepRules.DREAM_CARD if dream_pending else "陷害"})
 	_set_action_options(int(state.get("current_player", -1)))
-	return _result(true, "已將陷害處罰轉移", {"target_id": response_target_id, "redirected": true, "days": days})
+	return _result(true, "已將夢遊狀態轉移" if dream_pending else "已將陷害處罰轉移", {"target_id": response_target_id, "redirected": true, "days": days})
 
 
 func _use_trap_card(player_id: int, target_id: int, cancel: bool = false) -> Dictionary:
@@ -2077,6 +2146,9 @@ func _set_action_options(player_id: int) -> void:
 	if _trap_pending():
 		state["action_options"] = ["respond_trap"]
 		return
+	if _sleep_active(player):
+		state["action_options"] = ["end_turn"] if phase == "await_action" else []
+		return
 	# v8 status turns expose only their legal turn control.  Keeping this gate
 	# here also makes snapshots consumed by the UI agree with choose_action.
 	if _is_statuses() and _status_active(player):
@@ -3046,6 +3118,8 @@ func _stationary_turn() -> bool:
 func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
+		if SleepRules.is_sleep_card(item_id):
+			return _is_inventory() and _is_statuses()
 		if BUILDING_CARD_IDS.has(item_id):
 			return _is_building_cards()
 		if GOD_CARD_IDS.has(item_id):
@@ -3287,7 +3361,7 @@ func _engineering_landing_target(player_id: int, allow_unowned: bool = false) ->
 
 func _engineering_ai_action(player_id: int) -> bool:
 	var player: Dictionary = _player(player_id)
-	if player.is_empty():
+	if player.is_empty() or _sleep_active(player):
 		return false
 	var target: Dictionary = _engineering_landing_target(player_id)
 	if target.is_empty():
@@ -3299,7 +3373,7 @@ func _engineering_ai_action(player_id: int) -> bool:
 
 
 func _engineering_demolition(player_id: int) -> void:
-	if not _is_inventory() or _stationary_turn() or not EngineeringVehicle.is_active(_player(player_id)):
+	if not _is_inventory() or _sleep_active(_player(player_id)) or _stationary_turn() or not EngineeringVehicle.is_active(_player(player_id)):
 		return
 	var target: Dictionary = _engineering_landing_target(player_id, true)
 	if target.is_empty():
@@ -3717,6 +3791,8 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 	if _trap_pending():
 		return _error("請先回應陷害卡")
+	if _sleep_active(_current_player()):
+		return _error("睡眠期間無法切換交通工具")
 	if _is_statuses() and _status_active(_current_player()):
 		return _error("拘留期間無法切換交通工具")
 	if not _require_phase("await_roll"):
@@ -3750,6 +3826,8 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 
 
 func roll(dice_count: int = -1) -> Dictionary:
+	if _sleep_active(_current_player()) and not _running_sleep_turn:
+		return _error("睡眠期間由自動回合移動")
 	if _trap_pending():
 		return _error("請先回應陷害卡")
 	if not _require_phase("await_roll"):
@@ -3765,18 +3843,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 			var status_key := _status_key(status_kind)
 			var remaining_before: int = int(player.get(status_key, 0))
 			if remaining_before == 128:
-				player[status_key] = 0
-				state["last_roll"] = []
-				state["last_total"] = 0
-				state["extra_roll"] = false
-				state["doubles_count"] = 0
-				state["property_action_used"] = false
-				state["bank_access"] = false
-				state["bank_landing"] = false
-				if _is_facilities():
-					state["last_roll_total"] = 0
-				_sync_attached_gods()
-				_record_event("status_released", {"player_id": player_id, "status_kind": status_kind, "node": int(player.get("position", -1))})
+				_release_status_marker(player_id, status_kind)
 			else:
 				var remaining_after: int = remaining_before - 1 if remaining_before > 1 else 128
 				player[status_key] = remaining_after
@@ -3940,7 +4007,7 @@ func _graph_begin_movement(player_id: int, steps: int) -> bool:
 
 
 func _graph_bank_pass_before_god(player_id: int, node_id: int) -> bool:
-	if not _is_gods() or _is_sunday():
+	if not _is_gods() or _is_sunday() or _sleep_dream_active(_player(player_id)):
 		return false
 	var tile: Dictionary = _tile_at(node_id)
 	if tile.get("kind", "") != "bank":
@@ -4064,6 +4131,8 @@ func _graph_continue_movement(player_id: int) -> bool:
 
 
 func choose_route(route: int) -> Dictionary:
+	if _sleep_active(_current_player()) and not _running_sleep_turn:
+		return _error("睡眠期間由自動回合移動")
 	if not _require_phase("await_route"):
 		return _error("目前沒有待選路線")
 	var player_id: int = int(state.get("current_player", -1))
@@ -4235,6 +4304,8 @@ func _resolve_fate_landing(player_id: int) -> void:
 func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, bank_passed_before_god: bool = false) -> void:
 	if tile.is_empty():
 		return
+	if _sleep_dream_active(_player(player_id)) and int(tile.get("event_code", 0)) != 0:
+		return
 	var tile_index: int = int(tile.get("index", -1))
 	if _is_statuses() and int(tile.get("type_and_idx", -1)) in [8001, 8002]:
 		var status_kind := "hospital" if int(tile.get("type_and_idx", -1)) == 8001 else "prison"
@@ -4353,6 +4424,8 @@ func _god_property_fee_waiver_reason(owner_id: int) -> String:
 	var owner: Dictionary = _player(owner_id)
 	if owner.is_empty() or not bool(owner.get("alive", false)):
 		return ""
+	if _sleep_active(owner):
+		return _sleep_kind(owner)
 	if _status_active(owner):
 		return "hospital" if int(owner.get("hospital_days", 0)) > 0 else "prison"
 	if _player_god_id(owner_id) == 15:
@@ -4685,6 +4758,9 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 				_detach_god(owner_god_id, "bankrupt", true)
 	if EngineeringVehicle.is_active(debtor):
 		debtor.erase("engineering_vehicle")
+		debtor.erase("dream_vehicle_backup")
+		debtor.erase("dream_days")
+		debtor.erase("winter_sleep_days")
 		debtor["vehicle"] = "walking"
 		debtor["dice_count"] = 1
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
@@ -4812,6 +4888,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return _respond_trap(params)
 	if _trap_pending():
 		return _error("請先回應陷害卡")
+	if _sleep_active(_current_player()) and normalized != "end_turn":
+		return _error("睡眠期間無法執行主動操作")
 	if _is_statuses() and _status_active(_current_player()) and normalized != "end_turn":
 		return _error("拘留期間無法執行主動操作")
 	if _is_companies() and int(state.get("company_service_pending",0))>0 and normalized != "company_upgrade":
@@ -4879,7 +4957,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			var selected_item_kind: Variant = null
 			var selected_item_id: Variant = null
 			var selected_cancel: Variant = false
-			if card_id == "搶奪":
+			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id):
 				# Keep the raw values for the theft boundary so malformed target,
 				# item, and cancel fields are rejected instead of being coerced.
 				selected_target = params.get("target_id", null)
@@ -4890,7 +4968,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 				selected_target = int(params.get("target_id", player_id))
 				selected_cancel = bool(params.get("cancel", false))
 			var card_result: Dictionary = _use_card(player_id, card_id, selected_target, str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), selected_cancel, params.get("facility_type", null), params.get("visible_tile_ids", null), selected_item_kind, selected_item_id)
-			if (card_id == "搶奪" or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5649,6 +5727,8 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
 			return _error("遙控骰子已經排程")
+	if SleepRules.is_sleep_card(card_id):
+		return SleepRules.use_card(self, player_id, card_id, target_id, cancel)
 	if card_id == "搶奪":
 		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)
 	# All non-theft callers provide the legacy integer target and boolean
@@ -5885,6 +5965,8 @@ func end_turn() -> Dictionary:
 			if bool(player.get("is_ai", false)):
 				_engineering_ai_action(player_id)
 			_engineering_demolition(player_id)
+	if _sleep_active(player) and not _status_active(player):
+		SleepRules._sleep_tick(self, player_id)
 	state["bank_access"] = false
 	state["bank_landing"] = false
 	state["doubles_count"] = 0
@@ -6288,6 +6370,8 @@ func run_ai_turn() -> Dictionary:
 		if bool(pending_target.get("is_human", false)) and not bool(pending_target.get("is_ai", false)):
 			return _result(true, "等待人類玩家回應陷害卡", {"player_id": player_id, "awaiting_response": true, "completed": false})
 		return _error("陷害卡回應狀態無效")
+	if _sleep_active(player):
+		return run_sleep_turn()
 	var safety: int = 0
 	var route_safety: int = 0
 	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
@@ -8415,6 +8499,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("player %d bomb_steps invalid" % index)
 				elif hazards_save and not bool(player.get("alive", false)) and int(player.get("bomb_steps", 0)) > 0:
 					errors.append("dead player cannot carry bomb")
+			var sleep_validation: Dictionary = SleepRules.validate_player(player)
+			if not bool(sleep_validation.get("ok", false)):
+				errors.append("player %d %s" % [index, str(sleep_validation.get("error", "sleep state invalid"))])
 			if player.has("loan_block_days") and not _valid_int(player.get("loan_block_days", null), 0, MAX_STATUS_ADMISSION_DAYS):
 				errors.append("player %d loan_block_days invalid" % index)
 			if companies_save and not _valid_int(player.get("insurance_status"), 0, 128):
@@ -8569,6 +8656,9 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					if status_previous_valid and int(status_player.get("previous_position")) != -1:
 						errors.append("player %d prison previous position mismatch" % status_player_index)
 
+	if data.has("pending_trap_card"):
+		if data.get("pending_trap_card") != "夢遊" or not status_save or typeof(data.get("pending_trap", null)) != TYPE_DICTIONARY or data.get("pending_trap", {}).is_empty():
+			errors.append("invalid pending trap card discriminator")
 	if status_save:
 		var pending_trap_value: Variant = data.get("pending_trap", null)
 		if typeof(pending_trap_value) != TYPE_DICTIONARY:
@@ -8583,7 +8673,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				var pending_ids_valid: bool = _valid_int(pending_caster, 0, max(0, player_count - 1)) and _valid_int(pending_target, 0, max(0, player_count - 1))
 				if not pending_ids_valid:
 					errors.append("pending trap player id invalid")
-				elif int(pending_caster) == int(pending_target):
+				elif int(pending_caster) == int(pending_target) and data.get("pending_trap_card", "") != "夢遊":
 					errors.append("pending trap players must differ")
 				else:
 					var pending_caster_player: Variant = players[int(pending_caster)] if typeof(players) == TYPE_ARRAY and int(pending_caster) < players.size() else null

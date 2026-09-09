@@ -116,6 +116,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_g
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_lifecycle.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_release.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_ui.gd
 
 # God cards reuse the current save schema.
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_flow.gd

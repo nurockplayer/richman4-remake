@@ -15,6 +15,7 @@ const InventoryRules = preload("res://game/core/inventory_rules.gd")
 const NewsPanel = preload("res://game/ui/news_panel.gd")
 const MovementPresentation = preload("res://game/ui/movement_presentation.gd")
 const FatePanel = preload("res://game/ui/fate_panel.gd")
+const TheftPicker = preload("res://game/ui/theft_picker.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -2291,6 +2292,13 @@ func _update_cards_popup() -> void:
 					var card_symbol := str(card_stock_symbols[stock_index])
 					symbol_option.add_item("%s · %s" % [card_symbol, _stock_name_for_ui(card_symbol)], stock_index)
 				row.add_child(symbol_option)
+			var theft_picker: Node = null
+			if card_id == "搶奪":
+				theft_picker = TheftPicker.new()
+				row.add_child(theft_picker)
+				var choices: Array = game_state.call("theft_choices") if game_state != null and game_state.has_method("theft_choices") else []
+				var visible: Array = board_view.visible_node_indices() if board_view != null else []
+				theft_picker.configure(state, choices, visible)
 			var target_option: OptionButton = null
 			if ["停留", "烏龜", "轉向", "均貧", "陷害"].has(card_id):
 				target_option = OptionButton.new()
@@ -2358,6 +2366,11 @@ func _update_cards_popup() -> void:
 				row.add_child(preview)
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
+				if theft_picker != null:
+					var selected: Dictionary = theft_picker.selection()
+					if selected.is_empty():
+						return
+					params.merge(selected)
 				if card_id == "請神符":
 					params["visible_tile_ids"] = summon_visible_nodes
 				if angel_option != null and angel_option.visible:
@@ -2380,6 +2393,11 @@ func _update_cards_popup() -> void:
 			var implemented := _item_implemented("card", card_id)
 			use.disabled = not implemented or not _has_action_option(options, "use_card")
 			use.name = "UseCard_" + card_id
+			if theft_picker != null:
+				use.disabled = use.disabled or theft_picker.selection().is_empty()
+				theft_picker.selection_changed.connect(func(available: bool):
+					use.disabled = not implemented or not _has_action_option(options, "use_card") or not available
+				)
 			if (tile_option != null and tile_option.disabled) or (target_option != null and target_option.disabled):
 				use.disabled = true
 			if card_id == "請神符":

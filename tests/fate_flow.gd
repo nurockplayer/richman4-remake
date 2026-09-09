@@ -88,6 +88,26 @@ func _new_game(first_id: int = 20, seed_value: int = 5600, player_count: int = 4
 	return game
 
 
+func _new_lazy_game(seed_value: int = 5615, player_count: int = 4, map_number: int = 1) -> Object:
+	var game := _new_game(20, seed_value, player_count, map_number)
+	if game != null:
+		# The production resolver owns first-draw initialization. This fixture
+		# deliberately omits the optional fate state until a landing occurs.
+		game.state.erase("fate")
+	return game
+
+
+func _is_fate_permutation(order: Variant) -> bool:
+	if typeof(order) != TYPE_ARRAY or order.size() != FATE_COUNT:
+		return false
+	var seen: Dictionary = {}
+	for candidate_id in order:
+		if typeof(candidate_id) != TYPE_INT or int(candidate_id) < 0 or int(candidate_id) >= FATE_COUNT or seen.has(int(candidate_id)):
+			return false
+		seen[int(candidate_id)] = true
+	return seen.size() == FATE_COUNT
+
+
 func _fate_tile(game: Object) -> Dictionary:
 	var board: Variant = game.state.get("board", null)
 	if typeof(board) != TYPE_ARRAY or board.is_empty() or typeof(board.back()) != TYPE_DICTIONARY:
@@ -105,7 +125,27 @@ func _land_fate(game: Object, label: String, final_landing: bool = true) -> void
 	var player: Dictionary = game.state.players[0]
 	player["position"] = int(tile.get("index", game.state.board.size() - 1))
 	player["previous_position"] = maxi(0, int(player["position"]) - 1)
+	# The helper is also the movement boundary used by the eventual resolver.
+	# Keep an attached god's node in lockstep with the synthetic landing before
+	# checking the save, as the production movement path does.
+	if game.has_method("_sync_attached_gods"):
+		game._sync_attached_gods()
+	_assert_fixture_roundtrip(game, label + " before effect")
 	game._graph_visit_tile(0, tile, final_landing)
+	_assert_fixture_roundtrip(game, label + " after effect")
+
+
+func _assert_fixture_roundtrip(game: Object, label: String) -> void:
+	var data: Dictionary = game.to_dict()
+	var validation: Dictionary = Game.validate_save(data)
+	expect(bool(validation.get("ok", false)), label + " fixture validates: " + str(validation.get("errors", [])))
+	var serialized: String = game.to_json()
+	var parsed: Variant = JSON.parse_string(serialized)
+	var restored: Object = Game.from_dict(parsed) if typeof(parsed) == TYPE_DICTIONARY else null
+	expect(restored != null, label + " fixture reloads from JSON")
+	if restored != null:
+		var reload_validation: Dictionary = Game.validate_save(restored.to_dict())
+		expect(bool(reload_validation.get("ok", false)), label + " reloaded fixture validates: " + str(reload_validation.get("errors", [])))
 
 
 func _last(game: Object) -> Dictionary:
@@ -210,11 +250,19 @@ func _test_pass_through_and_deck() -> void:
 		expect(int(resolved.back().get("draw_count", -1)) == 1, "resolved fate carries draw count for UI correlation")
 
 	var wrapped := _new_game(20)
-	_set_fate(wrapped, _order(20), 36)
+	var wrap_order: Array = _order(20)
+	# Put a skipped candidate at the final slot so the scan crosses the deck
+	# boundary and resolves the supported candidate at index zero.
+	var wrap_unsupported_index: int = wrap_order.find(32)
+	var wrap_tail: Variant = wrap_order[36]
+	wrap_order[36] = 32
+	wrap_order[wrap_unsupported_index] = wrap_tail
+	_set_fate(wrapped, wrap_order, 36)
 	_land_fate(wrapped, "fate deck wrap")
 	_expect_last(wrapped, 20, 20, 20)
 	expect(int(wrapped.state.fate.cursor) == 1, "fate cursor wraps from 36 to zero")
 	expect(int(wrapped.state.fate.draw_count) == 1, "wrapped fate still counts one draw")
+	expect(_events_of_type(wrapped, "fate_skipped").size() == 1, "wrapped fate records the skipped tail candidate")
 
 	var skip_order: Array = [2, 3, 5, 6, 7, 8, 9, 32, 20]
 	for candidate_id in range(FATE_COUNT):
@@ -229,6 +277,24 @@ func _test_pass_through_and_deck() -> void:
 	var skipped_events := _events_of_type(skipped, "fate_skipped")
 	expect(skipped_events.size() == UNSUPPORTED_IDS.size(), "unsupported candidates each emit a skip event")
 
+	var lazy := _new_lazy_game(5615)
+	expect(not lazy.state.has("fate"), "lazy fate fixture starts without a pre-seeded deck")
+	_land_fate(lazy, "lazy fate first draw")
+	var lazy_fate: Variant = lazy.state.get("fate", null)
+	expect(typeof(lazy_fate) == TYPE_DICTIONARY, "first fate landing creates optional fate state")
+	if typeof(lazy_fate) == TYPE_DICTIONARY:
+		expect(_is_fate_permutation(lazy_fate.get("order", null)), "lazy fate creates a 37-candidate permutation")
+		expect(int(lazy_fate.get("draw_count", 0)) == 1, "lazy fate first landing consumes one draw")
+		var lazy_order: Array = lazy_fate.get("order", []).duplicate(true)
+		var lazy_cursor := int(lazy_fate.get("cursor", 0))
+		var lazy_restored: Object = Game.from_dict(JSON.parse_string(lazy.to_json()))
+		expect(lazy_restored != null, "lazy fate save reloads with its generated deck")
+		if lazy_restored != null:
+			expect(lazy_restored.state.fate.order == lazy_order, "lazy fate reload preserves deck order")
+			_land_fate(lazy_restored, "lazy fate continuation")
+			expect(lazy_restored.state.fate.order == lazy_order, "lazy fate continuation does not reshuffle")
+			expect(int(lazy_restored.state.fate.cursor) != lazy_cursor or int(lazy_restored.state.fate.draw_count) > 1, "lazy fate continuation advances the existing deck")
+
 
 func _test_unsupported_candidates() -> void:
 	for candidate_id in UNSUPPORTED_IDS:
@@ -238,10 +304,11 @@ func _test_unsupported_candidates() -> void:
 		var player: Dictionary = game.state.players[0]
 		player["loan"] = 777
 		player["loan_due_day"] = 18
+		game.state.bank["loans"] = 777
 		_give_card(game, 0, "購地")
 		_land_fate(game, "unsupported candidate %d" % candidate_id)
 		var last := _last(game)
-		expect(int(last.get("candidate_id", -1)) != candidate_id, "unsupported candidate %d never resolves as fate" % candidate_id)
+		expect(int(last.get("candidate_id", -1)) == 20, "unsupported candidate %d skips to the supported candidate" % candidate_id)
 		expect(int(game.state.fate.draw_count) == 1, "unsupported candidate %d does not consume a draw" % candidate_id)
 		expect(int(player.get("loan", -1)) == 777 and player.cards == ["購地"], "unsupported candidate %d leaves unrelated state unchanged" % candidate_id)
 		# The seed was intentionally changed after the baseline snapshot; compare
@@ -266,6 +333,25 @@ func _own_property(game: Object, tile_id: int, owner_id: int, level: int) -> voi
 	game._recalculate_property_values()
 
 
+func _own_facility(game: Object, source_object_id: int, owner_id: int, level: int) -> void:
+	var canonical_node := -1
+	for tile_value in game.state.board:
+		if typeof(tile_value) == TYPE_DICTIONARY and tile_value.get("kind", "") == "facility" and int(tile_value.get("source_object_id", -1)) == source_object_id:
+			canonical_node = int(tile_value.get("facility_node_index", tile_value.get("index", -1)))
+			break
+	for tile_value in game.state.board:
+		if typeof(tile_value) != TYPE_DICTIONARY or tile_value.get("kind", "") != "facility" or int(tile_value.get("source_object_id", -1)) != source_object_id:
+			continue
+		tile_value["owner"] = owner_id
+		tile_value["building_level"] = level
+	var player: Dictionary = game.state.players[owner_id]
+	var properties: Array = player.get("properties", [])
+	if canonical_node >= 0 and not properties.has(canonical_node):
+		properties.append(canonical_node)
+	player["properties"] = properties
+	game._recalculate_property_values()
+
+
 func _give_card(game: Object, player_id: int, card_id: String) -> bool:
 	var player: Dictionary = game.state.players[player_id]
 	var result: Dictionary = OriginalInventory.grant_card(game.state.inventory_supply, player.cards, card_id)
@@ -278,11 +364,8 @@ func _test_housing_effects() -> void:
 	_own_property(built, 2, 0, 2)
 	# A built facility proves ID 0 scans housing only. The facility's source and
 	# level remain untouched even though it is also owned by the current player.
+	_own_facility(built, 1, 0, 1)
 	var facility: Dictionary = built.state.board[1]
-	facility["owner"] = 0
-	facility["building_level"] = 1
-	built.state.players[0].properties.append(1)
-	built._recalculate_property_values()
 	var other_before: Dictionary = built.state.board[3].duplicate(true)
 	var facility_before: Dictionary = facility.duplicate(true)
 	var cash_before := int(built.state.players[0].cash)
@@ -347,8 +430,18 @@ func _test_deposit_transfer() -> void:
 	expect(int(game.state.bank.cash) == bank_cash_before, "ID 4 does not move bank cash")
 	expect(_target_ids(last).size() >= 2, "ID 4 records donor targets")
 
+	var no_donors := _new_game(4, 5631)
+	for player_id in range(no_donors.state.players.size()):
+		_set_deposit(no_donors, player_id, 0)
+	var no_donor_bank_cash := int(no_donors.state.bank.cash)
+	_land_fate(no_donors, "deposit levy with zero donors")
+	var no_donor_last := _expect_last(no_donors, 4, 4, 4)
+	expect(no_donor_last.get("targets", []).is_empty(), "ID 4 records no targets when every donor has zero deposit")
+	expect(no_donors.state.players[0].deposit == 0 and int(no_donors.state.bank.deposits) == 0, "ID 4 zero donors preserve zero deposits")
+	expect(int(no_donors.state.bank.cash) == no_donor_bank_cash, "ID 4 zero donors do not move bank cash")
 
-func _set_vehicle(game: Object, vehicle: String) -> void:
+
+func _set_vehicle(game: Object, vehicle: String, spare: bool = false) -> void:
 	var player: Dictionary = game.state.players[0]
 	player["vehicle"] = vehicle
 	player["dice_count"] = 2 if vehicle == "motorcycle" else 3 if vehicle == "car" else 1
@@ -357,11 +450,11 @@ func _set_vehicle(game: Object, vehicle: String) -> void:
 	vehicles["car"] = vehicle == "car" or bool(vehicles.get("car", false))
 	player["vehicles"] = vehicles
 	if vehicle == "motorcycle":
-		player.tools["機車"] = 0
-		game.state.inventory_supply.tools["機車"] = int(game.state.inventory_supply.tools.get("機車", 0)) - 1
+		player.tools["機車"] = 1 if spare else 0
+		game.state.inventory_supply.tools["機車"] = int(game.state.inventory_supply.tools.get("機車", 0)) - 1 - (1 if spare else 0)
 	elif vehicle == "car":
-		player.tools["汽車"] = 0
-		game.state.inventory_supply.tools["汽車"] = int(game.state.inventory_supply.tools.get("汽車", 0)) - 1
+		player.tools["汽車"] = 1 if spare else 0
+		game.state.inventory_supply.tools["汽車"] = int(game.state.inventory_supply.tools.get("汽車", 0)) - 1 - (1 if spare else 0)
 	elif vehicle == EngineeringVehicle.VEHICLE_ID:
 		player["engineering_vehicle"] = EngineeringVehicle.metadata("walking", 1)
 
@@ -384,13 +477,42 @@ func _test_vehicle_and_traffic() -> void:
 		expect(str(player.get("vehicle", "")) == "walking" and int(player.get("dice_count", -1)) == 1, "traffic fate returns active vehicle to walking")
 		expect(int(game.state.inventory_supply.tools.get(vehicle_supply_key, 0)) == supply_before + 1, "traffic fate returns one finite vehicle unit")
 		expect(int(player.tools.get("路障", 0)) == spare_before, "traffic fate preserves unrelated spare tools")
-		expect(bool(player.vehicles.get(str(entry.vehicle), false)), "traffic fate preserves vehicle ownership flag")
+		expect(not bool(player.vehicles.get(str(entry.vehicle), false)), "traffic fate clears ownership flag when no spare vehicle remains")
+
+	var spare := _new_game(10, 5649)
+	_set_vehicle(spare, "motorcycle", true)
+	_land_fate(spare, "traffic spare motorcycle")
+	_expect_last(spare, 10, 10, 10)
+	expect(int(spare.state.players[0].tools.get("機車", 0)) == 1, "traffic fate keeps a spare motorcycle tool")
+	expect(bool(spare.state.players[0].vehicles.get("motorcycle", false)), "traffic fate keeps ownership flag when a spare remains")
+
+	for entry in [
+		{"candidate": 14, "vehicle": "walking", "resolved": 14},
+		{"candidate": 14, "vehicle": "motorcycle", "resolved": 15},
+		{"candidate": 14, "vehicle": "car", "resolved": 16},
+		{"candidate": 15, "vehicle": "walking", "resolved": 15},
+		{"candidate": 15, "vehicle": "motorcycle", "resolved": 15},
+		{"candidate": 15, "vehicle": "car", "resolved": 16},
+		{"candidate": 16, "vehicle": "walking", "resolved": 14},
+		{"candidate": 16, "vehicle": "motorcycle", "resolved": 15},
+		{"candidate": 16, "vehicle": "car", "resolved": 16},
+	]:
+		var remap := _new_game(int(entry.candidate), 5655 + int(entry.candidate) * 10 + (0 if str(entry.vehicle) == "walking" else 1 if str(entry.vehicle) == "motorcycle" else 2))
+		_set_vehicle(remap, str(entry.vehicle))
+		_land_fate(remap, "traffic remap %d %s" % [entry.candidate, entry.vehicle])
+		_expect_last(remap, int(entry.candidate), int(entry.resolved), int(entry.resolved))
+
+	var hospital_fallback := _new_game(15, 5670)
+	_land_fate(hospital_fallback, "traffic 15 walking hospital fallback")
+	_expect_last(hospital_fallback, 15, 15, 15)
+	expect(int(hospital_fallback.state.players[0].hospital_days) == 3, "traffic 15 walking falls back to three hospital days")
+	expect(int(hospital_fallback.state.players[0].position) == 0, "traffic 15 walking fallback uses the hospital node")
 
 	var engineering := _new_game(10, 5650)
 	_set_fate(engineering, _order_with_next(10, 20))
 	_set_vehicle(engineering, EngineeringVehicle.VEHICLE_ID)
 	_land_fate(engineering, "engineering traffic skip")
-	_expect_last(engineering, 10, 20, 20)
+	_expect_last(engineering, 20, 20, 20)
 	expect(int(engineering.state.fate.cursor) == 2, "engineering vehicle is outside all 10-16 traffic candidates")
 
 
@@ -420,7 +542,7 @@ func _test_status_and_defense() -> void:
 	_set_fate(car, _order_with_next(12, 20))
 	_set_vehicle(car, "car")
 	_land_fate(car, "car status skip")
-	_expect_last(car, 12, 20, 20)
+	_expect_last(car, 20, 20, 20)
 	expect(int(car.state.fate.cursor) == 2, "car is ineligible for 12/13 status candidates")
 
 	var blocked := _new_game(12, 5673)
@@ -456,6 +578,13 @@ func _test_status_and_defense() -> void:
 	expect(int(no_fallback.state.players[0].prison_days) == 3, "scapegoat is retained when no alternative player exists")
 	expect(no_fallback.state.players[0].cards.has("嫁禍"), "嫁禍 remains when there is no valid fallback target")
 
+	var immune := _new_game(33, 5682)
+	_give_card(immune, 0, "免罪")
+	_land_fate(immune, "prison immunity block")
+	_expect_last(immune, 33, 33, 33, "blocked")
+	expect(int(immune.state.players[0].prison_days) == 0, "免罪 blocks prison admission")
+	expect(not immune.state.players[0].cards.has("免罪"), "免罪 is consumed when it blocks status")
+
 
 func _test_money_effects() -> void:
 	for candidate_id in INCOME_AMOUNTS.keys():
@@ -482,8 +611,8 @@ func _test_money_effects() -> void:
 		expect(int(game.state.bank.cash) == bank_before + amount, "expense ID %d sends payment to bank" % candidate_id)
 		expect(int(last.get("raw_amount", -1)) == amount, "expense ID %d stores the raw price-indexed amount" % candidate_id)
 
-	# Income f70 values above 100 are cancelled only by the source god gate;
-	# below zero doubles the amount. ID 20 has a fixed 1000 base here.
+	# Income f70 values below zero are cancelled by the source god gate;
+	# values above 100 double the amount. ID 20 has a fixed 1000 base here.
 	var income_blocked := _new_game(20, 5901)
 	_attach_gate_god(income_blocked, 15) # f70 -200 for income => cancel.
 	var income_cash := int(income_blocked.state.players[0].cash)
@@ -533,21 +662,24 @@ func _test_map_specific_effects() -> void:
 
 	var wrong_edition := _new_game(33, 6043)
 	_set_fate(wrong_edition, _order_with_next(33, 20))
+	wrong_edition.state["map_id"] = "MultiverseJourney:1"
+	wrong_edition.state["map_name"] = "測試命運 · MultiverseJourney 1"
 	wrong_edition.state.map_source["edition"] = "MultiverseJourney"
+	wrong_edition.state.map_source["archive"] = "MultiverseJourney/map.mkf"
 	_land_fate(wrong_edition, "wrong edition map-specific skip")
-	_expect_last(wrong_edition, 33, 20, 20)
+	_expect_last(wrong_edition, 20, 20, 20)
 
 
 func _test_rng_and_terminal() -> void:
 	var no_gate := _new_game(20, 6100)
-	var no_gate_before := int(no_gate.state.rng_state)
+	var no_gate_before := int(no_gate._rng.state)
 	_land_fate(no_gate, "god gate no RNG")
 	_expect_last(no_gate, 20, 20, 20)
-	expect(int(no_gate.state.rng_state) == no_gate_before, "god gate range zero to fifty consumes no RNG")
+	expect(int(no_gate._rng.state) == no_gate_before, "god gate range zero to fifty consumes no RNG")
 
 	var mid_gate := _new_game(20, 6101)
 	_attach_gate_god(mid_gate, 9) # f70 +60: exactly one income gate coin flip.
-	var mid_before := int(mid_gate.state.rng_state)
+	var mid_before := int(mid_gate._rng.state)
 	var probe := RandomNumberGenerator.new()
 	probe.state = mid_before
 	probe.randi()
@@ -557,7 +689,7 @@ func _test_rng_and_terminal() -> void:
 
 	var handoff := _new_game(17, 6110)
 	handoff.state.players[0]["cash"] = 0
-	handoff.state.players[0]["deposit"] = 0
+	_set_deposit(handoff, 0, 0)
 	handoff.state.current_player = 0
 	var next_before := int(handoff.state.current_player)
 	_land_fate(handoff, "nonterminal fate bankruptcy")
@@ -567,11 +699,12 @@ func _test_rng_and_terminal() -> void:
 	expect(_events_of_type(handoff, "fate_resolved").size() == 1, "bankruptcy during fate does not duplicate the resolved event")
 
 	var terminal := _new_game(17, 6111, 2)
-	terminal.state.players[1]["alive"] = false
-	terminal.state.players[1]["bankrupt"] = true
+	# Both players remain alive at the landing. The actor alone becomes
+	# bankrupt, so the existing terminal hook declares player 1 the winner.
 	terminal.state.players[0]["cash"] = 0
-	terminal.state.players[0]["deposit"] = 0
+	_set_deposit(terminal, 0, 0)
 	_land_fate(terminal, "terminal fate bankruptcy")
 	_expect_last(terminal, 17, 17, 17)
 	expect(str(terminal.state.phase) == "game_over", "last live player bankruptcy ends the game")
+	expect(int(terminal.state.winner) == 1, "terminal fate bankruptcy awards the win to the surviving player")
 	expect(_events_of_type(terminal, "fate_resolved").size() == 1, "terminal fate bankruptcy emits one resolved event")

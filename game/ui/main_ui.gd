@@ -2466,7 +2466,7 @@ func _update_cards_popup() -> void:
 				use.tooltip_text = "符合條件的地租、設施、企業服務或查稅發生時，可選擇使用一次。"
 			elif _has_original_statuses() and card_id in ["免罪", "復仇", "嫁禍"]:
 				use.disabled = true
-				use.text = "遭效果時選擇" if card_id == "嫁禍" else "自動觸發"
+				use.text = "受影響時選擇" if card_id == "嫁禍" else "自動觸發"
 			row.add_child(use)
 			cards_popup_list.add_child(row)
 

@@ -249,6 +249,13 @@ func _test_pair_replacement_and_refresh() -> void:
 	expect(bool(first.get("ok", false)), "first alliance pair succeeds")
 	if not bool(first.get("ok", false)):
 		return
+	prepare_action(game, 2, 2)
+	stage_card(game)
+	legal(game, "second alliance pair before replacement")
+	var second: Dictionary = game.choose_action("use_card", {"card_id": ALLIANCE_CARD, "target_id": 3, "cancel": false})
+	expect(bool(second.get("ok", false)), "second alliance pair succeeds")
+	if not bool(second.get("ok", false)):
+		return
 	prepare_action(game, 0, 2)
 	stage_card(game)
 	legal(game, "alliance pair replacement")
@@ -257,10 +264,13 @@ func _test_pair_replacement_and_refresh() -> void:
 	expect_equal(alliance_record(game, 0), {"partner_id": 2, "turns": ALLIANCE_DAYS}, "replacement keeps caster at seven turns")
 	expect_equal(alliance_record(game, 2), {"partner_id": 0, "turns": ALLIANCE_DAYS}, "replacement creates reciprocal second pair")
 	expect(alliance_record(game, 1).is_empty(), "replacement clears the caster's former partner")
+	expect(alliance_record(game, 3).is_empty(), "replacement clears the target's former partner")
 
+	game.state["players"][0]["alliance"]["turns"] = 2
+	game.state["players"][2]["alliance"]["turns"] = 1
 	prepare_action(game, 0, 2)
 	stage_card(game)
-	legal(game, "repeated alliance pair")
+	legal(game, "repeated alliance pair from unequal shorter timers")
 	var repeated: Dictionary = game.choose_action("use_card", {"card_id": ALLIANCE_CARD, "target_id": 2, "cancel": false})
 	expect(bool(repeated.get("ok", false)), "repeated alliance pairing succeeds")
 	expect_equal(alliance_record(game, 0).get("turns", -1), ALLIANCE_DAYS, "repeated pairing resets caster duration to seven")
@@ -428,6 +438,55 @@ func _test_allied_property_facility_and_company_paths() -> void:
 		expect_equal(int(facility.state["players"][0]["cash"]), facility_cash_before, "allied facility service is waived")
 		expect_equal(str(facility.state["rng_state_text"]), facility_rng_before, "mutual facility waiver consumes no RNG")
 
+	var facility_non_ally: Object = fresh(75057)
+	if facility_non_ally != null:
+		pair(facility_non_ally, 0, 1)
+		set_facility(facility_non_ally, 2, 1, 1, 1)
+		var non_ally_payer_before: int = int(facility_non_ally.state["players"][2]["cash"])
+		var non_ally_owner_before: int = int(facility_non_ally.state["players"][1]["cash"])
+		var non_ally_ally_before: int = int(facility_non_ally.state["players"][0]["cash"])
+		prepare_route(facility_non_ally, 2, 7)
+		legal(facility_non_ally, "before non-ally facility service")
+		var non_ally_result: Dictionary = facility_non_ally.choose_route(7)
+		expect(bool(non_ally_result.get("ok", false)), "public route reaches facility for a non-ally payer")
+		var facility_event: Dictionary = last_event_of_type(facility_non_ally, "facility_service")
+		var facility_fee: int = int(facility_event.get("fee", 0))
+		expect(facility_fee > 0, "non-ally facility service records a positive fee")
+		expect_equal(int(facility_non_ally.state["players"][2]["cash"]), non_ally_payer_before - facility_fee, "non-ally payer pays the facility fee")
+		expect_equal(int(facility_non_ally.state["players"][1]["cash"]), non_ally_owner_before + facility_fee, "non-ally facility fee reaches only its owner")
+		expect_equal(int(facility_non_ally.state["players"][0]["cash"]), non_ally_ally_before, "non-ally facility fee gives no ally share")
+
+	var god_rent: Object = fresh(75058)
+	if god_rent != null:
+		pair(god_rent, 0, 1)
+		set_property(god_rent, 2, 1, 2, false)
+		set_property(god_rent, 3, 0, 1, false)
+		prepare_route(god_rent, 2, 2)
+		attach_god(god_rent, 2, 1, 7)
+		god_rent.state["players"][2]["cash"] = 300
+		god_rent.state["players"][2]["deposit"] = 0
+		sync_bank_deposits(god_rent)
+		god_rent._set_action_options(2)
+		var god_payer_before: int = int(god_rent.state["players"][2]["cash"])
+		var god_owner_before: int = int(god_rent.state["players"][1]["cash"])
+		var god_ally_before: int = int(god_rent.state["players"][0]["cash"])
+		legal(god_rent, "before god-modified combined rent landing")
+		var god_rent_result: Dictionary = god_rent.choose_route(2)
+		expect(bool(god_rent_result.get("ok", false)), "public route reaches god-modified combined rent")
+		expect(bool(god_rent.state["players"][2].get("bankrupt", false)), "god-modified combined rent uses the actual payable amount before bankruptcy")
+		expect_equal(int(god_rent.state["players"][2]["cash"]), 0, "god-modified payer pays all available cash")
+		expect_equal(int(god_rent.state["players"][1]["cash"]), god_owner_before + 212, "god-modified combined rent gives the owner its proportional actual payment")
+		expect_equal(int(god_rent.state["players"][0]["cash"]), god_ally_before + 88, "god-modified combined rent gives the ally its proportional actual payment")
+		expect_equal((int(god_rent.state["players"][1]["cash"]) - god_owner_before) + (int(god_rent.state["players"][0]["cash"]) - god_ally_before), god_payer_before, "god-modified split credits only actually payable funds")
+	var god_modifiers: Array = []
+	for event_value in god_rent.state.get("event_log", []):
+		if typeof(event_value) == TYPE_DICTIONARY and event_value.get("type", "") == "god_charge_modifier" and event_value.get("reason", "") == "rent":
+			god_modifiers.append(event_value)
+	expect_equal(god_modifiers.size(), 1, "combined rent applies the god modifier exactly once")
+	if god_modifiers.size() == 1:
+		expect_equal(int(god_modifiers[0].get("from_amount", -1)), 850, "god modifier sees the combined same-name rent")
+		expect_equal(int(god_modifiers[0].get("to_amount", -1)), 425, "god modifier halves the combined same-name rent once")
+
 	var company: Object = fresh(75056)
 	if company != null:
 		pair(company, 0, 1)
@@ -439,13 +498,15 @@ func _test_allied_property_facility_and_company_paths() -> void:
 		company_record["treasury"] = int(company_record.get("treasury", 0)) - 1
 		company._update_company_owners()
 		company_record["monthly_profit"] = -50
-		var company_cash_before: int = int(company.state["players"][2]["cash"])
+		var company_cash_before: int = int(company.state["players"][0]["cash"])
+		var company_owner_cash_before: int = int(company.state["players"][1]["cash"])
 		var negative_profit_before: int = int(company_record["monthly_profit"])
-		prepare_route(company, 2, 5)
+		prepare_route(company, 0, 5)
 		legal(company, "before allied company negative-profit landing")
 		var company_result: Dictionary = company.choose_route(5)
 		expect(bool(company_result.get("ok", false)), "public route reaches allied company")
-		expect_equal(int(company.state["players"][2]["cash"]), company_cash_before - 150, "alliance does not waive company service fees")
+		expect_equal(int(company.state["players"][0]["cash"]), company_cash_before - 150, "alliance does not waive company service fees")
+		expect_equal(int(company.state["players"][1]["cash"]), company_owner_cash_before, "company service does not create an allied landlord cash transfer")
 		expect_equal(int(company_record["monthly_profit"]), negative_profit_before + 150, "company negative ledger still receives the actual toll")
 		expect(company_symbol == "股票 1", "company fixture retains the source stock identity")
 
@@ -478,6 +539,22 @@ func sync_bank_deposits(game: Object) -> void:
 		if typeof(player_value) == TYPE_DICTIONARY:
 			deposits += int(player_value.get("deposit", 0))
 	game.state["bank"]["deposits"] = deposits
+
+
+func attach_god(game: Object, player_id: int, god_id: int, days: int) -> void:
+	var player: Dictionary = game.state["players"][player_id]
+	var node: int = int(player.get("position", -1))
+	game.state["players"][player_id]["god_id"] = god_id
+	game.state["god_objects"] = [{"id": god_id, "node": node, "owner": player_id, "days": days}]
+	expect(bool(Game.validate_save(game.to_dict()).get("ok", false)), "attached god fixture is save-valid")
+
+
+func last_event_of_type(game: Object, event_type: String) -> Dictionary:
+	var log: Array = game.state.get("event_log", [])
+	for index in range(log.size() - 1, -1, -1):
+		if typeof(log[index]) == TYPE_DICTIONARY and log[index].get("type", "") == event_type:
+			return log[index]
+	return {}
 
 
 func set_facility(game: Object, source_id: int, owner_id: int, level: int, facility_type: int) -> void:

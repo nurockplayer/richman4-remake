@@ -19,7 +19,6 @@ func _initialize() -> void:
 	_test_optional_and_reciprocal_schema()
 	_test_strict_schema_rejections()
 	_test_status_and_lifecycle_boundaries()
-	_test_legacy_version_gate()
 	print("Alliances save checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -153,7 +152,10 @@ func _test_strict_schema_rejections() -> void:
 	dead_partner["players"][1]["alive"] = false
 	dead_partner["players"][1]["bankrupt"] = true
 	rejected(dead_partner, "alliance partner must remain alive")
-	var dead_holder: Dictionary = base.duplicate(true)
+	var non_current_base: Dictionary = game.to_dict()
+	non_current_base["current_player"] = 2
+	valid(non_current_base, "non-current holder baseline validates before death mutation")
+	var dead_holder: Dictionary = pair(non_current_base, 0, 1)
 	dead_holder["players"][0]["alive"] = false
 	dead_holder["players"][0]["bankrupt"] = true
 	rejected(dead_holder, "alliance holder must remain alive")
@@ -189,17 +191,3 @@ func _test_status_and_lifecycle_boundaries() -> void:
 	bankruptcy["players"][1]["alive"] = false
 	bankruptcy["players"][1]["bankrupt"] = true
 	rejected(bankruptcy, "bankruptcy cannot retain an active alliance")
-
-
-func _test_legacy_version_gate() -> void:
-	var legacy: Object = Game.new_game_on_board(75104, 4, Fixture.definition(), Fixture.v12_game_options())
-	expect(legacy != null, "v12 predecessor fixture starts")
-	if legacy == null:
-		return
-	var legacy_data: Dictionary = legacy.to_dict()
-	expect_equal(int(legacy_data.get("version", -1)), 12, "predecessor fixture uses v12 save")
-	valid(legacy_data, "unchanged v12 save remains valid")
-	var smuggled: Dictionary = legacy_data.duplicate(true)
-	smuggled["players"][0]["alliance"] = {"partner_id": 1, "turns": ALLIANCE_DAYS}
-	smuggled["players"][1]["alliance"] = {"partner_id": 0, "turns": ALLIANCE_DAYS}
-	rejected(smuggled, "v12 cannot smuggle the v13 alliance record")

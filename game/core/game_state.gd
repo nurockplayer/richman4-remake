@@ -36,6 +36,7 @@ const FateEvents = preload("res://game/core/fate_events.gd")
 const SleepRules = preload("res://game/core/sleep_rules.gd")
 const FinancialRules = preload("res://game/core/financial_cards_rules.gd")
 const AllianceRules = preload("res://game/core/alliance_rules.gd")
+const AuctionRules = preload("res://game/core/auction_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -81,7 +82,7 @@ const SETUP_CHARACTER_NAMES = [
 const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
-const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅"]
+const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
 const GOD_CARD_IDS = ["送神符", "請神符"]
 const DISMISS_GOD_IDS = [5, 6, 7, 8, 10]
@@ -796,6 +797,10 @@ func _pending_finance() -> Dictionary:
 
 func financial_response() -> Dictionary:
 	return FinancialRules.response(self)
+
+
+func auction_response() -> Dictionary:
+	return AuctionRules.response(self)
 
 
 func tax_target_players(caster_id: int) -> Array:
@@ -2168,6 +2173,9 @@ func _set_action_options(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["action_options"] = options
+		return
+	if not AuctionRules.response(self).is_empty():
+		state["action_options"] = ["respond_auction"] if phase == "await_action" else []
 		return
 	if not _pending_finance().is_empty():
 		state["action_options"] = ["respond_finance"] if phase in ["await_roll", "await_action"] else []
@@ -3859,6 +3867,8 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 
 
 func roll(dice_count: int = -1) -> Dictionary:
+	if not AuctionRules.response(self).is_empty():
+		return _error("請先回應拍賣")
 	if not _pending_finance().is_empty():
 		return _error("請先回應付款選擇")
 	if _sleep_active(_current_player()) and not _running_sleep_turn:
@@ -4166,6 +4176,8 @@ func _graph_continue_movement(player_id: int) -> bool:
 
 
 func choose_route(route: int) -> Dictionary:
+	if not AuctionRules.response(self).is_empty():
+		return _error("請先回應拍賣")
 	if _sleep_active(_current_player()) and not _running_sleep_turn:
 		return _error("睡眠期間由自動回合移動")
 	if not _require_phase("await_route"):
@@ -5043,8 +5055,12 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if normalized == "respond_auction":
+		return AuctionRules.respond(self, params)
 	if normalized == "respond_finance":
 		return FinancialRules.respond(self, params)
+	if not AuctionRules.response(self).is_empty():
+		return _error("請先回應拍賣")
 	if not _pending_finance().is_empty():
 		return _error("請先回應金融付款")
 	if normalized == "respond_trap":
@@ -5116,6 +5132,11 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _use_tool(player_id, params)
 		"use_card":
 			var card_id: String = str(params.get("card_id", ""))
+			if card_id == AuctionRules.CARD_ID:
+				var auction_result: Dictionary = _use_card(player_id, card_id, -1, "", -1, params.get("cancel", false), null, null, null, null, params)
+				if not bool(auction_result.get("ok", false)):
+					state["action_options"] = action_options_before
+				return auction_result
 			var selected_target: Variant = player_id
 			var selected_item_kind: Variant = null
 			var selected_item_id: Variant = null
@@ -5885,7 +5906,7 @@ func _use_theft_card(player_id: int, target_id: Variant, item_kind: Variant, ite
 	return _result(true, result_message, result_extra)
 
 
-func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol: String = "", tile_id: Variant = -1, cancel: Variant = false, facility_type: Variant = null, visible_tile_ids: Variant = null, theft_item_kind: Variant = null, theft_item_id: Variant = null) -> Dictionary:
+func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol: String = "", tile_id: Variant = -1, cancel: Variant = false, facility_type: Variant = null, visible_tile_ids: Variant = null, theft_item_kind: Variant = null, theft_item_id: Variant = null, raw_params: Dictionary = {}) -> Dictionary:
 	if _is_inventory():
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
@@ -5896,6 +5917,9 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 		return FinancialRules.use_card(self, player_id, card_id, target_id, cancel)
 	if AllianceRules.is_alliance_card(card_id):
 		return AllianceRules.use_card(self, player_id, target_id, cancel)
+	if card_id == AuctionRules.CARD_ID:
+		var auction_params: Dictionary = raw_params.duplicate(true) if not raw_params.is_empty() else {"card_id": card_id, "cancel": cancel}
+		return AuctionRules.use_card(self, player_id, cancel, auction_params)
 	if card_id == "搶奪":
 		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)
 	# All non-theft callers provide the legacy integer target and boolean
@@ -6108,6 +6132,8 @@ func _grant_card(player_id: int, card_id: String) -> Dictionary:
 
 
 func end_turn() -> Dictionary:
+	if not AuctionRules.response(self).is_empty():
+		return _error("請先回應拍賣")
 	if not _pending_finance().is_empty():
 		return _error("請先回應金融付款")
 	if _trap_pending():
@@ -6519,6 +6545,8 @@ func _check_game_over(reason: String = "") -> void:
 func run_ai_turn() -> Dictionary:
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
+	if not AuctionRules.response(self).is_empty():
+		return AuctionRules.ai_turn(self)
 	var player_id: int = int(state.get("current_player", -1))
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
@@ -8158,6 +8186,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var action_options: Variant = data.get("action_options", null)
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
 	known_actions.append("respond_finance")
+	known_actions.append("respond_auction")
 	if status_save:
 		known_actions.append("respond_trap")
 	if facility_save:
@@ -8180,6 +8209,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		for option in action_options:
 			if typeof(option) != TYPE_STRING or not known_actions.has(option):
 				errors.append("invalid action option")
+			if option == "respond_auction" and not (typeof(data.get("pending_auction", {})) == TYPE_DICTIONARY and not data.get("pending_auction", {}).is_empty()):
+				errors.append("respond_auction requires pending auction")
 			if inventory_save and option == "buy_vehicle":
 				errors.append("inventory save cannot buy vehicle with cash")
 			if inventory_save and phase_name == "await_roll" and saved_remote_pending and ["use_card", "use_tool"].has(option):
@@ -8188,11 +8219,15 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("movement modifier has unavailable tool action")
 		var pending_trap_for_options: bool = status_save and typeof(data.get("pending_trap", {})) == TYPE_DICTIONARY and not data.get("pending_trap", {}).is_empty()
 		var pending_finance_for_options: bool = typeof(data.get("pending_finance", {})) == TYPE_DICTIONARY and not data.get("pending_finance", {}).is_empty()
-		if phase_name == "await_action" and not pending_trap_for_options and not pending_finance_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
+		var pending_auction_for_options: bool = typeof(data.get("pending_auction", {})) == TYPE_DICTIONARY and not data.get("pending_auction", {}).is_empty()
+		if phase_name == "await_action" and not pending_trap_for_options and not pending_finance_for_options and not pending_auction_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
 			errors.append("await_action missing end_turn")
 		if pending_trap_for_options:
 			if action_options != ["respond_trap"]:
 				errors.append("pending trap action options mismatch")
+		elif pending_auction_for_options:
+			if action_options != ["respond_auction"]:
+				errors.append("pending auction action options mismatch")
 		elif not pending_finance_for_options and phase_name in ["await_roll", "await_route"]:
 			var non_action_phase_options: Array = ["buy_stock", "sell_stock"]
 			if inventory_save and phase_name == "await_roll":
@@ -8203,6 +8238,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		elif not pending_finance_for_options and phase_name != "await_action" and not action_options.is_empty():
 			errors.append("non-action phase has action options")
 
+	var pending_auction_errors: Array = AuctionRules.validate_save(data, player_count, board, phase_name, action_options, inventory_save)
+	errors.append_array(pending_auction_errors)
 	var pending_finance_errors: Array = FinancialRules.validate_pending(data, player_count, board, phase_name, action_options, inventory_save, status_save, companies_save)
 	errors.append_array(pending_finance_errors)
 

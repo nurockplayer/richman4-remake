@@ -18,6 +18,7 @@ const FatePanel = preload("res://game/ui/fate_panel.gd")
 const TheftPicker = preload("res://game/ui/theft_picker.gd")
 const FinancialPresentation = preload("res://game/ui/financial_presentation.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
+const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -136,6 +137,8 @@ var trap_decline_button: Button
 var _trap_response_busy := false
 var financial_popup: PopupPanel
 var _finance_response_busy := false
+var auction_popup: PopupPanel
+var _auction_response_busy := false
 var audio_controller: Object
 var audio_button: Button
 var audio_config_button: Button
@@ -519,6 +522,9 @@ func _build_popups() -> void:
 	financial_popup = FinancialPresentation.new()
 	add_child(financial_popup)
 	financial_popup.answered.connect(_respond_to_finance)
+	auction_popup = AuctionPresentation.new()
+	add_child(auction_popup)
+	auction_popup.answered.connect(_respond_to_auction)
 	new_game_popup = _make_popup(Vector2i(760, 680))
 	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
@@ -1807,7 +1813,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
 	var is_finance_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_finance" and FinancialPresentation.human_pending(state)
-	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response:
+	var is_auction_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_auction" and _human_auction_response_pending()
+	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var before := _read_snapshot().duplicate(true)
@@ -1853,6 +1860,8 @@ func _cancel_presentation() -> void:
 		news_popup.cancel_presentation()
 	if fate_popup != null:
 		fate_popup.cancel_presentation()
+	if auction_popup != null:
+		auction_popup.cancel_presentation()
 
 func _on_movement_finished() -> void:
 	if not _presentation_busy:
@@ -1912,6 +1921,7 @@ func _update_all() -> void:
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
 	_update_financial_popup()
+	_update_auction_popup()
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
 	_last_rendered_phase = phase
@@ -2104,7 +2114,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
-	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance")
+	var auction_pending := _pending_auction_for_ui()
+	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance") or not auction_pending.is_empty()
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
 		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")
@@ -2146,6 +2157,9 @@ func _update_actions(phase: String, current_index: int) -> void:
 		stocks_popup.hide()
 	if game_over:
 		action_hint_label.text = "本局已結束"
+	elif not auction_pending.is_empty():
+		var auction_bidder_id := int(auction_pending.get("bidder_id", -1))
+		action_hint_label.text = "請%s回應拍賣" % _player_name(auction_bidder_id) if _human_auction_response_pending() else "拍賣進行中"
 	elif state.has("pending_finance"):
 		action_hint_label.text = "請回應付款選擇"
 	elif reaction_pending:
@@ -2230,6 +2244,21 @@ func _update_financial_popup() -> void:
 		targets = game_state.call("tax_target_players", int(state.pending_finance.payer_id))
 	financial_popup.sync(state, targets)
 
+
+func _pending_auction_for_ui() -> Dictionary:
+	var pending: Variant = state.get("pending_auction", {})
+	return pending if pending is Dictionary else {}
+
+
+func _human_auction_response_pending() -> bool:
+	return AuctionPresentation.human_pending(state)
+
+
+func _update_auction_popup() -> void:
+	if auction_popup == null:
+		return
+	auction_popup.sync(state)
+
 func _respond_to_finance(params: Dictionary) -> void:
 	if _finance_response_busy or not FinancialPresentation.human_pending(state): return
 	_finance_response_busy = true
@@ -2237,6 +2266,16 @@ func _respond_to_finance(params: Dictionary) -> void:
 	_append_local_log(_result_text(result, "已回應付款選擇。"))
 	_handle_result(result)
 	_finance_response_busy = false
+
+
+func _respond_to_auction(params: Dictionary) -> void:
+	if _auction_response_busy or not _human_auction_response_pending():
+		return
+	_auction_response_busy = true
+	var result := _invoke_game("choose_action", ["respond_auction", params])
+	_append_local_log("拍賣回應：%s" % _result_text(result, "已送出拍賣回應。"))
+	_handle_result(result)
+	_auction_response_busy = false
 
 func _pending_trap_for_ui() -> Dictionary:
 	if not _has_original_statuses(): return {}
@@ -2284,6 +2323,19 @@ func _maybe_schedule_ai_turn() -> void:
 		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
 		return
+	var auction_pending := _pending_auction_for_ui()
+	if not auction_pending.is_empty():
+		var auction_bidder_id := int(auction_pending.get("bidder_id", -1))
+		var auction_players: Array = _as_array(state.get("players", []))
+		if auction_bidder_id < 0 or auction_bidder_id >= auction_players.size() or typeof(auction_players[auction_bidder_id]) != TYPE_DICTIONARY:
+			return
+		var auction_bidder: Dictionary = auction_players[auction_bidder_id]
+		if not bool(auction_bidder.get("is_ai", false)) or not bool(auction_bidder.get("alive", false)):
+			return
+		_ai_pending = true
+		var auction_timer := get_tree().create_timer(0.82)
+		auction_timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
+		return
 	var player := _current_player()
 	if (bool(player.get("is_human", true)) and not SleepPresentation.automatic(player)) or bool(player.get("bankrupt", false)):
 		return
@@ -2300,6 +2352,19 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
+		return
+	var auction_pending := _pending_auction_for_ui()
+	if not auction_pending.is_empty():
+		var auction_bidder_id := int(auction_pending.get("bidder_id", -1))
+		var auction_players: Array = _as_array(state.get("players", []))
+		if auction_bidder_id < 0 or auction_bidder_id >= auction_players.size() or typeof(auction_players[auction_bidder_id]) != TYPE_DICTIONARY:
+			return
+		var auction_bidder: Dictionary = auction_players[auction_bidder_id]
+		if not bool(auction_bidder.get("is_ai", false)) or not bool(auction_bidder.get("alive", false)):
+			return
+		var auction_result := _invoke_game("run_ai_turn")
+		_append_local_log("%s：%s" % [str(auction_bidder.get("name", "AI")), _result_text(auction_result, "已回應拍賣。")])
+		_handle_result(auction_result)
 		return
 	var player := _current_player()
 	if bool(player.get("is_human", true)) and not SleepPresentation.automatic(player):
@@ -2468,6 +2533,9 @@ func _update_cards_popup() -> void:
 				var current_tile := _current_tile()
 				use.disabled = use.disabled or str(current_tile.get("kind", "")) not in ["property", "facility"] or int(current_tile.get("building_level", 0)) <= 0 or not _player_rest_status(_current_player()).is_empty()
 				use.tooltip_text = "改建腳下設施；選擇同類型也會消耗改建卡。" if current_tile.get("kind", "") == "facility" else "改建腳下已有建物的住宅；轉為連鎖店會降至 1 級。"
+			if card_id == "拍賣":
+				use.disabled = use.disabled or str(state.get("phase", "")) != "await_action"
+				use.tooltip_text = "在目前位置發起地產拍賣。"
 			if not implemented:
 				use.text = "尚未還原"
 			elif card_id == "免費":

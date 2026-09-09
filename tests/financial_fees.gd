@@ -148,12 +148,12 @@ func company_fee(company_type: int) -> void:
 	expect(int(g.state.companies[0].monthly_profit) == 0 and int(g.state.players[0].cash) == before_cash, "company payment waits without crediting earnings")
 	if decision.is_empty(): return
 	if company_type == 4:
-		expect(int(g.state.players[0].insurance_days) > 0, "insurance service already granted while fee awaits")
+		expect(int(g.state.players[0].insurance_status) > 0, "insurance service already granted while fee awaits")
 	legal(g, "company pending")
 	if not answer(g, true): return
 	expect(int(g.state.companies[0].monthly_profit) == 0 and int(g.state.companies[0].cumulative_profit) == 0, "waived service never credits company profits")
 	if company_type == 4:
-		expect(int(g.state.players[0].insurance_days) > 0, "free does not undo granted insurance")
+		expect(int(g.state.players[0].insurance_status) > 0, "free does not undo granted insurance")
 	legal(g, "company waived")
 
 func company_construction() -> void:

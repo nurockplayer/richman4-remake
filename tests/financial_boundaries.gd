@@ -74,5 +74,9 @@ func _initialize() -> void:
 		expect_equal(g.to_json(), before, "failed redirect after AI free decline preserves RNG as well as cards")
 	else:
 		expect(Game.validate_save(g.to_dict()).get("ok", false), "AI free-decline overflow fallback preserves valid save")
+	g = fresh(74907)
+	stage_card(g, 0, FREE_CARD)
+	expect(Game.validate_save(g.to_dict()).get("ok", false), "direct passive free fixture legal")
+	expect_rejected_atomic(g, "use_card", {"card_id": FREE_CARD}, "passive free cannot be actively used")
 	print("Financial boundary checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

@@ -3,6 +3,8 @@ const MainScene = preload("res://game/main.tscn")
 const Game = preload("res://game/core/game_state.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
 const Fixture = preload("res://tests/fixtures/auction_fixture.gd")
+const Maps = preload("res://game/content/original_maps.gd")
+const InventoryMapFixture = preload("res://tests/fixtures/original_map_fixture.gd")
 var checks := 0
 var failures := 0
 
@@ -89,6 +91,8 @@ func run() -> void:
 			await process_frame
 			check(not response.visible and not ui.game_state.state.has("pending_auction"), "new game clears popup and pending without stale reopening")
 	await check_receipt_capacity(ui)
+	await check_auction_unsupported_tiles(ui)
+	await check_auction_legacy_capability(ui)
 	ui.queue_free()
 	print("Auction UI checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
@@ -115,3 +119,55 @@ func check_receipt_capacity(ui: Node) -> void:
 		withdraw.pressed.emit()
 		await process_frame
 		check(game.state.pending_auction.withdrawn.has(0), "capacity-limited bidder can withdraw through the button")
+
+
+func _prepare_ui_auction_card(game: Object) -> bool:
+	for id in range(game.state.players.size()):
+		game.set_player_ai(id, false)
+		for held in game.state.players[id].cards.duplicate():
+			Inventory.consume_card(game.state.inventory_supply, game.state.players[id].cards, held)
+	Fixture.prepare(game, 0, 2)
+	return bool(Fixture.stage_card(game, 0).get("ok", false))
+
+
+func _open_auction_card(ui: Node) -> Button:
+	ui._refresh_from_state()
+	ui._on_cards_pressed()
+	var use: Node = ui.cards_popup.find_child("UseCard_拍賣", true, false)
+	return use as Button if use is Button else null
+
+
+func check_auction_unsupported_tiles(ui: Node) -> void:
+	check(ui._new_game(7885, 4, Fixture.definition(), Fixture.new_game_options()), "invalid-tile UI fixture starts")
+	ui.set_process(false)
+	var game: Object = ui.game_state
+	if not _prepare_ui_auction_card(game):
+		check(false, "invalid-tile UI fixture receives auction card")
+		return
+	for kind in ["road", "news", "card", "unsupported"]:
+		game.state["board"][2]["kind"] = kind
+		var use: Button = _open_auction_card(ui)
+		check(use != null and use.disabled, "auction card is disabled on %s tile" % kind)
+		check(ui.cards_popup.visible, "backpack remains open on disabled %s tile" % kind)
+		ui.cards_popup.hide()
+
+
+func check_auction_legacy_capability(ui: Node) -> void:
+	var normalized: Dictionary = Maps.normalize_map(InventoryMapFixture.make())
+	var cases: Array = [
+		{"label": "v4", "definition": normalized.get("definition", {}), "options": {"original_inventory": true, "start_date": {"year": 1998, "month": 1, "day": 1}}},
+		{"label": "v5", "definition": Fixture.definition(), "options": {"original_facilities": true, "start_date": {"year": 1998, "month": 1, "day": 1}}},
+	]
+	for case_value in cases:
+		var case_data: Dictionary = case_value
+		var label: String = str(case_data["label"])
+		check(ui._new_game(7886 if label == "v4" else 7887, 4, case_data["definition"], case_data["options"]), "%s UI fixture starts" % label)
+		ui.set_process(false)
+		var game: Object = ui.game_state
+		var prepared: bool = _prepare_ui_auction_card(game)
+		check(prepared, "%s UI fixture receives auction card" % label)
+		check(bool(Game.validate_save(game.to_dict()).get("ok", false)), "%s UI fixture validates before action" % label)
+		var use: Button = _open_auction_card(ui)
+		check(use != null and use.disabled, "%s UI disables unsupported auction card" % label)
+		check(ui.cards_popup.visible, "%s backpack remains open while unsupported" % label)
+		ui.cards_popup.hide()

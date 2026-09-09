@@ -37,6 +37,7 @@ const SleepRules = preload("res://game/core/sleep_rules.gd")
 const FinancialRules = preload("res://game/core/financial_cards_rules.gd")
 const AllianceRules = preload("res://game/core/alliance_rules.gd")
 const AuctionRules = preload("res://game/core/auction_rules.gd")
+const MissileRules = preload("res://game/core/missile_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -90,7 +91,7 @@ const AI_SUMMON_GOD_IDS = [1, 2, 3, 4, 12]
 const PROPERTY_CARD_IDS = ["換地", "換屋"]
 const REMODEL_CARD_ID = "改建"
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
-const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人", "工程車"]
+const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人", "工程車", "飛彈", "核子飛彈"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
 	"car": "汽車",
@@ -2960,6 +2961,8 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 		return _building_card_target_error(player_id, item_id, tile_id)
 	if PROPERTY_CARD_IDS.has(item_id):
 		return _property_card_target_error(player_id, item_id, tile_id)
+	if MissileRules.is_missile(item_id):
+		return MissileRules.target_error(self, player_id, item_id, tile_id)
 	if item_id in ["地雷", "定時炸彈"]:
 		return _hazard_target_error(player_id, item_id, tile_id)
 	var player: Dictionary = _player(player_id)
@@ -3059,6 +3062,8 @@ func inventory_target_tiles(item_id: String) -> Array:
 	if not _is_inventory() or not _is_graph():
 		return targets
 	var normalized_item_id: String = item_id.strip_edges()
+	if MissileRules.is_missile(normalized_item_id):
+		return MissileRules.target_tiles(self, int(state.get("current_player", -1)), normalized_item_id)
 	var player_id: int = int(state.get("current_player", -1))
 	var board: Array = state.get("board", [])
 	for tile_id in range(board.size()):
@@ -3177,6 +3182,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	if normalized_kind == "tool":
 		if item_id in ["地雷", "定時炸彈", "機器娃娃"]:
 			return _is_hazards()
+		if MissileRules.is_missile(item_id):
+			return MissileRules.supports(self)
 		return IMPLEMENTED_TOOL_IDS.has(item_id)
 	return false
 
@@ -5225,7 +5232,12 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	if not _is_inventory():
 		return _error("道具只適用於道具地圖")
 	var player: Dictionary = _player(player_id)
-	var tool_id: String = str(params.get("tool_id", ""))
+	var raw_tool_id: Variant = params.get("tool_id", null)
+	if typeof(raw_tool_id) != TYPE_STRING:
+		return _error("道具代號格式無效")
+	var tool_id: String = str(raw_tool_id)
+	if MissileRules.is_missile(tool_id):
+		return MissileRules.use(self, player_id, params)
 	var engineering_landing: bool = tool_id == "工程車" and state.get("phase", "") == "await_action"
 	if state.get("phase", "") != "await_roll" and not engineering_landing:
 		return _error("道具只能在擲骰前使用")
@@ -7128,6 +7140,12 @@ func _inventory_ai_hazard_target(player_id: int, tool_id: String) -> int:
 	return int(candidates[0])
 
 
+func _inventory_ai_missile_target(player_id: int, tool_id: String) -> int:
+	if not MissileRules.is_missile(tool_id):
+		return -1
+	return MissileRules.ai_target(self, player_id, tool_id)
+
+
 func _hazard_dynamic_object_count() -> int:
 	if not _is_hazards():
 		return 0
@@ -7345,6 +7363,15 @@ func _ai_roll_action(player_id: int) -> void:
 			continue
 		var hazard_result: Dictionary = choose_action("use_tool", {"tool_id": hazard_tool_id, "tile_id": hazard_target})
 		if bool(hazard_result.get("ok", false)):
+			return
+	for missile_tool_id in [MissileRules.MISSILE_ID, MissileRules.NUCLEAR_MISSILE_ID]:
+		if int(tools.get(missile_tool_id, 0)) <= 0:
+			continue
+		var missile_target: int = _inventory_ai_missile_target(player_id, missile_tool_id)
+		if missile_target < 0:
+			continue
+		var missile_result: Dictionary = choose_action("use_tool", {"tool_id": missile_tool_id, "tile_id": missile_target})
+		if bool(missile_result.get("ok", false)):
 			return
 	for tool_id in ["汽車", "機車", "遙控骰子"]:
 		if int(tools.get(tool_id, 0)) <= 0:

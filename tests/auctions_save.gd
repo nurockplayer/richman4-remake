@@ -217,6 +217,18 @@ func _test_malformed_records_fail_closed() -> void:
 	wrong_bidder["pending_auction"]["bidder_id"] = 99
 	_invalid_record(wrong_bidder, "pending unknown bidder")
 
+	var canonical_participants: Array = pending.get("participants", [])
+	if canonical_participants.size() >= 3:
+		var wrong_opening_bidder := clean.duplicate(true)
+		wrong_opening_bidder["pending_auction"]["bidder_id"] = int(canonical_participants[1])
+		_invalid_record(wrong_opening_bidder, "pending opening bidder order")
+
+		var wrong_highest_next := clean.duplicate(true)
+		wrong_highest_next["pending_auction"]["current_bid"] = int(pending.get("opening_bid", 0)) + 100
+		wrong_highest_next["pending_auction"]["highest_bidder_id"] = int(canonical_participants[0])
+		wrong_highest_next["pending_auction"]["bidder_id"] = int(canonical_participants[2])
+		_invalid_record(wrong_highest_next, "pending bidder after highest order")
+
 	var wrong_target := clean.duplicate(true)
 	wrong_target["pending_auction"]["node_id"] = game.state["board"].size() - 1
 	_invalid_record(wrong_target, "pending wrong target kind")

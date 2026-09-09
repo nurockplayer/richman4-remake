@@ -256,6 +256,9 @@ static func _validate_static_shape(game: Object, data: Dictionary, pending: Dict
 		errors.append("pending auction bid increment sequence invalid")
 	if (current_bid == opening and highest_id != -1) or (current_bid > opening and highest_id < 0):
 		errors.append("pending auction bid and highest bidder mismatch")
+	var expected_bidder: int = _first_active_participant(participants, withdrawn) if highest_id < 0 else _next_active_participant(participants, highest_id, withdrawn)
+	if bidder_id != expected_bidder:
+		errors.append("pending auction bidder order mismatch")
 	var active_count := 0
 	for id in participants:
 		if not withdrawn.has(id) and id != highest_id:
@@ -314,6 +317,26 @@ static func _strict_sorted_unique(values: Array) -> bool:
 		if int(values[index]) <= int(values[index - 1]):
 			return false
 	return true
+
+
+static func _first_active_participant(participants: Array, withdrawn: Array) -> int:
+	for value in participants:
+		var participant_id := int(value)
+		if not withdrawn.has(participant_id):
+			return participant_id
+	return -1
+
+
+static func _next_active_participant(participants: Array, anchor_id: int, withdrawn: Array) -> int:
+	var anchor_index := participants.find(anchor_id)
+	if anchor_index < 0 or participants.is_empty():
+		return -1
+	for offset in range(1, participants.size() + 1):
+		var index := (anchor_index + offset) % participants.size()
+		var participant_id := int(participants[index])
+		if participant_id != anchor_id and not withdrawn.has(participant_id):
+			return participant_id
+	return -1
 
 
 static func _validate_runtime(game: Object, pending: Dictionary) -> Array:

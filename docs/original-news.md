@@ -31,6 +31,7 @@ optional `news` 保存 `order`、`cursor`、`draw_count` 與已完成的 `last`�
 
 - `tests/news_flow.gd`：抽選與效果契約。
 - `tests/news_eligibility.gd`：沒有地產或持股時跳過相應候選。
+- `tests/news_price_and_rewards.gd`：地價欄位邊界、現金獎勵記帳、單棟損害與公司事件碼迴繞。
 - `tests/news_save.gd`：optional 資料、拒貸 counter、結構 migration 及 JSON continuation。
 - `tests/graph_flow.gd`：新聞節點分類、落點與經過行為。
 - `tests/news_public_tax.gd`：實際擲骰／選路落點的全體稅款、行動者破產與單次交接。

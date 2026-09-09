@@ -17,6 +17,7 @@ func _initialize() -> void:
 	_test_demon_chooses_enemy_without_group_collateral()
 	_test_monster_chooses_enemy_built_target()
 	_test_demon_avoids_shared_own_group()
+	_test_angel_minimizes_other_gains()
 	print("Original building-card AI checks: %d, failures: %d, bootstrap_red: %d" % [checks, failures, bootstrap_red])
 	quit(1 if failures or bootstrap_red > 0 else 0)
 
@@ -168,3 +169,17 @@ func _test_demon_avoids_shared_own_group() -> void:
 	_expect(game.state.players[0].cards.has("惡魔"), "AI retains demon when only enemy target would destroy its own group")
 	_expect(_card_event(game, "惡魔").is_empty(), "AI produces no destructive card event for shared own group")
 	_expect(game.state.board[2].building_level == 2 and game.state.board[3].building_level == 3, "AI preserves both buildings when avoiding group collateral")
+
+
+func _test_angel_minimizes_other_gains() -> void:
+	# Both choices give the AI one level. The own facility improves nobody
+	# else; the own house would also give a rival a free level.
+	var game: Object = _stage_game(13105, "天使", 4, 1, "shared-group", "shared-group")
+	if game == null:
+		return
+	game._update_facility_records(1, {"owner": 0, "building_level": 1, "facility_type": 1})
+	game.state.players[0].properties = [1, 2]
+	game._recalculate_property_values()
+	game._set_action_options(0)
+	_assert_ai_card_case(game, "天使", 1, "Angel equal-own-benefit conservative choice", 3)
+	_expect(game.state.board[3].building_level == 1, "Angel tie choice leaves the rival building unchanged")

@@ -97,6 +97,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/research_admission.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_status_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/research_ui.gd
+
+# Issue #81 時光機與傳送機 target, save, deterministic and UI acceptance.
+run_checked "$GODOT_BIN" --headless --path . --script tests/time_transport_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/time_transport_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/time_transport_ui.gd
+
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ai.gd

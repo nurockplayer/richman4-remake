@@ -38,6 +38,7 @@ const FinancialRules = preload("res://game/core/financial_cards_rules.gd")
 const AllianceRules = preload("res://game/core/alliance_rules.gd")
 const AuctionRules = preload("res://game/core/auction_rules.gd")
 const MissileRules = preload("res://game/core/missile_rules.gd")
+const TimeTransportRules = preload("res://game/core/time_transport_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -91,7 +92,7 @@ const AI_SUMMON_GOD_IDS = [1, 2, 3, 4, 12]
 const PROPERTY_CARD_IDS = ["換地", "換屋"]
 const REMODEL_CARD_ID = "改建"
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
-const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人", "工程車", "飛彈", "核子飛彈"]
+const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人", "時光機", "傳送機", "工程車", "飛彈", "核子飛彈"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
 	"car": "汽車",
@@ -166,6 +167,8 @@ var _resolving_fate := false
 var _running_sleep_turn := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _time_anchors: Dictionary = {}
+var _time_anchor_sequence: int = 0
 
 
 static func new_game(seed_value: int, player_count: int = 4, options: Dictionary = {}) -> Richman4GameState:
@@ -534,6 +537,8 @@ func _is_gods() -> bool:
 
 func _initialize(seed_value: int, player_count: int) -> void:
 	_rng.seed = seed_value
+	_time_anchors.clear()
+	_time_anchor_sequence = 0
 	state = {
 		"version": SAVE_VERSION,
 		"ruleset": RULESET_ID,
@@ -580,6 +585,8 @@ func _initialize(seed_value: int, player_count: int) -> void:
 
 func _initialize_graph(seed_value: int, player_count: int, definition: Dictionary) -> void:
 	_rng.seed = seed_value
+	_time_anchors.clear()
+	_time_anchor_sequence = 0
 	var start_position: int = int(definition.get("start_position", 0))
 	var board_value: Variant = _canonicalize_json_numbers(definition.get("board", []).duplicate(true))
 	var board: Array = board_value
@@ -2109,6 +2116,62 @@ func _current_player() -> Dictionary:
 	return _player(int(state.get("current_player", -1)))
 
 
+## Read-only target selectors for the original research transport tool.
+## Validation is repeated by the mutating action; these methods only expose the
+## currently legal identities to the UI and AI.
+func transport_targets(target_kind: String) -> Array:
+	return TimeTransportRules.transport_targets(self, target_kind)
+
+
+func transport_destinations(target_kind: String, target_id: Variant) -> Array:
+	return TimeTransportRules.transport_destinations(self, target_kind, target_id)
+
+
+func time_machine_status() -> Dictionary:
+	return TimeTransportRules.time_machine_status(self)
+
+
+func _time_anchor_snapshot(player_id: int) -> Dictionary:
+	var record: Variant = _time_anchors.get(player_id, null)
+	if typeof(record) != TYPE_DICTIONARY:
+		return {}
+	var saved: Variant = record.get("state", null)
+	return saved.duplicate(true) if typeof(saved) == TYPE_DICTIONARY else {}
+
+
+func _capture_time_anchor(player_id: int) -> bool:
+	if not TimeTransportRules.is_supported(self):
+		return false
+	if str(state.get("phase", "")) != "await_roll":
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)) or not bool(player.get("is_human", false)) or bool(player.get("is_ai", false)):
+		return false
+	# Keep the anchor private.  It is a complete legal save-shaped snapshot, but
+	# it never enters state/to_dict and therefore disappears across JSON load.
+	_sync_state()
+	_time_anchor_sequence += 1
+	_time_anchors[player_id] = {"state": state.duplicate(true), "sequence": _time_anchor_sequence}
+	return true
+
+
+func _replace_time_anchor_after_restore(player_id: int, restored_state: Dictionary) -> void:
+	var previous: Variant = _time_anchors.get(player_id, null)
+	var sequence: int = 0
+	if typeof(previous) == TYPE_DICTIONARY:
+		sequence = int(previous.get("sequence", 0))
+	if sequence <= 0:
+		_time_anchor_sequence += 1
+		sequence = _time_anchor_sequence
+	# Restoring an earlier world discards anchors captured in the abandoned
+	# future, including anchors belonging to another human player.
+	for key in _time_anchors.keys().duplicate():
+		var record: Variant = _time_anchors.get(key, null)
+		if typeof(record) == TYPE_DICTIONARY and int(record.get("sequence", 0)) > sequence:
+			_time_anchors.erase(key)
+	_time_anchors[player_id] = {"state": restored_state.duplicate(true), "sequence": sequence}
+
+
 func _valid_player(player_id: int, require_alive: bool = false) -> bool:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty():
@@ -2190,7 +2253,10 @@ func _set_action_options(player_id: int) -> void:
 	# v8 status turns expose only their legal turn control.  Keeping this gate
 	# here also makes snapshots consumed by the UI agree with choose_action.
 	if _is_statuses() and _status_active(player):
-		state["action_options"] = ["end_turn"] if phase == "await_action" else []
+		if phase == "await_roll" and int(player.get("tools", {}).get(TimeTransportRules.TIME_MACHINE, 0)) > 0:
+			state["action_options"] = ["use_tool"]
+		else:
+			state["action_options"] = ["end_turn"] if phase == "await_action" else []
 		return
 	var bank_open: bool = not _is_sunday()
 	var stock_open: bool = bank_open and (not _is_companies() or bool(state.get("market", {}).get("open", false)))
@@ -3182,6 +3248,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 			return _is_statuses()
 		return IMPLEMENTED_CARD_IDS.has(item_id)
 	if normalized_kind == "tool":
+		if item_id in [TimeTransportRules.TIME_MACHINE, TimeTransportRules.TRANSPORTER]:
+			return TimeTransportRules.is_supported(self)
 		if item_id in ["地雷", "定時炸彈", "機器娃娃"]:
 			return _is_hazards()
 		if MissileRules.is_missile(item_id):
@@ -3952,13 +4020,18 @@ func roll(dice_count: int = -1) -> Dictionary:
 	var maximum: int = int(VEHICLE_DICE.get(str(player.get("vehicle", "walking")), 1))
 	var count: int = int(player.get("dice_count", maximum)) if dice_count < 1 else dice_count
 	var turtle_step: bool = int(player.get("turtle_days", 0)) > 0
-	if turtle_step:
-		player["turtle_days"] = int(player.get("turtle_days", 0)) - 1
 	if count < 1 or count > maximum:
 		return _error("骰子數量超出交通工具限制")
+	var stationary_turn: bool = int(player.get("stay_next", 0)) > 0
+	# Capture before turtle decrement, pending remote consumption, and any RNG
+	# call.  A stationary turn has no movement and therefore keeps its prior
+	# anchor.
+	if not stationary_turn:
+		_capture_time_anchor(player_id)
+	if turtle_step:
+		player["turtle_days"] = int(player.get("turtle_days", 0)) - 1
 	var dice: Array = []
 	var total: int = 0
-	var stationary_turn: bool = int(player.get("stay_next", 0)) > 0
 	if not pending_remote.is_empty():
 		var remote_value: Variant = pending_remote.get("value", null)
 		if not _valid_int(remote_value, 1, 6):
@@ -5078,7 +5151,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return _error("請先回應陷害卡")
 	if _sleep_active(_current_player()) and normalized != "end_turn":
 		return _error("睡眠期間無法執行主動操作")
-	if _is_statuses() and _status_active(_current_player()) and normalized != "end_turn":
+	var detained_time_machine_action: bool = normalized == "use_tool" and typeof(params.get("tool_id", null)) == TYPE_STRING and str(params.get("tool_id", "")) == TimeTransportRules.TIME_MACHINE
+	if _is_statuses() and _status_active(_current_player()) and normalized != "end_turn" and not detained_time_machine_action:
 		return _error("拘留期間無法執行主動操作")
 	if _is_companies() and int(state.get("company_service_pending",0))>0 and normalized != "company_upgrade":
 		return _error("請先選擇企業建設目標")
@@ -5238,6 +5312,10 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	if typeof(raw_tool_id) != TYPE_STRING:
 		return _error("道具代號格式無效")
 	var tool_id: String = str(raw_tool_id)
+	if tool_id == TimeTransportRules.TIME_MACHINE:
+		return TimeTransportRules.use_time_machine(self, player_id, params)
+	if tool_id == TimeTransportRules.TRANSPORTER:
+		return TimeTransportRules.use_transport(self, player_id, params)
 	if MissileRules.is_missile(tool_id):
 		return MissileRules.use(self, player_id, params)
 	var engineering_landing: bool = tool_id == "工程車" and state.get("phase", "") == "await_action"
@@ -7333,6 +7411,8 @@ func _ai_roll_action(player_id: int) -> void:
 			return
 	if _inventory_movement_blocked(player):
 		return
+	if _ai_transport_action(player_id):
+		return
 	if _ai_remodel_action(player_id):
 		return
 	if _ai_property_card_action(player_id):
@@ -7388,6 +7468,30 @@ func _ai_roll_action(player_id: int) -> void:
 		var result: Dictionary = choose_action("use_tool", params)
 		if bool(result.get("ok", false)):
 			return
+
+
+func _ai_transport_action(player_id: int) -> bool:
+	if not TimeTransportRules.is_supported(self):
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("is_ai", false)):
+		return false
+	if int(player.get("tools", {}).get(TimeTransportRules.TRANSPORTER, 0)) <= 0:
+		return false
+	var current_position: int = int(player.get("position", -1))
+	for destination_value in transport_destinations("player", player_id):
+		var destination_id: int = int(destination_value)
+		if destination_id == current_position:
+			continue
+		var result: Dictionary = choose_action("use_tool", {
+			"tool_id": TimeTransportRules.TRANSPORTER,
+			"target_kind": "player",
+			"target_id": player_id,
+			"destination_id": destination_id,
+		})
+		if bool(result.get("ok", false)):
+			return true
+	return false
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:

@@ -250,7 +250,7 @@ func _test_pair_replacement_and_refresh() -> void:
 	if not bool(first.get("ok", false)):
 		return
 	prepare_action(game, 2, 2)
-	stage_card(game)
+	stage_card(game, 2)
 	legal(game, "second alliance pair before replacement")
 	var second: Dictionary = game.choose_action("use_card", {"card_id": ALLIANCE_CARD, "target_id": 3, "cancel": false})
 	expect(bool(second.get("ok", false)), "second alliance pair succeeds")
@@ -478,14 +478,14 @@ func _test_allied_property_facility_and_company_paths() -> void:
 		expect_equal(int(god_rent.state["players"][1]["cash"]), god_owner_before + 212, "god-modified combined rent gives the owner its proportional actual payment")
 		expect_equal(int(god_rent.state["players"][0]["cash"]), god_ally_before + 88, "god-modified combined rent gives the ally its proportional actual payment")
 		expect_equal((int(god_rent.state["players"][1]["cash"]) - god_owner_before) + (int(god_rent.state["players"][0]["cash"]) - god_ally_before), god_payer_before, "god-modified split credits only actually payable funds")
-	var god_modifiers: Array = []
-	for event_value in god_rent.state.get("event_log", []):
-		if typeof(event_value) == TYPE_DICTIONARY and event_value.get("type", "") == "god_charge_modifier" and event_value.get("reason", "") == "rent":
-			god_modifiers.append(event_value)
-	expect_equal(god_modifiers.size(), 1, "combined rent applies the god modifier exactly once")
-	if god_modifiers.size() == 1:
-		expect_equal(int(god_modifiers[0].get("from_amount", -1)), 850, "god modifier sees the combined same-name rent")
-		expect_equal(int(god_modifiers[0].get("to_amount", -1)), 425, "god modifier halves the combined same-name rent once")
+		var god_modifiers: Array = []
+		for event_value in god_rent.state.get("event_log", []):
+			if typeof(event_value) == TYPE_DICTIONARY and event_value.get("type", "") == "god_charge_modifier" and event_value.get("reason", "") == "rent":
+				god_modifiers.append(event_value)
+		expect_equal(god_modifiers.size(), 1, "combined rent applies the god modifier exactly once")
+		if god_modifiers.size() == 1:
+			expect_equal(int(god_modifiers[0].get("from_amount", -1)), 850, "god modifier sees the combined same-name rent")
+			expect_equal(int(god_modifiers[0].get("to_amount", -1)), 425, "god modifier halves the combined same-name rent once")
 
 	var company: Object = fresh(75056)
 	if company != null:

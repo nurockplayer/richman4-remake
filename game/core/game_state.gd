@@ -6079,7 +6079,7 @@ func _ai_building_card_target(player_id: int, card_id: String) -> Dictionary:
 				if int(tile.get("owner", -1)) != player_id or own_gain <= 0:
 					continue
 				own_priority = 2 if int(tile.get("owner", -1)) == player_id and own_gain > 0 else 1 if own_gain > 0 else 0
-				score = own_gain * 100 + enemy_gain
+				score = own_gain * 100 - enemy_gain
 			else:
 				score = int(tile.get("building_level", 0))
 		else:

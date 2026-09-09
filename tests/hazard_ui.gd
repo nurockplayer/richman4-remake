@@ -77,6 +77,21 @@ func run() -> void:
 	expect(ui._event_detail("machine_doll_cleared",{"steps":9,"removed_hazards":[{"node":0}],"removed_roadblocks":[],"removed_gods":[]}).contains("清除 1 個物件"),"machine result explains its cleanup count")
 	ui.board_view.set_preview_definition(definition)
 	expect(ui.board_view.ground_hazards_data.is_empty(),"map preview cannot retain live hazard markers")
+	# Recreate the loaded-game path, then invoke the actual end-screen handler.
+	var wrong_source: Dictionary=definition.duplicate(true)
+	wrong_source.source.payload_sha256="c".repeat(64)
+	wrong_source.erase("supports_original_hazards")
+	ui._map_catalog=[wrong_source,definition.duplicate(true)]
+	ui._update_map_selector()
+	ui._active_map_definition={}
+	ui._adopt_map_from_snapshot(game.to_dict())
+	ui._on_end_restart_pressed()
+	expect(ui.game_state!=game,"loaded v9 end-screen restart creates a new game")
+	expect(ui.game_state.state.get("version",0)==9,"actual restart preserves hazard capability")
+	expect(ui.game_state.state.get("ground_hazards",{}).is_empty(),"actual restart clears old hazards")
+	expect(ui.game_state.state.players[0].get("bomb_steps",-1)==0,"actual restart clears carried countdown")
+	expect(ui.game_state.state.get("phase","")=="await_roll","actual restart starts at the roll phase")
+	expect(ui.game_state.validate_save(ui.game_state.to_dict()).get("ok",false),"restarted snapshot is valid")
 	var legacy:=Fixture.definition()
 	expect(not ui._default_setup_options(4,legacy).get("original_hazards",false),"status-only definition keeps v8 setup")
 	finish(ui)

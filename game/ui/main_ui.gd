@@ -1635,7 +1635,14 @@ func _restart_game() -> void:
 		player_count = PLAYER_COUNT
 	var seed_value: Variant = state.get("seed", null)
 	var options := _setup_options_from_state()
-	_new_game(seed_value, player_count, _active_map_definition, options)
+	var restart_definition := _active_map_definition
+	# A loaded snapshot supplies current geometry for display, but a new match
+	# needs the matching source's capabilities and initial company/stock data.
+	for definition_value in _map_catalog:
+		if definition_value is Dictionary and str(definition_value.get("id", "")) == str(_active_map_definition.get("id", "")) and _map_source_matches(definition_value.get("source", {}), _active_map_definition.get("source", {})):
+			restart_definition = definition_value
+			break
+	_new_game(seed_value, player_count, restart_definition, options)
 
 func _on_end_restart_pressed() -> void:
 	_restart_game()

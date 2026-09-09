@@ -882,7 +882,7 @@ func _admit_player_status(player_id: int, kind: String, added_days: int) -> Dict
 		state["route_options"] = []
 		state["remaining_steps"] = 0
 		state["pending_movement"] = {}
-		if state.get("phase", "") == "await_route":
+		if state.get("phase", "") == "await_route" or (_is_hazards() and state.get("phase", "") == "await_roll"):
 			state["phase"] = "await_action"
 	_sync_attached_gods()
 	# Insurance is charged for the admission input even when the status wraps or
@@ -2640,6 +2640,7 @@ func _hazard_damage_property(node_id: int) -> Dictionary:
 		# state when the demolition reaches level zero.
 		if next_level == 0:
 			updates["facility_state"] = 0
+			updates["facility_type"] = 0
 		_update_facility_records(int(facility.get("source_object_id", -1)), updates)
 		_recalculate_property_values()
 		return {"damaged": true, "kind": kind, "from_level": facility_level, "to_level": next_level, "tile_id": _facility_canonical_index(node_id), "source_object_id": int(facility.get("source_object_id", -1))}
@@ -3715,6 +3716,11 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		var bank: Dictionary = state.get("bank", {})
 		bank["loans"] = max(0, int(bank.get("loans", 0)) - loan)
 		state["bank"] = bank
+	if _is_hazards() and int(debtor.get("bomb_steps", 0)) > 0:
+		# A carried timed bomb is an active road object, so bankruptcy releases
+		# its finite slot before the player leaves the active roster.
+		debtor["bomb_steps"] = 0
+		_hazard_return_tool_to_supply("定時炸彈")
 	debtor["cash"] = 0
 	debtor["deposit"] = 0
 	debtor["loan"] = 0
@@ -6559,6 +6565,10 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					for roadblock_player in players:
 						if typeof(roadblock_player) == TYPE_DICTIONARY and _valid_bool(roadblock_player.get("alive", null)) and bool(roadblock_player.get("alive", false)) and _valid_int(roadblock_player.get("position", null), 0, graph_board_size_for_roadblocks - 1) and int(roadblock_player.get("position")) == roadblock_index:
 							errors.append("roadblock target is occupied")
+				if hazards_save and typeof(data.get("god_objects", null)) == TYPE_ARRAY:
+					for roadblock_god in data.get("god_objects", []):
+						if typeof(roadblock_god) == TYPE_DICTIONARY and _valid_int(roadblock_god.get("owner", null), -1, -1) and _valid_int(roadblock_god.get("node", null), roadblock_index, roadblock_index):
+							errors.append("roadblock target overlaps dynamic road object")
 			if hazards_save:
 				hazard_active_tool_counts["路障"] = roadblocks_value.size()
 
@@ -6698,6 +6708,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("player %d %s invalid" % [index, counter_key])
 				if hazards_save and not _valid_int(player.get("bomb_steps", null), 0, MAX_BOMB_STEPS):
 					errors.append("player %d bomb_steps invalid" % index)
+				elif hazards_save and not bool(player.get("alive", false)) and int(player.get("bomb_steps", 0)) > 0:
+					errors.append("dead player cannot carry bomb")
 			if companies_save and not _valid_int(player.get("insurance_status"), 0, 128):
 				errors.append("player %d insurance_status invalid" % index)
 			if gods_save:

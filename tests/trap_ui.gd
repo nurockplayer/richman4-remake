@@ -74,7 +74,7 @@ func run() -> void:
 	ui._update_cards_popup()
 	for card in ["免罪","復仇","嫁禍"]:
 		var passive: Button=ui.cards_popup_list.find_child("UseCard_"+card,true,false)
-		expect(passive!=null and passive.disabled and passive.text==("遭陷害時選擇" if card=="嫁禍" else "自動觸發"),"inventory explains passive "+card)
+		expect(passive!=null and passive.disabled and passive.text==("受影響時選擇" if card=="嫁禍" else "自動觸發"),"inventory explains passive "+card)
 	var picker: OptionButton=ui.cards_popup_list.find_child("CardTarget_陷害",true,false)
 	var legal: Array=game.trap_target_players(0)
 	var visible: Array=ui.board_view.visible_node_indices()

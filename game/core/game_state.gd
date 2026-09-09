@@ -1196,14 +1196,18 @@ func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
 		_charge_amount(player_id, amount, -int(company.id)-2, "company", false)
 
 
-static func _company_upgrade_target_ids(board: Array, player_id: int) -> Array:
+static func _property_level_cap(tile: Dictionary, remodel_enabled: bool = false) -> int:
+	return 1 if remodel_enabled and bool(tile.get("is_chain_store", false)) else MAX_PROPERTY_LEVEL
+
+
+static func _company_upgrade_target_ids(board: Array, player_id: int, remodel_enabled: bool = false) -> Array:
 	var targets: Array = []
 	var seen_facilities: Dictionary = {}
 	for tile in board:
 		if typeof(tile) != TYPE_DICTIONARY or not _valid_int(tile.get("owner"), player_id, player_id) or not _valid_int(tile.get("index"),0,board.size()-1): continue
 		var kind := str(tile.get("kind", ""))
 		var level: Variant = tile.get("building_level")
-		if kind == "property" and _valid_int(level, 0, MAX_PROPERTY_LEVEL-1):
+		if kind == "property" and _valid_int(level, 0, _property_level_cap(tile, remodel_enabled)-1):
 			targets.append(int(tile.index))
 		elif kind == "facility" and _valid_int(level, 0, 5):
 			var facility_type: Variant = tile.get("facility_type")
@@ -1219,7 +1223,7 @@ static func _company_upgrade_target_ids(board: Array, player_id: int) -> Array:
 
 func get_company_upgrade_targets(player_id: int) -> Array:
 	if not _is_companies() or not bool(_player(player_id).get("alive", false)): return []
-	return _company_upgrade_target_ids(state.board, player_id)
+	return _company_upgrade_target_ids(state.board, player_id, _is_remodel())
 
 
 func get_company_upgrade_fee(player_id: int, tile_id: int, company_owner_id: int) -> int:
@@ -1248,7 +1252,7 @@ func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
 	var tile := _tile_at(int(target_value))
 	var level := int(tile.building_level)
 	var kind := str(tile.kind)
-	var cap := MAX_PROPERTY_LEVEL
+	var cap := _property_level_cap(tile, _is_remodel())
 	var facility_type := -1
 	if kind == "facility":
 		facility_type = int(tile.facility_type)
@@ -1781,7 +1785,7 @@ func _apply_fortune_construction_bonus(player_id: int, tile: Dictionary) -> void
 	var kind: String = str(tile.get("kind", ""))
 	if kind == "property":
 		var level: int = int(tile.get("building_level", 0))
-		if level >= MAX_PROPERTY_LEVEL:
+		if level >= _property_level_cap(tile, _is_remodel()):
 			return
 		tile["building_level"] = level + 1
 		_update_tile_rent(tile)
@@ -2009,9 +2013,7 @@ func _set_action_options(player_id: int) -> void:
 			options.push_front("buy")
 		elif owner == player_id and not _god_investment_blocked(player_id):
 			var level: int = int(tile.get("building_level", 0))
-			var property_cap: int = MAX_PROPERTY_LEVEL
-			if _is_remodel() and typeof(tile.get("is_chain_store", false)) == TYPE_BOOL and bool(tile.get("is_chain_store", false)):
-				property_cap = 1
+			var property_cap: int = _property_level_cap(tile, _is_remodel())
 			if level < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile):
 				options.push_front("upgrade")
 	if not hospitalized and _is_facilities() and _is_graph() and tile.get("kind", "") == "facility" and not bool(state.get("property_action_used", false)):
@@ -2548,9 +2550,7 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 		if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) < 0:
 			return "機器工人只能作用於已持有的住宅或設施"
 		var property_level: int = int(tile.get("building_level", 0))
-		var property_cap: int = MAX_PROPERTY_LEVEL
-		if _is_remodel() and bool(tile.get("is_chain_store", false)):
-			property_cap = 1
+		var property_cap: int = _property_level_cap(tile, _is_remodel())
 		if property_level >= property_cap:
 			return "連鎖店已達最高一級" if property_cap == 1 else "住宅已達最高五級"
 		return ""
@@ -3574,8 +3574,8 @@ func _apply_god_property_effect(player_id: int, tile: Dictionary, final_landing:
 			if angel_type == FACILITY_LAB_TYPE:
 				return
 			angel_cap = _facility_type_cap(angel_type)
-		elif _is_remodel() and bool(tile.get("is_chain_store", false)):
-			angel_cap = 1
+		else:
+			angel_cap = _property_level_cap(tile, _is_remodel())
 		if level >= angel_cap:
 			return
 		next_level = level + 1
@@ -4118,6 +4118,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 			else:
 				tile["owner"] = -1
 				tile["building_level"] = 0
+				if _is_remodel():
+					tile["is_chain_store"] = false
 				_update_tile_rent(tile)
 		if transfer_to >= 0:
 			var transferred_receiver: Dictionary = _player(transfer_to)
@@ -4367,9 +4369,7 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 				_record_event("tool_used", {"player_id": player_id, "tool_id": tool_id, "tile_id": _facility_canonical_index(target_id), "source_object_id": worker_source_id, "level": worker_level, "effect": "build_facility"})
 			else:
 				var worker_level: int = int(worker_tile.get("building_level", 0))
-				var worker_cap: int = MAX_PROPERTY_LEVEL
-				if _is_remodel() and bool(worker_tile.get("is_chain_store", false)):
-					worker_cap = 1
+				var worker_cap: int = _property_level_cap(worker_tile, _is_remodel())
 				if worker_level >= worker_cap:
 					return _error("連鎖店已達最高一級" if worker_cap == 1 else "住宅已達最高五級")
 				worker_tile["building_level"] = worker_level + 1
@@ -4546,9 +4546,7 @@ func _upgrade_property(player_id: int) -> Dictionary:
 	if tile.get("kind", "") != "property" or int(tile.get("owner", -1)) != player_id:
 		return _error("目前位置不是自己的土地")
 	var level: int = int(tile.get("building_level", 0))
-	var property_cap: int = MAX_PROPERTY_LEVEL
-	if _is_remodel() and bool(tile.get("is_chain_store", false)):
-		property_cap = 1
+	var property_cap: int = _property_level_cap(tile, _is_remodel())
 	if level >= property_cap:
 		return _error("連鎖店已達最高一級" if property_cap == 1 else "土地已達最高五級")
 	var price: int = _upgrade_price(tile)
@@ -5539,9 +5537,7 @@ func _ai_action(player_id: int) -> void:
 			var buy_result: Dictionary = choose_action("buy")
 			if bool(buy_result.get("ok", false)):
 				return
-		var property_cap: int = MAX_PROPERTY_LEVEL
-		if _is_remodel() and typeof(tile.get("is_chain_store", false)) == TYPE_BOOL and bool(tile.get("is_chain_store", false)):
-			property_cap = 1
+		var property_cap: int = _property_level_cap(tile, _is_remodel())
 		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
 			var upgrade_result: Dictionary = choose_action("upgrade")
 			if bool(upgrade_result.get("ok", false)):
@@ -7728,7 +7724,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					if typeof(pending_tile)==TYPE_DICTIONARY and _valid_int(pending_tile.get("type_and_idx"),6000+int(pending_company),6000+int(pending_company)):
 						for company in data.companies:
 							if typeof(company)==TYPE_DICTIONARY and _valid_int(company.get("id"),int(pending_company),int(pending_company)) and _valid_int(company.get("company_type"),11,11) and _valid_int(company.get("owner"),0,players.size()-1):
-								pending_valid=data.get("phase","")=="await_action" and not _company_upgrade_target_ids(board,int(data.current_player)).is_empty()
+								pending_valid=data.get("phase","")=="await_action" and not _company_upgrade_target_ids(board,int(data.current_player),remodel_save).is_empty()
 			if pending_valid and errors.is_empty():
 				var pending_game = new()
 				pending_game.state = data

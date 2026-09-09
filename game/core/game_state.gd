@@ -27,6 +27,7 @@ const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
 const OriginalMaps = preload("res://game/content/original_maps.gd")
 const OriginalInventory = preload("res://game/core/inventory_rules.gd")
+const TheftRules = preload("res://game/core/theft_rules.gd")
 const OriginalInventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
@@ -788,6 +789,16 @@ func _ai_trap_target(caster_id: int) -> int:
 		if not _trap_has_card(_player(int(target_id)), "復仇"):
 			return int(target_id)
 	return -1
+
+
+## Public inventory choices for the current 搶奪 card action.  The picker
+## filters these legal records by visible board nodes; the core validates the
+## selected identity again when the action is confirmed.
+func theft_choices(player_id: int = -1) -> Array:
+	if not _is_inventory():
+		return []
+	var actor_id: int = int(state.get("current_player", -1)) if player_id < 0 else player_id
+	return TheftRules.choices(_players(), actor_id)
 
 
 func trap_response_targets() -> Array:
@@ -4864,8 +4875,22 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _use_tool(player_id, params)
 		"use_card":
 			var card_id: String = str(params.get("card_id", ""))
-			var card_result: Dictionary = _use_card(player_id, card_id, int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)), params.get("facility_type", null), params.get("visible_tile_ids", null))
-			if (PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			var selected_target: Variant = player_id
+			var selected_item_kind: Variant = null
+			var selected_item_id: Variant = null
+			var selected_cancel: Variant = false
+			if card_id == "搶奪":
+				# Keep the raw values for the theft boundary so malformed target,
+				# item, and cancel fields are rejected instead of being coerced.
+				selected_target = params.get("target_id", null)
+				selected_item_kind = params.get("item_kind", null)
+				selected_item_id = params.get("item_id", null)
+				selected_cancel = params.get("cancel", false)
+			else:
+				selected_target = int(params.get("target_id", player_id))
+				selected_cancel = bool(params.get("cancel", false))
+			var card_result: Dictionary = _use_card(player_id, card_id, selected_target, str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), selected_cancel, params.get("facility_type", null), params.get("visible_tile_ids", null), selected_item_kind, selected_item_id)
+			if (card_id == "搶奪" or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5583,11 +5608,43 @@ func _use_god_card(player_id: int, card_id: String, visible_tile_ids: Variant = 
 	return _result(true, "已使用請神符", {"card_id": card_id, "god_id": target_god_id, "target_node": summon_node, "effect": "summon_god"})
 
 
-func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "", tile_id: Variant = -1, cancel: bool = false, facility_type: Variant = null, visible_tile_ids: Variant = null) -> Dictionary:
+func _use_theft_card(player_id: int, target_id: Variant, item_kind: Variant, item_id: Variant, cancel: Variant) -> Dictionary:
+	if not _is_inventory():
+		return _error("搶奪卡只適用於原版背包地圖")
+	var transfer: Dictionary = TheftRules.resolve(state.get("inventory_supply", {}), state.get("players", []), player_id, target_id, item_kind, item_id, cancel)
+	if not bool(transfer.get("ok", false)):
+		return _error(str(transfer.get("error", "搶奪卡無法使用")))
+	var event_payload: Dictionary = {
+		"player_id": player_id,
+		"card_id": "搶奪",
+		"target_id": int(transfer.get("target_id", -1)),
+		"item_kind": str(transfer.get("item_kind", "")),
+		"item_id": str(transfer.get("item_id", "")),
+		"quantity": int(transfer.get("quantity", 1)),
+		"received": bool(transfer.get("received", false)),
+		"capacity_full": bool(transfer.get("capacity_full", false)),
+		"evicted_card_id": str(transfer.get("evicted_card_id", "")),
+		"robbery_consumed": bool(transfer.get("robbery_consumed", false)),
+		"effect": "theft",
+	}
+	_record_event("card_used", event_payload)
+	_set_action_options(player_id)
+	var result_extra: Dictionary = event_payload.duplicate(true)
+	result_extra.erase("effect")
+	return _result(true, "已使用搶奪卡", result_extra)
+
+
+func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol: String = "", tile_id: Variant = -1, cancel: Variant = false, facility_type: Variant = null, visible_tile_ids: Variant = null, theft_item_kind: Variant = null, theft_item_id: Variant = null) -> Dictionary:
 	if _is_inventory():
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
 			return _error("遙控骰子已經排程")
+	if card_id == "搶奪":
+		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)
+	# All non-theft callers provide the legacy integer target and boolean
+	# cancellation fields. Keep the rest of this method on its original path.
+	var legacy_target_id: int = int(target_id)
+	var legacy_cancel: bool = bool(cancel)
 	if card_id == "購地" or card_id == "拆除":
 		if not _is_inventory():
 			return _error("原版背包卡片效果只適用於 v4")
@@ -5595,13 +5652,13 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 			return _inventory_purchase_card(player_id)
 		return _inventory_demolition_card(player_id, tile_id)
 	if card_id == REMODEL_CARD_ID:
-		return _use_remodel_card(player_id, facility_type, cancel)
+		return _use_remodel_card(player_id, facility_type, legacy_cancel)
 	if BUILDING_CARD_IDS.has(card_id):
 		if not _is_building_cards():
 			return _error("建物卡效果尚未還原")
-		return _use_building_card(player_id, card_id, tile_id, cancel, facility_type)
+		return _use_building_card(player_id, card_id, tile_id, legacy_cancel, facility_type)
 	if GOD_CARD_IDS.has(card_id):
-		return _use_god_card(player_id, card_id, visible_tile_ids, cancel)
+		return _use_god_card(player_id, card_id, visible_tile_ids, legacy_cancel)
 	if card_id == "漲價" or card_id == "查封":
 		if not _is_inventory() or not _is_facilities():
 			return _error("設施卡片只適用於原版設施地圖")
@@ -5633,13 +5690,14 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 	if _is_inventory() and not item_is_implemented("card", card_id):
 		return _error("此卡片效果尚未還原")
 	if PROPERTY_CARD_IDS.has(card_id):
-		return _use_property_card(player_id, card_id, tile_id, cancel)
+		return _use_property_card(player_id, card_id, tile_id, legacy_cancel)
 	if _is_statuses() and card_id in ["免罪", "嫁禍", "復仇"]:
 		return _error("這張卡片只能在陷害時自動觸發")
 	if _is_statuses() and card_id == "陷害":
-		return _use_trap_card(player_id, target_id, cancel)
-	if target_id < 0:
-		target_id = player_id
+		return _use_trap_card(player_id, target_id, legacy_cancel)
+	if legacy_target_id < 0:
+		legacy_target_id = player_id
+	target_id = legacy_target_id
 	if card_id == "停留" or card_id == "烏龜" or card_id == "轉向" or card_id == "均貧":
 		var target_check: Dictionary = _player(target_id)
 		if target_check.is_empty() or not bool(target_check.get("alive", false)):
@@ -6272,6 +6330,59 @@ func run_ai_turn() -> Dictionary:
 	return _result(true, "AI 回合完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": true})
 
 
+func _ai_theft_action(player_id: int) -> bool:
+	if not _is_inventory():
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return false
+	var cards_value: Variant = player.get("cards", null)
+	if not cards_value is Array or not cards_value.has("搶奪"):
+		return false
+	var choices: Array = TheftRules.choices(_players(), player_id)
+	if choices.is_empty():
+		return false
+	# Reuse the status target policy where available.  The theft selector itself
+	# remains broader for humans, while AI only considers the same living,
+	# non-detained target set used by the existing trap evaluator.
+	var nearby_targets: Array = []
+	var enforce_nearby_policy: bool = _is_statuses()
+	if enforce_nearby_policy:
+		nearby_targets = trap_target_players(player_id)
+	var selected: Dictionary = {}
+	var selected_price: int = -1
+	for choice_value in choices:
+		if not choice_value is Dictionary:
+			continue
+		var choice: Dictionary = choice_value
+		var target_id: int = int(choice.get("target_id", -1))
+		if enforce_nearby_policy and not nearby_targets.has(target_id):
+			continue
+		var item_kind: String = str(choice.get("item_kind", ""))
+		# A card hand can evict its cheapest entry, but a full tool type cannot
+		# receive another unit and is therefore skipped by the AI.
+		if item_kind == "tool" and bool(choice.get("capacity_full", false)):
+			continue
+		var record: Dictionary = _inventory_record(item_kind, str(choice.get("item_id", "")))
+		if record.is_empty():
+			continue
+		var price: int = int(record.get("price", -1))
+		# Strictly greater preserves the deterministic first-choice tie break.
+		if price > selected_price:
+			selected_price = price
+			selected = choice
+	if selected.is_empty():
+		return false
+	var theft_params: Dictionary = {
+		"card_id": "搶奪",
+		"target_id": int(selected.get("target_id", -1)),
+		"item_kind": str(selected.get("item_kind", "")),
+		"item_id": str(selected.get("item_id", "")),
+	}
+	var result: Dictionary = choose_action("use_card", theft_params)
+	return bool(result.get("ok", false))
+
+
 func _ai_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if _trap_pending():
@@ -6302,6 +6413,8 @@ func _ai_action(player_id: int) -> void:
 	if _ai_property_card_action(player_id):
 		return
 	if _ai_building_card_action(player_id):
+		return
+	if _ai_theft_action(player_id):
 		return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":
@@ -6877,6 +6990,8 @@ func _ai_roll_action(player_id: int) -> void:
 	if _ai_property_card_action(player_id):
 		return
 	if _ai_god_card_action(player_id):
+		return
+	if _ai_theft_action(player_id):
 		return
 	var tools: Dictionary = player.get("tools", {})
 	var active_vehicle: String = str(player.get("vehicle", "walking"))

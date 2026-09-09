@@ -12,6 +12,7 @@ func _init() -> void:
 	size = Vector2i(540, 240)
 	exclusive = true
 	popup_window = false
+	popup_hide.connect(func() -> void: call_deferred("_restore_unanswered"))
 	var margin := MarginContainer.new()
 	for edge in ["left", "top", "right", "bottom"]:
 		margin.add_theme_constant_override("margin_" + edge, 18)
@@ -47,6 +48,10 @@ func _init() -> void:
 		if not _pending.is_empty(): answered.emit({"cancel": true})
 	)
 	box.add_child(decline)
+
+func _restore_unanswered() -> void:
+	if is_inside_tree() and not is_queued_for_deletion() and not _pending.is_empty() and not visible:
+		popup_centered()
 
 static func human_pending(snapshot: Dictionary) -> bool:
 	var pending: Variant = snapshot.get("pending_finance", {})

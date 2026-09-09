@@ -125,3 +125,5 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_ui.gd
+
+run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_action_ui.gd

@@ -15,6 +15,7 @@ scene_path="${RICHMAN4_SCENE_MANIFEST:-}"
 if [[ -n "$scene_path" ]]; then
   python3 tools/package_scene_images.py "$scene_path"
 fi
+audio_assets="${RICHMAN4_AUDIO_ASSETS:-}"
 mkdir -p build
 "$GODOT_BIN" --headless --path . --export-release macOS build/Richman4.zip
 # Extract only our generated application, keeping earlier artifacts untouched.
@@ -30,7 +31,13 @@ fi
 if [[ -n "$scene_path" ]]; then
   python3 tools/package_scene_images.py "$scene_path" --destination "$app_path/Contents/Resources/Original/scenes"
 fi
-if [[ -n "$catalog_path" || -n "$scene_path" ]]; then
+if [[ -n "$audio_assets" ]]; then
+  python3 tools/package_music.py \
+    --asset-root "$audio_assets" \
+    --config config/private-assets.json \
+    --destination "$app_path/Contents/Resources/Original/audio"
+fi
+if [[ -n "$catalog_path" || -n "$scene_path" || -n "$audio_assets" ]]; then
   codesign --force --deep --sign - "$app_path"
   output_zip="build/Richman4-private.zip"
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_zip"

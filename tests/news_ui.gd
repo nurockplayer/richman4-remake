@@ -44,6 +44,16 @@ func run() -> void:
 		var text: String = str(summary.text)
 		check(text.contains("稅"), "news summary names actual tax outcome")
 		check(not text.contains("event_id") and not text.contains("raw_payload") and not text.contains("0x1b9"), "news UI hides implementation payload")
+	if popup != null and popup.visible:
+		game.set_player_ai(0, true)
+		ui._refresh_from_state()
+		var paused: String = game.to_json()
+		ui._on_ai_timer_timeout()
+		check(game.to_json() == paused, "visible news result pauses queued UI AI timer")
+		game.set_player_ai(0, false)
+		ui._refresh_from_state()
+	else:
+		check(false, "news result presentation guards UI AI timer")
 	var close: Button = ui.find_child("CloseNews", true, false)
 	check(close != null and not close.disabled, "news popup has an enabled close action")
 	if close != null: close.pressed.emit()

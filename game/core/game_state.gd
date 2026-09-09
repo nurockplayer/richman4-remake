@@ -3170,6 +3170,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 			return _is_building_cards()
 		if GOD_CARD_IDS.has(item_id):
 			return _is_inventory() and _is_gods() and _is_graph()
+		if item_id == AuctionRules.CARD_ID:
+			return _is_inventory() and _is_graph() and _is_gods()
 		if item_id == REMODEL_CARD_ID:
 			return _is_remodel()
 		if PROPERTY_CARD_IDS.has(item_id):

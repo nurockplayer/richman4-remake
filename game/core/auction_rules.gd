@@ -36,10 +36,10 @@ static func use_card(game: Object, player_id: int, cancel: Variant, params: Dict
 		return game._error("目前玩家無法使用拍賣卡")
 	if not _has_card(player, CARD_ID):
 		return game._error("沒有這張卡片")
+	if not game._is_inventory() or not game._is_graph() or not game._is_gods():
+		return game._error("拍賣卡只適用於原版神明圖形背包地圖")
 	if bool(cancel):
 		return game._result(true, "已取消拍賣卡", {"cancelled": true, "card_id": CARD_ID})
-	if not game._is_inventory() or not game._is_graph():
-		return game._error("拍賣卡只適用於原版圖形背包地圖")
 	var phase: String = str(game.state.get("phase", ""))
 	if phase != "await_action":
 		return game._error("拍賣卡只能在行動階段使用")
@@ -185,6 +185,8 @@ static func validate_save(data: Dictionary, player_count: int, board: Variant, p
 		return errors
 	var players: Array = data.get("players", [])
 	var game := data_validator(data)
+	if game == null or not game._is_inventory() or not game._is_graph() or not game._is_gods():
+		errors.append("pending auction requires original gods graph inventory capability")
 	errors.append_array(_validate_static_shape(game, data, pending, player_count, players, board, phase, action_options))
 	return errors
 
@@ -392,7 +394,8 @@ static func _participants(game: Object, caster_id: int, target: Dictionary, open
 		if not _valid_json_int(candidate_id, 0, game._players().size() - 1) or not bool(candidate.get("alive", false)) or bool(candidate.get("bankrupt", false)):
 			continue
 		var id := int(candidate_id)
-		if game._status_active(candidate) or game._sleep_active(candidate):
+		var is_caster_or_owner: bool = id == caster_id or id == owner_id
+		if not is_caster_or_owner and (game._status_active(candidate) or game._sleep_active(candidate)):
 			continue
 		# The caster and current owner always receive a row; other players need
 		# enough cash to reach at least the opening bid plus the minimum raise.
@@ -414,9 +417,10 @@ static func _capacity_errors(game: Object, pending: Dictionary, amount: int, bid
 	var caster: Dictionary = game._player(caster_id)
 	if caster.is_empty() or int(caster.get("deposit", 0)) > MAX_CASH - amount:
 		errors.append("拍賣收款人的存款上限不足")
-	var bank: Dictionary = game.state.get("bank", {})
-	if typeof(bank) != TYPE_DICTIONARY:
+	var bank_value: Variant = game.state.get("bank", {})
+	if typeof(bank_value) != TYPE_DICTIONARY:
 		return errors + ["銀行資料無效"]
+	var bank: Dictionary = bank_value
 	if int(bank.get("deposits", 0)) > MAX_CASH - amount:
 		errors.append("銀行存款總額上限不足")
 	if int(bank.get("cash", 0)) > MAX_CASH - amount:

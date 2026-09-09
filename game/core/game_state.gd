@@ -5988,6 +5988,10 @@ func run_ai_turn() -> Dictionary:
 		if state.get("phase", "") == "await_roll":
 			if _is_inventory():
 				_ai_roll_action(player_id)
+			# Immediate card effects can end the match or hand off this turn.
+			# Let the loop dispatch the resulting state before attempting a roll.
+			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
+				continue
 			if _trap_pending():
 				continue
 			var roll_result: Dictionary = roll()

@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_entry_and_opening()
 	_test_increment_and_cash_limit()
 	_test_owner_participation_and_no_sale()
+	_test_status_owner_participation_boundaries()
 	_test_sale_accounting_and_self_owner()
 	_test_capacity_no_deadlock()
 	_test_ai_initiated_bounded_auction()
@@ -348,15 +349,6 @@ func _test_owner_participation_and_no_sale() -> void:
 		return
 	Fixture.set_owner(owner_game, _property_node(owner_game), 1)
 	Fixture.prepare(owner_game, 0, _property_node(owner_game))
-	var prison_node := -1
-	for node_id in range(owner_game.state["board"].size()):
-		if typeof(owner_game.state["board"][node_id]) == TYPE_DICTIONARY and owner_game.state["board"][node_id].get("kind", "") == "prison":
-			prison_node = node_id
-			break
-	if prison_node >= 0:
-		owner_game.state["players"][1]["position"] = prison_node
-		owner_game.state["players"][1]["previous_position"] = -1
-		owner_game.state["players"][1]["prison_days"] = 2
 	var owner_staged := Fixture.stage_card(owner_game, 0)
 	_expect(bool(owner_staged.get("ok", false)), "owner participation stages card")
 	var owner_started := _start_or_red(owner_game, "owner participation")
@@ -365,10 +357,57 @@ func _test_owner_participation_and_no_sale() -> void:
 		_expect(not owner_pending.is_empty(), "owner participation exposes pending")
 		if not owner_pending.is_empty():
 			_expect(owner_pending.get("participants", []).has(1), "current owner remains an eligible bidder")
-			_expect(owner_pending.get("participants", []).has(0), "detained current owner and caster rows remain present")
-			owner_game.state["players"][0]["winter_sleep_days"] = 2
-			_expect(bool(Fixture.validate(owner_game).get("ok", false)), "sleeping auction caster remains valid in pending record")
 			_drain_passes(owner_game, "owner-cleanup")
+
+
+func _status_node(game: Object, kind: String) -> int:
+	var status_type: int = 8001 if kind == "hospital" else 8002
+	for node_id in range(game.state["board"].size()):
+		var tile_value: Variant = game.state["board"][node_id]
+		if typeof(tile_value) == TYPE_DICTIONARY and int(tile_value.get("type_and_idx", -1)) == status_type:
+			return node_id
+	return -1
+
+
+func _test_status_owner_participation_boundaries() -> void:
+	for status_kind in ["hospital", "prison", "sleep"]:
+		var game: Object = Fixture.new_game(7833 + ["hospital", "prison", "sleep"].find(status_kind))
+		if game == null:
+			continue
+		var property_id := _property_node(game)
+		Fixture.set_owner(game, property_id, 1)
+		Fixture.prepare(game, 0, property_id)
+		var owner: Dictionary = game.state["players"][1]
+		var excluded: Dictionary = game.state["players"][2]
+		if status_kind == "hospital" or status_kind == "prison":
+			var status_node := _status_node(game, status_kind)
+			_expect(status_node >= 0, "%s status node exists" % status_kind)
+			if status_node < 0:
+				continue
+			owner["position"] = status_node
+			owner["previous_position"] = -1
+			excluded["position"] = status_node
+			excluded["previous_position"] = -1
+			if status_kind == "hospital":
+				owner["hospital_days"] = 2
+				excluded["hospital_days"] = 2
+			else:
+				owner["prison_days"] = 2
+				excluded["prison_days"] = 2
+		else:
+			owner["winter_sleep_days"] = 2
+			excluded["winter_sleep_days"] = 2
+		var staged := Fixture.stage_card(game, 0)
+		_expect(bool(staged.get("ok", false)), "%s owner boundary stages card" % status_kind)
+		var started := _start_or_red(game, "%s owner boundary" % status_kind)
+		if not started:
+			continue
+		var pending := _pending(game)
+		_expect(pending.get("participants", []).has(0), "%s keeps caster participant row" % status_kind)
+		_expect(pending.get("participants", []).has(1), "%s keeps status owner participant row" % status_kind)
+		_expect(not pending.get("participants", []).has(2), "%s excludes status non-owner participant" % status_kind)
+		_expect(bool(Fixture.validate(game).get("ok", false)), "%s status owner pending save validates" % status_kind)
+		_drain_passes(game, "%s-owner-boundary-cleanup" % status_kind)
 
 	var no_sale: Object = Fixture.new_game(7831)
 	if no_sale == null:

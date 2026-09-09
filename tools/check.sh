@@ -122,6 +122,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_release.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_modal.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_cards_focus.gd
 
 # God cards reuse the current save schema.
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_flow.gd

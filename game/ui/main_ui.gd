@@ -759,6 +759,8 @@ func _build_popups() -> void:
 	trap_popup = _make_popup(Vector2i(570, 290))
 	trap_popup.name = "TrapResponsePopup"
 	trap_popup.exclusive = true
+	# A defense choice must survive application/parent focus changes.
+	trap_popup.popup_window = false
 	var trap_box := _popup_box(trap_popup)
 	trap_box.add_child(_make_label("使用嫁禍卡？", 19, TEXT_MAIN))
 	trap_prompt_label = _make_label("", 13, TEXT_MAIN)

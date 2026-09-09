@@ -4,6 +4,10 @@ Read the **Issue #1 body**, the **Issue #52 body**, and the current active Issue
 
 - Astra leads and makes the final decisions.
 - Luna is the default implementation sub-agent; use Sol when Astra judges independent review or deeper investigation worthwhile. Use the existing global sub-agent configuration; do not redefine it here.
+- Astra is the integration steward, not the default worker. Delegate bounded implementation, focused tests, UI/content/docs and independent low-interaction work to Luna; keep Astra on shared core/save/AI ordering, cross-system integration, merge sequencing and hard blockers.
+- Do not babysit sub-agents. Prefer blocking/event waits; if polling is unavoidable, wait at least 3 minutes between status checks. Do not reread the repo or rerun tests merely to ask whether a worker finished.
+- Reuse frozen source contracts, fixtures and prior verified evidence. Do not repeat source archaeology or broad repo scans unless new contradictory evidence requires it.
+- Batch compatible low-interaction work when safe. Workers run focused self-tests; Astra pays affected/integration/native/full verification costs only at the appropriate batch or merge gate rather than duplicating each worker's checks.
 - Make reasonable reversible decisions autonomously. Ask the owner only for genuine external blockers or an irreversible product choice that cannot be inferred safely.
 - Use scoped Issues/PRs. Parallelize when useful, but avoid competing writers on the same ownership area. Never force-push or bypass protections.
 - Treat valid unresolved P1/P2-equivalent review findings as active review debt even after the source PR was merged. Re-check against current `main`; carry still-valid debt in #52 or the active Issue. Do not let P3/nit/style-only churn interrupt delivery.

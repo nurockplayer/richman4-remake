@@ -68,36 +68,54 @@ static func use_card(game: Object, player_id: int, card_id: String, target_id: V
 	# consumption so a save-ceiling failure leaves the whole action unchanged.
 	if not _can_tax_transfer(game, player_id, int(target_id), amount):
 		return game._error("查稅轉帳超出現金上限")
-	var consume: Dictionary = _consume_card(game, player_id, TAX_CARD)
-	if not bool(consume.get("ok", false)):
-		return game._error(str(consume.get("error", "查稅卡無法使用")))
-	game._record_event("card_used", {"player_id": player_id, "card_id": TAX_CARD, "target_id": int(target_id), "amount": amount, "effect": "tax"})
 	# 免費 is always offered first for a human payer, including amount zero.
 	# AI decisions use the source threshold and never create a human prompt.
 	if _has_card(target, FREE_CARD):
 		if bool(target.get("is_human", false)) and not bool(target.get("is_ai", false)):
-			_set_pending(game, "tax", "free", int(target_id), player_id, amount, player_id, player_id)
+			var consume_human: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
+			if not bool(consume_human.get("ok", false)):
+				return game._error(str(consume_human.get("error", "查稅卡無法使用")))
+			_set_pending(game, "tax", "free", int(target_id), player_id, amount, int(caster.get("position", -1)), player_id)
 			game._record_event("financial_response_requested", {"kind": "tax", "stage": "free", "payer_id": int(target_id), "creditor_id": player_id, "amount": amount, "node_id": int(caster.get("position", -1)), "caster_id": player_id})
 			return game._result(true, "等待免費卡回應", {"awaiting_response": true, "kind": "tax", "stage": "free", "amount": amount})
 		var threshold: int = _ai_threshold(game)
 		if amount > int(target.get("cash", 0)) or amount > threshold:
+			var consume_ai_tax: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
+			if not bool(consume_ai_tax.get("ok", false)):
+				return game._error(str(consume_ai_tax.get("error", "查稅卡無法使用")))
 			if not _consume_card(game, int(target_id), FREE_CARD).get("ok", false):
 				return game._error("免費卡無法使用")
 			game._record_event("financial_free_used", {"kind": "tax", "payer_id": int(target_id), "amount": amount, "ai": true})
 			return game._result(true, "AI 使用免費卡", {"waived": true, "amount": amount})
+	# A human payer with only 嫁禍 receives the redirect choice directly.  The
+	# original target remains unpaid until that response is selected.
+	if bool(target.get("is_human", false)) and not bool(target.get("is_ai", false)) and _has_card(target, SCAPEGOAT_CARD) and amount > 2000:
+		if not _redirect_targets(game, int(target_id)).is_empty():
+			var consume_human_redirect: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
+			if not bool(consume_human_redirect.get("ok", false)):
+				return game._error(str(consume_human_redirect.get("error", "查稅卡無法使用")))
+			_set_pending(game, "tax", "redirect", int(target_id), player_id, amount, int(caster.get("position", -1)), player_id)
+			game._record_event("financial_redirect_requested", {"caster_id": player_id, "payer_id": int(target_id), "amount": amount})
+			return game._result(true, "等待嫁禍卡回應", {"awaiting_response": true, "kind": "tax", "stage": "redirect", "amount": amount})
 	# AI declines 免費.  A deterministic fallback may use 嫁禍 immediately;
 	# redirected tax deliberately bypasses all recursive defences.
 	if _has_card(target, SCAPEGOAT_CARD) and amount > 2000:
 		var redirect_id: int = _first_redirect_target(game, int(target_id))
 		if redirect_id >= 0:
-			if not _consume_card(game, int(target_id), SCAPEGOAT_CARD).get("ok", false):
-				return game._error("嫁禍卡無法使用")
 			var redirected_amount: int = _tax_amount(game._player(redirect_id))
 			if not _can_tax_transfer(game, player_id, redirect_id, redirected_amount):
 				return game._error("嫁禍後查稅轉帳超出現金上限")
+			var consume_ai_redirect: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
+			if not bool(consume_ai_redirect.get("ok", false)):
+				return game._error(str(consume_ai_redirect.get("error", "查稅卡無法使用")))
+			if not _consume_card(game, int(target_id), SCAPEGOAT_CARD).get("ok", false):
+				return game._error("嫁禍卡無法使用")
 			_settle_tax(game, player_id, redirect_id, redirected_amount)
 			game._record_event("financial_tax_redirected", {"caster_id": player_id, "from_payer_id": int(target_id), "payer_id": redirect_id, "amount": redirected_amount, "ai": true})
 			return game._result(true, "AI 使用嫁禍卡", {"redirected": true, "target_id": redirect_id, "amount": redirected_amount})
+	var consume_direct: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
+	if not bool(consume_direct.get("ok", false)):
+		return game._error(str(consume_direct.get("error", "查稅卡無法使用")))
 	_settle_tax(game, player_id, int(target_id), amount)
 	return game._result(true, "查稅完成", {"target_id": int(target_id), "amount": amount})
 
@@ -250,7 +268,7 @@ static func _pending_runtime_context(game: Object, pending: Dictionary) -> bool:
 		return false
 	if int(game.state.get("company_service_pending", 0)) > 0:
 		return false
-	if not _has_card(payer, FREE_CARD):
+	if stage == "free" and not _has_card(payer, FREE_CARD):
 		return false
 	if stage == "redirect" and not _has_card(payer, SCAPEGOAT_CARD):
 		return false
@@ -274,6 +292,8 @@ static func _pending_runtime_context(game: Object, pending: Dictionary) -> bool:
 		return true
 	if typeof(creditor_id) != TYPE_INT or int(caster_id) != -1 or int(node_id) != int(payer.get("position", -2)):
 		return false
+	if not _source_matches(game.state, kind, int(node_id), int(creditor_id), game._is_companies()):
+		return false
 	if kind == "rent" or kind == "facility":
 		if not game._valid_player(int(creditor_id), true) or int(creditor_id) == payer_id:
 			return false
@@ -286,6 +306,33 @@ static func _pending_runtime_context(game: Object, pending: Dictionary) -> bool:
 	else:
 		return false
 	return true
+
+
+static func _source_matches(data: Dictionary, kind: String, node_id: int, creditor_id: int, companies_save: bool) -> bool:
+	var board: Variant = data.get("board", null)
+	if typeof(board) != TYPE_ARRAY or node_id < 0 or node_id >= board.size() or typeof(board[node_id]) != TYPE_DICTIONARY:
+		return false
+	var source: Dictionary = board[node_id]
+	if kind == "rent":
+		return str(source.get("kind", "")) == "property" and _valid_integer(source.get("owner", null)) and int(source.get("owner", -1)) == creditor_id
+	if kind == "facility":
+		return str(source.get("kind", "")) == "facility" and _valid_integer(source.get("owner", null)) and int(source.get("owner", -1)) == creditor_id
+	if kind != "company" or not companies_save:
+		return false
+	var source_company_id: Variant = source.get("source_company_id", null)
+	if not _valid_integer(source_company_id) or int(source_company_id) <= 0:
+		return false
+	if not _valid_integer(source.get("type_and_idx", null)) or int(source.get("type_and_idx")) != 6000 + int(source_company_id):
+		return false
+	if creditor_id != -int(source_company_id) - 2:
+		return false
+	var companies: Variant = data.get("companies", null)
+	if typeof(companies) != TYPE_ARRAY:
+		return false
+	for company_value in companies:
+		if typeof(company_value) == TYPE_DICTIONARY and _valid_integer(company_value.get("id", null)) and int(company_value.get("id")) == int(source_company_id):
+			return true
+	return false
 
 
 static func _settle_fee(game: Object, payer_id: int, creditor_id: int, amount: int, kind: String) -> bool:
@@ -351,6 +398,13 @@ static func _consume_card(game: Object, player_id: int, card_id: String) -> Dict
 	if player.is_empty() or not _has_card(player, card_id):
 		return {"ok": false, "error": "玩家沒有這張卡片"}
 	return OriginalInventory.consume_card(game.state.get("inventory_supply", {}), player["cards"], card_id)
+
+
+static func _consume_tax_card(game: Object, caster_id: int, target_id: int, amount: int) -> Dictionary:
+	var consumed: Dictionary = _consume_card(game, caster_id, TAX_CARD)
+	if bool(consumed.get("ok", false)):
+		game._record_event("card_used", {"player_id": caster_id, "card_id": TAX_CARD, "target_id": target_id, "amount": amount, "effect": "tax"})
+	return consumed
 
 
 static func _ai_threshold(game: Object) -> int:
@@ -475,6 +529,8 @@ static func validate_pending(data: Dictionary, player_count: int, board: Variant
 				errors.append("pending fee creditor invalid")
 		elif kind == "company" and creditor_id > -2:
 			errors.append("pending company creditor invalid")
+		if KINDS.has(kind) and not _source_matches(data, kind, node_id, creditor_id, companies_save):
+			errors.append("pending fee source identity invalid")
 	return errors
 
 

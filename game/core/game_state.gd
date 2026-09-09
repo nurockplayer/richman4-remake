@@ -1152,9 +1152,6 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 	for player in _players():
 		player["stocks"] = {}
 		player["insurance_status"] = 0
-		# Keep the semantic duration name available while the source marker
-		# remains the persisted authority.
-		player["insurance_days"] = 0
 		for stock_symbol in get_stock_symbols():
 			player.stocks[stock_symbol] = 0
 	OriginalStockMarket.reset_turn_supply(state.market, _rng)
@@ -1381,6 +1378,8 @@ func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
 			return
 		# Negative IDs below -1 identify a corporate creditor. The generic
 		# cash/deposit/bankruptcy path then credits only actual payments.
+		if not _financial_fee_gate(player_id, amount, -int(company.id)-2, "company", int(tile.get("index", player.get("position", -1)))):
+			return
 		_charge_amount(player_id, amount, -int(company.id)-2, "company", false)
 
 
@@ -1463,7 +1462,12 @@ func _company_upgrade(player_id: int, params: Dictionary) -> Dictionary:
 	_recalculate_property_values()
 	state.company_service_pending = 0
 	_record_event("company_construction", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"tile_id":int(target_value),"from_level":level,"to_level":next_level,"base_fee":amount})
-	if amount>0: _charge_amount(player_id,amount,-int(company.id)-2,"company")
+	if amount > 0:
+		var adjusted_amount: int = _god_adjust_charge_amount(player_id, amount, "company")
+		if adjusted_amount <= 0:
+			_record_event("god_charge_waived", {"player_id":player_id,"god_id":_player_god_id(player_id),"reason":"company","amount":amount})
+		elif _financial_fee_gate(player_id, adjusted_amount, -int(company.id)-2, "company", int(_player(player_id).get("position", -1))):
+			_charge_amount(player_id, adjusted_amount, -int(company.id)-2, "company", false)
 	if not bool(_player(player_id).alive) and state.phase != "game_over" and int(state.current_player) == player_id:
 		_advance_to_next_alive(player_id)
 	_set_action_options(int(state.current_player))
@@ -1475,7 +1479,6 @@ func _tick_company_insurance() -> void:
 	for player in _players():
 		var status := int(player.get("insurance_status", 0))
 		player.insurance_status = 0 if status == 128 else 128 if status == 1 else maxi(0, status - 1)
-		player["insurance_days"] = int(player.get("insurance_status", 0))
 
 
 func _roll_company_insurance_days() -> int:
@@ -1488,7 +1491,6 @@ func _roll_company_insurance_days() -> int:
 func _grant_company_insurance(player_id: int, company: Dictionary, days: int) -> void:
 	var player := _player(player_id)
 	player.insurance_status = (int(player.get("insurance_status", 0)) + days) & 0x7f
-	player["insurance_days"] = int(player.get("insurance_status", 0))
 	_record_event("company_insurance_granted", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"days":days,"insurance_status":int(player.insurance_status)})
 
 
@@ -2052,10 +2054,6 @@ func _sync_state() -> void:
 		return
 	state["rng_state"] = int(_rng.state)
 	state["rng_state_text"] = str(_rng.state)
-	if _is_companies():
-		for player in _players():
-			if typeof(player) == TYPE_DICTIONARY and player.has("insurance_status"):
-				player["insurance_days"] = int(player.get("insurance_status", 0))
 	var day: int = int(state.get("day", 1))
 	if _is_setup():
 		var elapsed: int = max(0, day - 1)
@@ -4443,7 +4441,9 @@ func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_obje
 		debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
 		_record_event("facility_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "source_object_id": source_object_id, "amount": amount})
 		return
-	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false, free_allowed)
+	if not _financial_fee_gate(debtor_id, adjusted_amount, creditor_id, "facility", int(debtor.get("position", -1)), free_allowed):
+		return
+	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false)
 
 
 func _god_property_fee_waiver_reason(owner_id: int) -> String:
@@ -4686,6 +4686,8 @@ func _charge_rent(debtor_id: int, creditor_id: int, amount: int) -> void:
 		debtor["rent_shield"] = int(debtor["rent_shield"]) - 1
 		_record_event("rent_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
 		return
+	if not _financial_fee_gate(debtor_id, adjusted_amount, creditor_id, "rent", int(debtor.get("position", -1))):
+		return
 	_charge_amount(debtor_id, adjusted_amount, creditor_id, "rent", false)
 
 
@@ -4712,7 +4714,29 @@ func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> i
 	return adjusted_amount
 
 
-func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true, allow_financial: bool = true) -> void:
+func _financial_fee_gate(debtor_id: int, amount: int, creditor_id: int, kind: String, node_id: int, free_allowed: bool = true) -> bool:
+	if amount <= 0:
+		return true
+	# The bounded player-cash representation is enforced at the financial fee
+	# entrance. Generic event/god charges retain their original primitive.
+	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - amount:
+		_record_event("payment_rejected", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount, "kind": kind, "error": "cash_cap"})
+		return false
+	var offer: Dictionary = FinancialRules.maybe_offer_free(self, debtor_id, creditor_id, amount, node_id, kind, free_allowed)
+	if not bool(offer.get("offered", false)):
+		return true
+	if offer.has("error"):
+		_record_event("financial_response_error", {"kind": kind, "player_id": debtor_id, "error": str(offer.get("error", ""))})
+		return false
+	if bool(offer.get("waived", false)):
+		_record_event("financial_payment_waived", {"kind": kind, "player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
+		return false
+	if bool(offer.get("awaiting_response", false)):
+		return false
+	return true
+
+
+func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true) -> void:
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
@@ -4724,23 +4748,6 @@ func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: Strin
 		if amount <= 0:
 			_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "amount": original_amount})
 			return
-	if allow_financial and ["rent", "facility", "company"].has(reason):
-		var source_node: int = int(debtor.get("position", -1))
-		var offer: Dictionary = FinancialRules.maybe_offer_free(self, debtor_id, creditor_id, amount, source_node, reason, true)
-		if bool(offer.get("offered", false)):
-			if offer.has("error"):
-				_record_event("financial_response_error", {"kind": reason, "player_id": debtor_id, "error": str(offer.get("error", ""))})
-				return
-			if bool(offer.get("waived", false)):
-				_record_event("financial_payment_waived", {"kind": reason, "player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
-				return
-			if bool(offer.get("awaiting_response", false)):
-				return
-	# A player creditor is part of the same bounded save representation as the
-	# debtor. Refuse an overflowing credit before withdrawing any funds.
-	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - amount:
-		_record_event("payment_rejected", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount, "reason": reason, "error": "cash_cap"})
-		return
 	# The manual's bankruptcy trigger is based on cash plus deposit. Deposits
 	# are withdrawn to meet a charge; properties and shares go to auction only
 	# after the player is declared bankrupt, never as a hidden rescue sale.

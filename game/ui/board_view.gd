@@ -36,6 +36,7 @@ var selected_index := -1
 var route_options: Array = []
 var roadblocks_data: Dictionary = {}
 var god_objects_data: Array = []
+var ground_hazards_data: Dictionary = {}
 var map_definition: Dictionary = {}
 var preview_mode := false
 var map_zoom := 1.0
@@ -57,13 +58,14 @@ func _ready() -> void:
 	set_process_input(true)
 	queue_redraw()
 
-func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = [], next_roadblocks: Dictionary = {}, next_gods: Array = []) -> void:
+func set_game_data(next_board: Array, next_players: Array, current_index: int, definition: Dictionary = {}, next_route_options: Array = [], next_roadblocks: Dictionary = {}, next_gods: Array = [], next_hazards: Dictionary = {}) -> void:
 	board_data = next_board.duplicate(true)
 	players_data = next_players.duplicate(true)
 	current_player_index = current_index
 	route_options = next_route_options.duplicate(true)
 	roadblocks_data = next_roadblocks.duplicate(true)
 	god_objects_data = next_gods.duplicate(true)
+	ground_hazards_data = next_hazards.duplicate(true)
 	if not definition.is_empty():
 		_reset_for_geometry_change(definition)
 		map_definition = definition.duplicate(true)
@@ -123,6 +125,7 @@ func set_map_definition(definition: Dictionary, is_preview := true) -> void:
 		route_options = []
 		roadblocks_data = {}
 		god_objects_data = []
+		ground_hazards_data = {}
 	if selected_index >= _geometry_board().size():
 		selected_index = -1
 	_layout_size = Vector2.ZERO
@@ -136,6 +139,7 @@ func clear_map_definition() -> void:
 	map_definition = {}
 	roadblocks_data = {}
 	god_objects_data = []
+	ground_hazards_data = {}
 	_focused_player_position = Vector2i(-1, -1)
 	preview_mode = false
 	_layout_size = Vector2.ZERO
@@ -331,6 +335,7 @@ func _draw_original_board() -> void:
 			_draw_original_node(index, _merged_tile(index), _node_positions[index], _node_radii[index])
 	_draw_roadblocks()
 	_draw_gods()
+	_draw_hazards()
 
 ## Actor markers use graph coordinates transformed by the same camera as roads.
 ## Their named presentation can be replaced when original actor art is identified.
@@ -785,3 +790,24 @@ func _draw_original_houses() -> void:
 			_scene_draws.append(job)
 	for item in _scene.get("scenery", []):
 		_scene_draws.append({"kind": "scenery", "layer": 1, "frame": visuals.scenery(_scene, int(item.get("sprite_id", 0)), int(item.direction)), "center": _map_to_screen(Vector2(float(item.x), float(item.y)))})
+
+## Temporary named markers share road geometry and remain independent of art size.
+func _draw_hazards() -> void:
+	if preview_mode:
+		return
+	for key in ground_hazards_data:
+		var index := int(key)
+		if index < 0 or index >= _node_positions.size():
+			continue
+		var center: Vector2 = _node_positions[index]
+		var caption := "地雷" if str(ground_hazards_data[key].get("kind", "")) == "mine" else "炸彈"
+		_draw_style_box(Rect2(center + Vector2(-21, -19), Vector2(42, 20)), Color("#442938"), Color("#ffb078"), 5.0, 1.0)
+		_draw_text(caption, center + Vector2(-20, -5), 40, 10, Color("#ffe2bd"), HORIZONTAL_ALIGNMENT_CENTER)
+	for player in players_data:
+		var remaining := int(player.get("bomb_steps", 0))
+		var index := int(player.get("position", -1))
+		if remaining <= 0 or index < 0 or index >= _node_positions.size():
+			continue
+		var center: Vector2 = _node_positions[index]
+		_draw_style_box(Rect2(center + Vector2(-29, 16), Vector2(58, 20)), Color("#442938"), Color("#ffb078"), 5.0, 1.0)
+		_draw_text("炸彈 %d步" % remaining, center + Vector2(-28, 30), 56, 10, Color("#ffe2bd"), HORIZONTAL_ALIGNMENT_CENTER)

@@ -28,6 +28,7 @@ const MIN_START_YEAR := 1998
 const MAX_START_YEAR := 9999
 const COMPANY_SAVE_VERSION := 7
 const STATUS_SAVE_VERSION := 8
+const HAZARD_SAVE_VERSION := 9
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -801,6 +802,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_gods": supports_facilities,
 		"original_companies": supports_companies,
 		"original_statuses": bool(capability_definition.get("supports_original_statuses", false)),
+		"original_hazards": bool(capability_definition.get("supports_original_hazards", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -875,11 +877,12 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false)),
 		"original_statuses": _has_original_statuses(),
+		"original_hazards": _has_original_hazards(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -956,6 +959,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_gods": supports_facilities,
 		"original_companies": supports_companies,
 		"original_statuses": bool(_selected_map_definition.get("supports_original_statuses", false)),
+		"original_hazards": bool(_selected_map_definition.get("supports_original_hazards", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1686,7 +1690,7 @@ func _update_all() -> void:
 	var players: Array = state.get("players", [])
 	var board: Array = state.get("board", [])
 	if board_view != null and board_view.has_method("set_game_data"):
-		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}), (_as_array(state.get("god_objects", [])) if _has_original_gods() else []))
+		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}), (_as_array(state.get("god_objects", [])) if _has_original_gods() else []), (state.get("ground_hazards", {}) if _has_original_hazards() else {}))
 	_update_header(phase, current_index)
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())
@@ -1777,6 +1781,8 @@ func _update_players(players: Array, current_index: int) -> void:
 				if actor is Dictionary and int(actor.get("owner", -1)) == index and int(actor.get("id", 0)) == god_id:
 					days = int(actor.get("days", 0))
 			name_column.add_child(_make_label("%s · %d 天" % [OriginalGods.name_for(god_id), days], 10, TEXT_GOLD))
+		if _has_original_hazards() and int(player.get("bomb_steps", 0)) > 0:
+			name_column.add_child(_make_label("定時炸彈 · 剩餘 %d 步" % int(player.bomb_steps), 10, TEXT_GOLD))
 		var rest_status := _player_rest_status(player)
 		if not rest_status.is_empty():
 			name_column.add_child(_make_label(_rest_status_label(rest_status), 10, TEXT_GOLD))
@@ -2738,6 +2744,28 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return detail
 		"event_draw_failed":
 			return "本次未取得卡片"
+		"mine_triggered":
+			var detail := "在%s踩到地雷 · 住院 %d 天" % [_tile_name(int(event.get("node", -1))), int(event.get("hospital_days", 3))]
+			if str(event.get("vehicle", "walking")) in ["motorcycle", "car"]:
+				detail += " · 載具損毀，改為步行"
+			return detail
+		"bomb_picked_up":
+			return "拾取定時炸彈 · 剩餘 %d 步" % int(event.get("remaining", 38))
+		"bomb_countdown":
+			return "定時炸彈 · 剩餘 %d 步" % int(event.get("remaining", 0))
+		"bomb_exploded":
+			var detail := "定時炸彈爆炸 · 住院 %d 天" % int(event.get("hospital_days", 5))
+			if str(event.get("vehicle", "walking")) in ["motorcycle", "car"]:
+				detail += " · 載具損毀，改為步行"
+			var damage: Dictionary = event.get("damage", {})
+			if bool(damage.get("damaged", false)):
+				detail += " · 建築降至 %d 級" % int(damage.get("to_level", 0))
+			return detail
+		"machine_doll_cleared":
+			var count := _as_array(event.get("removed_hazards", [])).size() + _as_array(event.get("removed_roadblocks", [])).size() + _as_array(event.get("removed_gods", [])).size()
+			return "機器娃娃前進 %d 步 · 清除 %d 個物件" % [int(event.get("steps", 0)), count]
+		"bomb_transferred":
+			return "定時炸彈轉移至%s · 剩餘 %d 步" % [_player_name(int(event.get("to_player_id", -1))), int(event.get("remaining", 0))]
 		"roadblock_hit":
 			return "遇到路障，停在%s並移除路障" % _tile_name(int(event.get("tile_id", -1)))
 		"game_over":
@@ -2837,16 +2865,19 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false))
+
+func _has_original_hazards() -> bool:
+	return int(state.get("version", 0)) == HAZARD_SAVE_VERSION and bool(state.get("original_hazards", false))
 
 func _has_original_statuses() -> bool:
-	return int(state.get("version", 0)) == STATUS_SAVE_VERSION and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 func _player_rest_status(player: Dictionary) -> Dictionary:
 	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
@@ -3001,7 +3032,7 @@ func _append_tool_inventory() -> void:
 				value_option.add_item("%d 點" % value, value)
 			row.add_child(value_option)
 		var tile_option: OptionButton = null
-		if ["路障", "機器工人"].has(item_id):
+		if ["路障", "機器工人"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
 			tile_option = _make_inventory_tile_picker(item_id)
 			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:

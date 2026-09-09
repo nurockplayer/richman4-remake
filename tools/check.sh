@@ -66,6 +66,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/status_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_loader.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ai.gd

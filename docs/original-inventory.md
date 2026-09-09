@@ -156,3 +156,9 @@ v4 保存 `roadblocks`（canonical 十進位節點字串 → 放置者 ID）；�
 成功改指才消耗；仍處罰原目標時，復仇自動使施術者也入獄。被動卡片在背包標出
 觸發方式，不能任意主動消耗。等待人類嫁禍回應時可存讀，AI 暫停後續動作。
 詳細規則、AI 目標策略差異與狀態版本相容性見 [original-statuses.md](original-statuses.md)。
+
+## v9 道路物件供給
+
+v9 的路障、地雷與定時炸彈放置改為由背包移至道路，直到物件命中、爆炸或被清除才回池。
+拾取與轉移炸彈仍占用同一個有限槽位。這是道路 runtime 對通用消耗流程的明確例外；
+v1–v8 與一般工具的回池行為不變。來源與存檔守恆見 [original-road-hazards.md](original-road-hazards.md)。

@@ -31,6 +31,7 @@ const OriginalInventoryCatalogue = preload("res://game/content/original_inventor
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
 const NewsEvents = preload("res://game/core/news_events.gd")
+const FateEvents = preload("res://game/core/fate_events.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -155,6 +156,7 @@ const EVENT_CARDS = [
 
 var _settling_company_dividends := false
 var _resolving_news := false
+var _resolving_fate := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -4212,6 +4214,17 @@ func _resolve_news_landing(player_id: int) -> void:
 		_advance_to_next_alive(player_id)
 
 
+func _resolve_fate_landing(player_id: int) -> void:
+	if not _valid_player(player_id, true):
+		return
+	_resolving_fate = true
+	FateEvents.apply_landing(self, player_id)
+	_resolving_fate = false
+	var player: Dictionary = _player(player_id)
+	if not bool(player.get("alive", false)) and int(state.get("current_player", -1)) == player_id and state.get("phase", "") != "game_over":
+		_advance_to_next_alive(player_id)
+
+
 func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, bank_passed_before_god: bool = false) -> void:
 	if tile.is_empty():
 		return
@@ -4245,6 +4258,11 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 				_resolve_news_landing(player_id)
 			else:
 				_record_event("news_passed", {"player_id": player_id, "tile": tile_index})
+		"fate":
+			if final_landing:
+				_resolve_fate_landing(player_id)
+			else:
+				_record_event("fate_passed", {"player_id": player_id, "tile": tile_index})
 		"event":
 			if final_landing:
 				_draw_event_card(player_id)
@@ -4696,7 +4714,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# A landing or route charge advances immediately so a non-final bankruptcy
 	# cannot leave a dead player as the current actor. Loan-debt bankruptcy from
 	# end_turn is advanced by that caller after its final bookkeeping instead.
-	if was_current_movement and not _settling_company_dividends and not _resolving_news and state.get("phase", "") != "game_over":
+	if was_current_movement and not _settling_company_dividends and not _resolving_news and not _resolving_fate and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
 
 
@@ -7115,7 +7133,7 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		var kind: Variant = tile.get("kind", null)
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
-		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news"]
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate"]
 		if facility_mode:
 			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
@@ -7367,6 +7385,11 @@ static func _validate_graph_source_classification(tile: Dictionary, index: int, 
 	var canonical_kind: String = str(classification.get("kind", ""))
 	if facility_mode and _valid_int(type_value, FACILITY_SOURCE_TYPE_MIN + 1, FACILITY_SOURCE_TYPE_MAX):
 		canonical_kind = "facility"
+	# Graph definitions created before the fate dispatcher classified ordinary
+	# event-3 roads as unsupported. Keep that source-shaped definition loadable;
+	# from_dict() applies the structural migration before save validation.
+	if canonical_kind == "fate" and typeof(kind) == TYPE_STRING and str(kind) in ["rest", "unsupported"]:
+		return
 	if typeof(kind) != TYPE_STRING or str(kind) != canonical_kind:
 		errors.append("graph tile kind does not match source %d" % index)
 	if canonical_kind == "points":
@@ -7436,6 +7459,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if not bool(news_validation.get("ok", false)):
 			for news_error in news_validation.get("errors", []):
 				errors.append(str(news_error))
+	if data.has("fate"):
+		var fate_validation: Dictionary = FateEvents.validate_state(data.get("fate", null))
+		if not bool(fate_validation.get("ok", false)):
+			for fate_error in fate_validation.get("errors", []):
+				errors.append(str(fate_error))
 	if data.has("stationary_turn") and typeof(data.get("stationary_turn")) != TYPE_BOOL:
 		errors.append("invalid stationary turn")
 
@@ -7617,6 +7645,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		var persisted_last: Variant = persisted_news.get("last", {})
 		if typeof(persisted_last) == TYPE_DICTIONARY and not persisted_last.is_empty() and not _valid_int(persisted_last.get("player_id", null), 0, max(0, player_count - 1)):
 			errors.append("news last player is outside save")
+	if data.has("fate") and typeof(data.get("fate", null)) == TYPE_DICTIONARY:
+		var persisted_fate: Dictionary = data.get("fate", {})
+		var persisted_fate_last: Variant = persisted_fate.get("last", {})
+		if typeof(persisted_fate_last) == TYPE_DICTIONARY and not persisted_fate_last.is_empty() and not _valid_int(persisted_fate_last.get("player_id", null), 0, max(0, player_count - 1)):
+			errors.append("fate last player is outside save")
 	if setup_save:
 		if not _valid_int(data.get("initial_fund", null)) or not SETUP_INITIAL_FUNDS.has(int(data.get("initial_fund", 0))):
 			errors.append("invalid initial_fund")
@@ -7857,7 +7890,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("board index mismatch %d" % index)
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
-				allowed_board_kinds.append_array(["points", "card", "unsupported", "news"])
+				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate"])
 			if facility_save:
 				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
@@ -8823,9 +8856,10 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 
 
 static func _migrate_news_source_kind(data: Dictionary) -> void:
-	# Pre-news graph saves classified ordinary type-0/event-2 roads as
-	# unsupported.  This one structural migration enables current semantics
-	# while retaining every other saved field, including RNG and event history.
+	# Pre-event graph saves classified ordinary type-0/event-2 and event-3
+	# roads as unsupported. These structural migrations enable current
+	# semantics while retaining every other saved field, including RNG and
+	# event history.
 	var board: Variant = data.get("board", null)
 	if typeof(board) != TYPE_ARRAY:
 		return
@@ -8835,6 +8869,8 @@ static func _migrate_news_source_kind(data: Dictionary) -> void:
 		var tile: Dictionary = tile_value
 		if int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 2 and str(tile.get("kind", "")) == "unsupported":
 			tile["kind"] = "news"
+		elif int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 3 and str(tile.get("kind", "")) in ["rest", "unsupported"]:
+			tile["kind"] = "fate"
 
 
 func save_to_path(path: String) -> bool:

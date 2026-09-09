@@ -156,7 +156,7 @@ func _test_shop_landing_and_atomic_trades() -> void:
 			implemented_cards += 1
 		if item.get("item_kind", "") == "tool" and bool(item.get("implemented", false)):
 			research_tools += 1
-	_expect_equal(implemented_cards, 9, "shop metadata marks exactly nine implemented cards")
+	_expect_equal(implemented_cards, 10, "shop metadata marks exactly ten implemented cards")
 	_expect_equal(research_tools, 4, "shop metadata marks four implemented finite tools")
 	_expect(game.item_is_implemented("card", "均富"), "implemented card metadata is public")
 	_expect(not game.item_is_implemented("card", "天使"), "unimplemented card metadata is public")

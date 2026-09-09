@@ -39,5 +39,22 @@ func _initialize() -> void:
 	expect_equal(player(g, 0).cash, cash - 2500, "generic primitive retains payment behavior")
 	g = fresh(74904)
 	expect(not player(g, 0).has("insurance_days"), "financial cards do not add redundant insurance schema")
+	g = fresh(74905)
+	for held in player(g, 1).cards.duplicate():
+		Inventory.consume_card(g.state.inventory_supply, player(g, 1).cards, held)
+	stage_card(g, 2, TAX_CARD)
+	stage_card(g, 1, SCAPEGOAT_CARD)
+	g.set_player_ai(1, true)
+	set_cash(g, 0, 20000)
+	set_cash(g, 1, 11000)
+	set_cash(g, 2, 999999997000)
+	prepare(g, 2, "await_action", 2)
+	expect(Game.validate_save(g.to_dict()).get("ok", false), "AI redirected overflow fixture legal")
+	var before: String = g.to_json()
+	var result: Dictionary = use_tax(g, 1)
+	if not result.get("ok", false):
+		expect_equal(g.to_json(), before, "failed automatic redirect leaves cards cash RNG and events atomic")
+	else:
+		expect(Game.validate_save(g.to_dict()).get("ok", false), "automatic redirect overflow fallback preserves valid save")
 	print("Financial boundary checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

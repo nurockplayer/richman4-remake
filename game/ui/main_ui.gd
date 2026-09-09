@@ -29,6 +29,7 @@ const MAX_START_YEAR := 9999
 const COMPANY_SAVE_VERSION := 7
 const STATUS_SAVE_VERSION := 8
 const HAZARD_SAVE_VERSION := 9
+const PROPERTY_CARD_SAVE_VERSION := 10
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -803,6 +804,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_companies": supports_companies,
 		"original_statuses": bool(capability_definition.get("supports_original_statuses", false)),
 		"original_hazards": bool(capability_definition.get("supports_original_hazards", false)),
+		"original_property_cards": bool(capability_definition.get("supports_original_property_cards", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -877,12 +879,13 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_companies", false)),
 		"original_statuses": _has_original_statuses(),
 		"original_hazards": _has_original_hazards(),
+		"original_property_cards": _has_original_property_cards(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -960,6 +963,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_companies": supports_companies,
 		"original_statuses": bool(_selected_map_definition.get("supports_original_statuses", false)),
 		"original_hazards": bool(_selected_map_definition.get("supports_original_hazards", false)),
+		"original_property_cards": bool(_selected_map_definition.get("supports_original_property_cards", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -2120,7 +2124,7 @@ func _update_cards_popup() -> void:
 					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"
 				row.add_child(target_option)
 			var tile_option: OptionButton = null
-			if card_id in ["拆除", "漲價", "查封"]:
+			if card_id in ["拆除", "漲價", "查封", "換地", "換屋"]:
 				tile_option = _make_inventory_tile_picker(card_id)
 				row.add_child(tile_option)
 			if card_id == "購地":
@@ -2749,6 +2753,9 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "企業建設 %s · %s" % [str(event.get("company_name", "企業")), _tile_name(int(event.get("tile_id", -1)))]
 		"card_used":
 			var card_name := _inventory_item_name("card", str(event.get("card_id", "")))
+			if event.get("effect", "") in ["swap_ownership", "swap_buildings"]:
+				var exchanged := "所有權" if event.effect == "swap_ownership" else "建物"
+				return "使用%s：交換%s與%s的%s" % [card_name, _event_tile_name(event.get("source_tile_id")), _event_tile_name(event.get("target_tile_id")), exchanged]
 			if event.has("tile_id") or event.has("property_id"):
 				return "使用%s：%s" % [card_name, _tile_name(int(event.get("tile_id", event.get("property_id", -1))))]
 			return "使用%s" % card_name
@@ -2813,6 +2820,14 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "回合開始"
 		_:
 			return event_type
+
+func _event_tile_name(value: Variant) -> String:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT]:
+		return "未知格位"
+	var numeric := float(value)
+	if not is_finite(numeric) or floor(numeric) != numeric or numeric < 0 or numeric >= _as_array(state.get("board", [])).size():
+		return "未知格位"
+	return _tile_name(int(value))
 
 func _tile_name(index: int) -> String:
 	return str(_tile_for_index(index).get("name", "格位 %02d" % (index + 1)))
@@ -2902,19 +2917,22 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 func _has_original_hazards() -> bool:
-	return int(state.get("version", 0)) == HAZARD_SAVE_VERSION and bool(state.get("original_hazards", false))
+	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_hazards", false))
+
+func _has_original_property_cards() -> bool:
+	return int(state.get("version", 0)) == PROPERTY_CARD_SAVE_VERSION and bool(state.get("original_property_cards", false))
 
 func _has_original_statuses() -> bool:
-	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 func _player_rest_status(player: Dictionary) -> Dictionary:
 	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:
@@ -3103,6 +3121,9 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 	picker.name = "Target_" + item_id
 	picker.custom_minimum_size = Vector2(220, 34)
 	picker.add_theme_font_size_override("font_size", 11)
+	if item_id in ["換地", "換屋"]:
+		var exchanged := "所有權" if item_id == "換地" else "建物"
+		picker.tooltip_text = "以腳下的%s與所選地產交換%s。" % [_tile_name(int(_current_player().get("position", -1))), exchanged]
 	var candidates: Array = []
 	if game_state != null and game_state.has_method("inventory_target_tiles"):
 		candidates = _as_array(game_state.call("inventory_target_tiles", item_id))
@@ -3119,6 +3140,9 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 			label = "路障 · " + label
 		elif str(tile.get("kind", "")) in ["property", "facility"]:
 			label += " · %d 級" % int(tile.get("building_level", 0))
+			if item_id in ["換地", "換屋"]:
+				var owner_id := int(tile.get("owner", -1))
+				label += " · " + (_player_name(owner_id) if owner_id >= 0 else "無主")
 		picker.add_item(label, index)
 	if picker.item_count == 0:
 		picker.add_item("畫面內沒有可用目標", -1)

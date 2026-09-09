@@ -17,6 +17,7 @@ const GODS_SAVE_VERSION = 6
 const COMPANY_SAVE_VERSION = 7
 const STATUS_SAVE_VERSION = 8
 const HAZARD_SAVE_VERSION = 9
+const PROPERTY_CARD_SAVE_VERSION = 10
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -68,6 +69,7 @@ const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封"]
+const PROPERTY_CARD_IDS = ["換地", "換屋"]
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
 const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人"]
 const VEHICLE_TOOL_IDS = {
@@ -149,7 +151,7 @@ static func new_game(seed_value: int, player_count: int = 4, options: Dictionary
 		return null
 	if not options.is_empty():
 		var setup_options: Dictionary = _normalize_setup_options(options, player_count)
-		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)) or bool(setup_options.get("original_statuses", false)) or bool(setup_options.get("original_hazards", false)):
+		if setup_options.is_empty() or bool(setup_options.get("original_facilities", false)) or bool(setup_options.get("original_statuses", false)) or bool(setup_options.get("original_hazards", false)) or bool(setup_options.get("original_property_cards", false)):
 			return null
 		var setup_game = new()
 		setup_game._initialize_setup(seed_value, player_count, setup_options)
@@ -176,11 +178,15 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 		return null
 	if options.has("original_hazards") and typeof(options.get("original_hazards")) != TYPE_BOOL:
 		return null
+	if options.has("original_property_cards") and typeof(options.get("original_property_cards")) != TYPE_BOOL:
+		return null
 	if bool(options.get("original_companies", false)) and not bool(definition.get("supports_original_companies", false)):
 		return null
 	if bool(options.get("original_statuses", false)) and (typeof(definition.get("supports_original_statuses")) != TYPE_BOOL or not definition.get("supports_original_statuses", false)):
 		return null
 	if bool(options.get("original_hazards", false)) and (typeof(definition.get("supports_original_hazards")) != TYPE_BOOL or not definition.get("supports_original_hazards", false)):
+		return null
+	if bool(options.get("original_property_cards", false)) and (typeof(definition.get("supports_original_property_cards")) != TYPE_BOOL or not definition.get("supports_original_property_cards", false)):
 		return null
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	if definition.has("original_facilities") and typeof(definition.get("original_facilities")) == TYPE_BOOL and bool(definition.get("original_facilities")):
@@ -192,6 +198,8 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 	if bool(options.get("original_statuses", false)) and (not original_facilities or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false))):
 		return null
 	if bool(options.get("original_hazards", false)) and (not original_facilities or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false)) or not bool(options.get("original_statuses", false))):
+		return null
+	if bool(options.get("original_property_cards", false)) and (not original_facilities or not bool(options.get("original_inventory", false)) or not bool(options.get("original_gods", false)) or not bool(options.get("original_companies", false)) or not bool(options.get("original_statuses", false)) or not bool(options.get("original_hazards", false))):
 		return null
 	if bool(options.get("original_companies", false)) and not _company_definition_errors(definition, player_count).is_empty():
 		return null
@@ -215,7 +223,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards"]
 	for key in options.keys():
 		if typeof(key) != TYPE_STRING or not allowed_keys.has(key):
 			return {}
@@ -298,6 +306,13 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		original_hazards = bool(options["original_hazards"])
 	if original_hazards and (not original_facilities or not original_gods or not original_companies or not original_statuses):
 		return {}
+	var original_property_cards: bool = false
+	if options.has("original_property_cards"):
+		if typeof(options["original_property_cards"]) != TYPE_BOOL:
+			return {}
+		original_property_cards = bool(options["original_property_cards"])
+	if original_property_cards and (not original_inventory or not original_facilities or not original_gods or not original_companies or not original_statuses or not original_hazards):
+		return {}
 
 	return {
 		"initial_fund": initial_fund,
@@ -311,6 +326,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_companies": original_companies,
 		"original_statuses": original_statuses,
 		"original_hazards": original_hazards,
+		"original_property_cards": original_property_cards,
 	}
 
 
@@ -329,7 +345,7 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 func _configure_setup(options: Dictionary, player_count: int) -> void:
 	var original_facilities: bool = bool(options.get("original_facilities", false))
 	var original_gods: bool = bool(options.get("original_gods", false))
-	state["version"] = HAZARD_SAVE_VERSION if bool(options.get("original_hazards", false)) else STATUS_SAVE_VERSION if bool(options.get("original_statuses", false)) else COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
+	state["version"] = PROPERTY_CARD_SAVE_VERSION if bool(options.get("original_property_cards", false)) else HAZARD_SAVE_VERSION if bool(options.get("original_hazards", false)) else STATUS_SAVE_VERSION if bool(options.get("original_statuses", false)) else COMPANY_SAVE_VERSION if bool(options.get("original_companies", false)) else GODS_SAVE_VERSION if original_gods else FACILITY_SAVE_VERSION if original_facilities else INVENTORY_SAVE_VERSION if bool(options.get("original_inventory", false)) else SETUP_SAVE_VERSION
 	state["original_facilities"] = original_facilities
 	state["original_gods"] = original_gods
 	if bool(options.get("original_companies", false)):
@@ -338,6 +354,8 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		state["original_statuses"] = true
 	if bool(options.get("original_hazards", false)):
 		state["original_hazards"] = true
+	if bool(options.get("original_property_cards", false)):
+		state["original_property_cards"] = true
 	if original_facilities:
 		state["price_index"] = 1
 		state["last_roll_total"] = 0
@@ -407,19 +425,19 @@ func _build_setup_players(
 
 
 func _is_setup() -> bool:
-	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
+	return int(state.get("version", 0)) in [SETUP_SAVE_VERSION, INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION]
 
 
 func _is_inventory() -> bool:
-	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
+	return int(state.get("version", 0)) in [INVENTORY_SAVE_VERSION, FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION]
 
 
 func _is_facilities() -> bool:
-	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION]
+	return int(state.get("version", 0)) in [FACILITY_SAVE_VERSION, GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION]
 
 
 func _is_gods() -> bool:
-	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [GODS_SAVE_VERSION, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 
 func _initialize(seed_value: int, player_count: int) -> void:
@@ -567,15 +585,19 @@ func _build_players(player_count: int, start_position: int = START_POSITION, gra
 
 
 func _is_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 
 func _is_statuses() -> bool:
-	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 
 func _is_hazards() -> bool:
-	return int(state.get("version", 0)) == HAZARD_SAVE_VERSION and bool(state.get("original_hazards", false))
+	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION] and bool(state.get("original_hazards", false))
+
+
+func _is_property_cards() -> bool:
+	return int(state.get("version", 0)) == PROPERTY_CARD_SAVE_VERSION and bool(state.get("original_property_cards", false))
 
 
 func _status_key(kind: String) -> String:
@@ -2201,9 +2223,142 @@ func _inventory_graph_node_reachable(node_id: int) -> bool:
 	return reachable.has(node_id)
 
 
+func _property_card_target_error(player_id: int, card_id: String, tile_id: Variant) -> String:
+	if not _is_property_cards() or not _is_inventory() or not _is_graph():
+		return "房產交換卡只適用於 v10 原版圖形地圖"
+	if not PROPERTY_CARD_IDS.has(card_id):
+		return "未知的房產交換卡"
+	var phase: String = str(state.get("phase", ""))
+	if phase not in ["await_roll", "await_action"]:
+		return "房產交換卡只能在擲骰前或行動階段使用"
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return "目前玩家無法行動"
+	if _status_active(player) or _is_gods_hospital_action(player):
+		return "目前狀態無法使用房產交換卡"
+	var cards: Variant = player.get("cards", [])
+	if typeof(cards) != TYPE_ARRAY or not cards.has(card_id):
+		return "沒有這張卡片"
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY or board.is_empty():
+		return "房產交換地圖無效"
+	var source_value: Variant = player.get("position", null)
+	if not _valid_int(source_value, 0, board.size() - 1):
+		return "目前位置無效"
+	var source: Variant = board[int(source_value)]
+	if typeof(source) != TYPE_DICTIONARY or not ["property", "facility"].has(str(source.get("kind", ""))):
+		return "目前位置沒有可交換的地產"
+	if not _valid_int(tile_id, 0, board.size() - 1):
+		return "目標格位無效"
+	var target_id: int = int(tile_id)
+	if target_id == int(source_value):
+		return "目標必須是另一處地產"
+	var target_value: Variant = board[target_id]
+	if typeof(target_value) != TYPE_DICTIONARY:
+		return "目標格位無效"
+	var target: Dictionary = target_value
+	var source_kind: String = str(source.get("kind", ""))
+	if str(target.get("kind", "")) != source_kind:
+		return "房產交換卡只能指定同類地產"
+	if source_kind == "facility":
+		var source_object_id: Variant = source.get("source_object_id", null)
+		var target_object_id: Variant = target.get("source_object_id", null)
+		if not _valid_int(source_object_id, 1, 1999) or not _valid_int(target_object_id, 1, 1999):
+			return "設施來源身分無效"
+		if int(source_object_id) == int(target_object_id):
+			return "同一設施的其他入口不能作為目標"
+		for facility_value in [source, target]:
+			var facility_type: Variant = facility_value.get("facility_type", null)
+			var facility_level: Variant = facility_value.get("building_level", null)
+			if not _facility_type_valid(facility_type) or not _valid_int(facility_level, 0, MAX_PROPERTY_LEVEL):
+				return "設施狀態無效"
+			if int(facility_level) > _facility_type_cap(int(facility_type)):
+				return "設施等級超出類型上限"
+	else:
+		var source_object_id: Variant = source.get("source_object_id", null)
+		var target_object_id: Variant = target.get("source_object_id", null)
+		if not _valid_int(source_object_id, 1, 1999) or not _valid_int(target_object_id, 1, 1999):
+			return "住宅來源身分無效"
+		if int(source_object_id) == int(target_object_id):
+			return "同一住宅不能作為目標"
+	return ""
+
+
+func _property_card_canonical_tile_id(tile_id: int) -> int:
+	var tile: Dictionary = _tile_at(tile_id)
+	return _facility_canonical_index(tile_id) if tile.get("kind", "") == "facility" else tile_id
+
+
+func _swap_property_references(source_tile_id: int, target_tile_id: int, source_owner: int, target_owner: int) -> void:
+	if source_owner == target_owner:
+		return
+	for player in _players():
+		var player_id: int = int(player.get("id", -1))
+		_remove_property_reference(player_id, source_tile_id)
+		_remove_property_reference(player_id, target_tile_id)
+	if source_owner >= 0:
+		_add_property_reference(source_owner, target_tile_id)
+	if target_owner >= 0:
+		_add_property_reference(target_owner, source_tile_id)
+
+
+func _use_property_card(player_id: int, card_id: String, tile_id: Variant, cancel: bool = false) -> Dictionary:
+	if cancel:
+		return _error("已取消房產交換卡")
+	var target_error: String = _property_card_target_error(player_id, card_id, tile_id)
+	if not target_error.is_empty():
+		return _error(target_error)
+	var player: Dictionary = _player(player_id)
+	var source_index: int = int(player.get("position", -1))
+	var target_index: int = int(tile_id)
+	var source_tile: Dictionary = _tile_at(source_index)
+	var target_tile: Dictionary = _tile_at(target_index)
+	var source_kind: String = str(source_tile.get("kind", ""))
+	var source_asset_id: int = _property_card_canonical_tile_id(source_index)
+	var target_asset_id: int = _property_card_canonical_tile_id(target_index)
+	var source_owner: int = int(source_tile.get("owner", -1))
+	var target_owner: int = int(target_tile.get("owner", -1))
+	if source_kind == "facility":
+		source_owner = int(_facility_record(source_index).get("owner", source_owner))
+		target_owner = int(_facility_record(target_index).get("owner", target_owner))
+	var consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
+	if not bool(consume_result.get("ok", false)):
+		return _error(str(consume_result.get("error", "卡片無法使用")))
+	if card_id == "換地":
+		if source_kind == "facility":
+			_update_facility_records(int(source_tile.get("source_object_id", -1)), {"owner": target_owner})
+			_update_facility_records(int(target_tile.get("source_object_id", -1)), {"owner": source_owner})
+		else:
+			source_tile["owner"] = target_owner
+			target_tile["owner"] = source_owner
+		_swap_property_references(source_asset_id, target_asset_id, source_owner, target_owner)
+		_recalculate_property_values()
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "source_tile_id": source_asset_id, "target_tile_id": target_asset_id, "effect": "swap_ownership"})
+		_set_action_options(player_id)
+		return _result(true, "已交換地產所有權", {"card_id": card_id, "source_tile_id": source_asset_id, "target_tile_id": target_asset_id, "effect": "swap_ownership"})
+	var source_level: int = int(source_tile.get("building_level", 0))
+	var target_level: int = int(target_tile.get("building_level", 0))
+	if source_kind == "facility":
+		var source_type: int = int(source_tile.get("facility_type", 0))
+		var target_type: int = int(target_tile.get("facility_type", 0))
+		_update_facility_records(int(source_tile.get("source_object_id", -1)), {"building_level": target_level, "facility_type": target_type})
+		_update_facility_records(int(target_tile.get("source_object_id", -1)), {"building_level": source_level, "facility_type": source_type})
+	else:
+		source_tile["building_level"] = target_level
+		target_tile["building_level"] = source_level
+		_update_tile_rent(source_tile)
+		_update_tile_rent(target_tile)
+	_recalculate_property_values()
+	_record_event("card_used", {"player_id": player_id, "card_id": card_id, "source_tile_id": source_asset_id, "target_tile_id": target_asset_id, "effect": "swap_buildings"})
+	_set_action_options(player_id)
+	return _result(true, "已交換地產建物", {"card_id": card_id, "source_tile_id": source_asset_id, "target_tile_id": target_asset_id, "effect": "swap_buildings"})
+
+
 func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) -> String:
 	if not _is_inventory() or not _is_graph():
 		return "此效果只適用於原版圖形地圖"
+	if PROPERTY_CARD_IDS.has(item_id):
+		return _property_card_target_error(player_id, item_id, tile_id)
 	if item_id in ["地雷", "定時炸彈"]:
 		return _hazard_target_error(player_id, item_id, tile_id)
 	var player: Dictionary = _player(player_id)
@@ -2316,6 +2471,8 @@ func _is_graph() -> bool:
 func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
+		if PROPERTY_CARD_IDS.has(item_id):
+			return _is_property_cards()
 		if item_id in ["漲價", "查封"] and not _is_facilities():
 			return false
 		if STATUS_CARD_IDS.has(item_id):
@@ -3857,6 +4014,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return _error("目前玩家無法行動")
 	if _is_sunday() and ["deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
 		return _error("週日銀行休息")
+	var action_options_before: Array = state.get("action_options", []).duplicate(true)
 	_set_action_options(player_id)
 	var allowed_options: Array = state.get("action_options", [])
 	if not allowed_options.has(normalized):
@@ -3885,7 +4043,13 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		"use_tool":
 			return _use_tool(player_id, params)
 		"use_card":
-			return _use_card(player_id, str(params.get("card_id", "")), int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)))
+			var card_id: String = str(params.get("card_id", ""))
+			var card_result: Dictionary = _use_card(player_id, card_id, int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)))
+			if PROPERTY_CARD_IDS.has(card_id) and not bool(card_result.get("ok", false)):
+				# Refreshing the action list above is needed after staging a card,
+				# but a rejected exchange is required to be byte-for-byte atomic.
+				state["action_options"] = action_options_before
+			return card_result
 		_:
 			return _error("未知的行動")
 
@@ -4532,6 +4696,8 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		return _error("沒有這張卡片")
 	if _is_inventory() and not item_is_implemented("card", card_id):
 		return _error("此卡片效果尚未還原")
+	if PROPERTY_CARD_IDS.has(card_id):
+		return _use_property_card(player_id, card_id, tile_id, cancel)
 	if _is_statuses() and card_id in ["免罪", "嫁禍", "復仇"]:
 		return _error("這張卡片只能在陷害時自動觸發")
 	if _is_statuses() and card_id == "陷害":
@@ -5176,6 +5342,8 @@ func _ai_action(player_id: int) -> void:
 		if selected>=0:
 			choose_action("company_upgrade",{"tile_id":selected,"facility_type":1})
 			return
+	if _ai_property_card_action(player_id):
+		return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":
 		var owner: int = int(tile.get("owner", -1))
@@ -5450,6 +5618,74 @@ func _inventory_ai_demolition_target(player_id: int) -> int:
 	return -1
 
 
+func _property_card_asset_value(tile: Dictionary) -> int:
+	if tile.get("kind", "") == "facility":
+		return _facility_land_price(tile) + _facility_upgrade_price(tile) * int(tile.get("building_level", 0))
+	return int(tile.get("cost", 0)) + int(tile.get("upgrade_cost", 0)) * int(tile.get("building_level", 0))
+
+
+func _ai_property_card_delta(player_id: int, card_id: String, source_index: int, target_index: int) -> int:
+	var source_tile: Dictionary = _tile_at(_property_card_canonical_tile_id(source_index))
+	var target_tile: Dictionary = _tile_at(_property_card_canonical_tile_id(target_index))
+	if source_tile.is_empty() or target_tile.is_empty():
+		return 0
+	var source_owner: int = int(source_tile.get("owner", -1))
+	var target_owner: int = int(target_tile.get("owner", -1))
+	var source_owned: bool = source_owner == player_id
+	var target_owned: bool = target_owner == player_id
+	var before: int = 0
+	if source_owned:
+		before += _property_card_asset_value(source_tile)
+	if target_owned:
+		before += _property_card_asset_value(target_tile)
+	if card_id == "換地":
+		var ownership_after: int = 0
+		if source_owned:
+			ownership_after += _property_card_asset_value(target_tile)
+		if target_owned:
+			ownership_after += _property_card_asset_value(source_tile)
+		return ownership_after - before
+	var source_after: Dictionary = source_tile.duplicate(true)
+	var target_after: Dictionary = target_tile.duplicate(true)
+	source_after["building_level"] = int(target_tile.get("building_level", 0))
+	target_after["building_level"] = int(source_tile.get("building_level", 0))
+	if source_tile.get("kind", "") == "facility":
+		source_after["facility_type"] = int(target_tile.get("facility_type", 0))
+		target_after["facility_type"] = int(source_tile.get("facility_type", 0))
+	var after: int = 0
+	if source_owned:
+		after += _property_card_asset_value(source_after)
+	if target_owned:
+		after += _property_card_asset_value(target_after)
+	return after - before
+
+
+func _ai_property_card_action(player_id: int) -> bool:
+	if not _is_property_cards() or not _is_inventory() or not _is_graph():
+		return false
+	var player: Dictionary = _player(player_id)
+	var board: Variant = state.get("board", null)
+	if player.is_empty() or typeof(board) != TYPE_ARRAY:
+		return false
+	var source_value: Variant = player.get("position", null)
+	if not _valid_int(source_value, 0, board.size() - 1):
+		return false
+	var source_index: int = int(source_value)
+	for card_value in player.get("cards", []):
+		var card_id: String = str(card_value)
+		if not PROPERTY_CARD_IDS.has(card_id):
+			continue
+		for target_index in range(board.size()):
+			if not _property_card_target_error(player_id, card_id, target_index).is_empty():
+				continue
+			if _ai_property_card_delta(player_id, card_id, source_index, target_index) <= 0:
+				continue
+			var result: Dictionary = choose_action("use_card", {"card_id": card_id, "tile_id": target_index})
+			if bool(result.get("ok", false)):
+				return true
+	return false
+
+
 func _ai_roll_action(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
@@ -5466,6 +5702,8 @@ func _ai_roll_action(player_id: int) -> void:
 		if trap_target >= 0 and choose_action("use_card", {"card_id": "陷害", "target_id": trap_target}).get("ok", false):
 			return
 	if _inventory_movement_blocked(player):
+		return
+	if _ai_property_card_action(player_id):
 		return
 	var tools: Dictionary = player.get("tools", {})
 	var active_vehicle: String = str(player.get("vehicle", "walking"))
@@ -5625,6 +5863,14 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 				if _status_node_index_in_board(definition.get("board", null), status_kind) < 0:
 					errors.append("status-capable map lacks " + status_kind)
 	var facility_mode: bool = original_facilities or definition_facilities
+	var property_cards_capability: bool = false
+	if definition.has("supports_original_property_cards"):
+		if typeof(definition.get("supports_original_property_cards")) != TYPE_BOOL:
+			errors.append("invalid original property cards capability")
+		else:
+			property_cards_capability = bool(definition.get("supports_original_property_cards", false))
+			if property_cards_capability and (not facility_mode or typeof(definition.get("supports_original_statuses")) != TYPE_BOOL or not bool(definition.get("supports_original_statuses", false))):
+				errors.append("property-card capability requires complete original map support")
 	if definition.get("schema", "") != RUNTIME_MAP_SCHEMA:
 		errors.append("unsupported map schema")
 	if not _valid_int(definition.get("version", null), 1, 1):
@@ -5794,6 +6040,8 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 			errors.append("graph start is not movable")
 	if property_count <= 0 and (not facility_mode or facility_count <= 0):
 		errors.append("graph map has no playable housing or facilities")
+	if property_cards_capability and property_count < 2 and source_facilities.size() < 2:
+		errors.append("property-card capability requires two same-category assets")
 	if errors.is_empty():
 		var visited: Dictionary = {int(start_position): true}
 		var queue: Array = [int(start_position)]
@@ -5914,7 +6162,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
-	var hazards_save: bool = _valid_int(version_marker, HAZARD_SAVE_VERSION, HAZARD_SAVE_VERSION)
+	var property_cards_save: bool = _valid_int(version_marker, PROPERTY_CARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION)
+	var hazards_save: bool = property_cards_save or _valid_int(version_marker, HAZARD_SAVE_VERSION, HAZARD_SAVE_VERSION)
 	var status_save: bool = hazards_save or _valid_int(version_marker, STATUS_SAVE_VERSION, STATUS_SAVE_VERSION)
 	var companies_save: bool = status_save or _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
 	var stock_symbols: Array = OriginalStockMarket.symbols() if companies_save else STOCK_SYMBOLS
@@ -5949,11 +6198,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		required_top.append_array(["original_statuses", "pending_trap"])
 	if hazards_save:
 		required_top.append_array(["original_hazards", "ground_hazards"])
+	if property_cards_save:
+		required_top.append("original_property_cards")
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
 
-	var expected_save_version: int = HAZARD_SAVE_VERSION if hazards_save else STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
+	var expected_save_version: int = PROPERTY_CARD_SAVE_VERSION if property_cards_save else HAZARD_SAVE_VERSION if hazards_save else STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
 		errors.append("unsupported save version")
 	if facility_save:
@@ -5993,6 +6244,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			errors.append("hazards marker requires statuses, companies, gods and facilities")
 	elif data.get("original_hazards", false) == true:
 		errors.append("hazards marker requires v9 save")
+	if property_cards_save:
+		if typeof(data.get("original_property_cards")) != TYPE_BOOL or not data.get("original_property_cards", false):
+			errors.append("invalid original property cards marker")
+		for prerequisite in ["original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards"]:
+			if typeof(data.get(prerequisite)) != TYPE_BOOL or not data.get(prerequisite, false):
+				errors.append("property cards marker requires " + prerequisite)
+	elif data.get("original_property_cards", false) == true:
+		errors.append("property cards marker requires v10 save")
 	if not _valid_string(data.get("ruleset", null)) or data.get("ruleset", "") != RULESET_ID:
 		errors.append("unsupported ruleset")
 	var seed_value: Variant = data.get("seed", null)

@@ -473,6 +473,10 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		has_hospital = has_hospital or int(tile.type_and_idx) == 8001
 		has_prison = has_prison or int(tile.type_and_idx) == 8002
 	var supports_original_statuses := original_facilities and supports_original_companies and has_hospital and has_prison
+	# Property exchanges need at least two canonical source assets of one of the
+	# supported categories.  Keep this capability explicit so a partial map can
+	# remain loadable without advertising a selector that can never succeed.
+	var supports_original_property_cards := original_facilities and supports_original_statuses and (referenced_lands.size() >= 2 or referenced_facilities.size() >= 2)
 	if supports_original_statuses:
 		for tile in board:
 			if int(tile.type_and_idx) in [8001,8002]:
@@ -489,5 +493,5 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"unsupported_reason": "" if supported else "此地圖沒有已支援的可購置地產，尚未開放對局。",
 		"companies": companies, "stock_rows": stock_rows,
 		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses,
-		"supports_original_hazards": supports_original_statuses}
+		"supports_original_hazards": supports_original_statuses, "supports_original_property_cards": supports_original_property_cards}
 	return {"ok": true, "error": "", "definition": definition}

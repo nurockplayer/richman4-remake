@@ -138,3 +138,8 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/news_public_tax.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_bank_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_graph.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_public_charge.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/fate_ui.gd

@@ -59,6 +59,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_insurance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd

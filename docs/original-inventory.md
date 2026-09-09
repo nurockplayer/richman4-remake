@@ -194,3 +194,5 @@ v1–v9 保留原有能力；連鎖店與改建尚未接入。規則、來源與
 [神明規則](original-gods.md)與[工程車](original-engineering-vehicle.md)。
 搶奪卡接通畫面內對手的背包選取、卡片／工具移轉及 AI 決策，保留滿手牌驅逐與
 工具已滿仍消耗的來源特例，詳見[搶奪卡](original-theft.md)。這些效果沒有新增存檔版本。
+
+冬眠與夢遊接通睡眠回合、既有反制卡及交通工具恢復，詳見[冬眠與夢遊卡](original-sleep-cards.md)。

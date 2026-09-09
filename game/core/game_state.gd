@@ -5631,7 +5631,17 @@ func _use_theft_card(player_id: int, target_id: Variant, item_kind: Variant, ite
 	_set_action_options(player_id)
 	var result_extra: Dictionary = event_payload.duplicate(true)
 	result_extra.erase("effect")
-	return _result(true, "已使用搶奪卡", result_extra)
+	var item_kind_text: String = "卡片" if str(transfer.get("item_kind", "")) == "card" else "道具"
+	var item_name: String = str(_inventory_record(str(transfer.get("item_kind", "")), str(transfer.get("item_id", ""))).get("name", str(transfer.get("item_id", ""))))
+	var result_message: String = "已搶奪%s：%s。" % [item_kind_text, item_name]
+	if bool(transfer.get("received", false)):
+		result_message += "物品已加入你的背包。"
+		var evicted_card_id: String = str(transfer.get("evicted_card_id", ""))
+		if not evicted_card_id.is_empty():
+			result_message += "手牌已滿，先驅逐點券價格最低的%s。" % str(_inventory_record("card", evicted_card_id).get("name", evicted_card_id))
+	else:
+		result_message += "目標已失去物品，但你的%s持有數量已滿，物品未加入背包；搶奪卡已消耗。" % item_kind_text
+	return _result(true, result_message, result_extra)
 
 
 func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol: String = "", tile_id: Variant = -1, cancel: Variant = false, facility_type: Variant = null, visible_tile_ids: Variant = null, theft_item_kind: Variant = null, theft_item_id: Variant = null) -> Dictionary:

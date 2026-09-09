@@ -111,7 +111,14 @@ func _test_valid_optional_metadata_and_json_continuation() -> void:
 	var restored_player: Dictionary = restored.state["players"][0]
 	_expect_equal(str(restored_player.get("vehicle", "")), ENGINEERING_VEHICLE, "JSON continuation keeps engineering vehicle")
 	_expect_equal(restored_player.get("engineering_vehicle", {}), player.get("engineering_vehicle", {}), "JSON continuation keeps canonical metadata")
-	_expect_equal(restored.to_json(), JSON.stringify(data), "JSON continuation preserves the canonical serialized state")
+	# Raw Dictionary serialization is not the company runtime canonical format.
+	# Preserve every field, then verify canonical bytes survive another reload.
+	_expect_equal(JSON.parse_string(restored.to_json()), JSON.parse_string(JSON.stringify(data)), "JSON continuation preserves every serialized field")
+	var canonical: String = restored.to_json()
+	var canonical_reloaded: Object = Game.from_dict(JSON.parse_string(canonical))
+	_expect(canonical_reloaded != null, "canonical active engineering JSON reloads")
+	if canonical_reloaded != null:
+		_expect_equal(canonical_reloaded.to_json(), canonical, "canonical active engineering JSON is byte-stable")
 	_expect_equal(str(restored.state.get("rng_state_text", "")), str(data.get("rng_state_text", "")), "JSON continuation preserves RNG state")
 
 	# Re-enter the same player twice through public end_turn.  The first owner

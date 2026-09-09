@@ -132,6 +132,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_restore_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_god_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/news_eligibility.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_public_tax.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_ui.gd

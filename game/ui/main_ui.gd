@@ -2193,7 +2193,8 @@ func _update_route_choices(phase: String, current_index: int) -> void:
 	if route_options_box == null:
 		return
 	for child in route_options_box.get_children():
-		child.free()
+		route_options_box.remove_child(child)
+		child.queue_free()
 	var options := _as_array(state.get("route_options", []))
 	var player: Dictionary = _current_player()
 	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and phase != "game_over"

@@ -105,14 +105,14 @@ static func time_machine_status(game: Object) -> Dictionary:
 		return status
 	var anchor: Dictionary = game._time_anchor_snapshot(player_id)
 	if anchor.is_empty():
-		status["message"] = "尚未有可還原的上次移動紀錄；讀檔後請先完成一次正常移動。"
+		status["message"] = "尚未有可用的回溯紀錄；讀檔後請先完成一次正常移動。"
 		return status
 	if not _anchor_matches_player(game, anchor, player_id):
-		status["message"] = "上次移動紀錄已失效；請先完成一次正常移動。"
+		status["message"] = "回溯紀錄已失效；請先完成一次正常移動。"
 		return status
 	var anchor_players: Variant = anchor.get("players", null)
 	if typeof(anchor_players) != TYPE_ARRAY or player_id < 0 or player_id >= anchor_players.size() or typeof(anchor_players[player_id]) != TYPE_DICTIONARY:
-		status["message"] = "上次移動紀錄缺少目前玩家資料。"
+		status["message"] = "回溯紀錄缺少目前玩家資料。"
 		return status
 	var anchor_player: Dictionary = anchor_players[player_id]
 	var anchor_tools: Variant = anchor_player.get("tools", null)
@@ -205,10 +205,10 @@ static func use_time_machine(game: Object, player_id: int, params: Dictionary) -
 		return game._result(true, "已取消時光機", {"tool_id": TIME_MACHINE, "cancelled": true})
 	var anchor: Dictionary = game._time_anchor_snapshot(player_id)
 	if anchor.is_empty() or not _anchor_matches_player(game, anchor, player_id):
-		return game._error("沒有可還原的上次移動紀錄；請先完成一次正常移動。")
+		return game._error("沒有可用的回溯紀錄；請先完成一次正常移動。")
 	var anchor_players: Variant = anchor.get("players", null)
 	if typeof(anchor_players) != TYPE_ARRAY or player_id < 0 or player_id >= anchor_players.size() or typeof(anchor_players[player_id]) != TYPE_DICTIONARY:
-		return game._error("時光錨點缺少目前玩家資料。")
+		return game._error("回溯紀錄缺少目前玩家資料。")
 	var anchor_player: Dictionary = anchor_players[player_id]
 	var anchor_tools: Variant = anchor_player.get("tools", null)
 	if typeof(anchor_tools) != TYPE_DICTIONARY or int(anchor_tools.get(TIME_MACHINE, 0)) <= 0:
@@ -222,14 +222,14 @@ static func use_time_machine(game: Object, player_id: int, params: Dictionary) -
 	staged["rng_state_text"] = str(current_rng)
 	var staged_players: Variant = staged.get("players", null)
 	if typeof(staged_players) != TYPE_ARRAY or player_id < 0 or player_id >= staged_players.size() or typeof(staged_players[player_id]) != TYPE_DICTIONARY:
-		return game._error("時光錨點玩家資料無效。")
+		return game._error("回溯紀錄中的玩家資料無效。")
 	var staged_player: Dictionary = staged_players[player_id]
 	var staged_consume: Dictionary = OriginalInventory.consume_tool(staged["inventory_supply"], staged_player["tools"], TIME_MACHINE, 1)
 	if not bool(staged_consume.get("ok", false)):
-		return game._error("時光錨點中的時光機無法消耗。")
+		return game._error("回溯紀錄中的時光機無法消耗。")
 	var staged_validation: Dictionary = game.validate_save(staged)
 	if not bool(staged_validation.get("ok", false)):
-		return game._error("目前無法還原上次移動。")
+		return game._error("目前無法依回溯紀錄還原上次移動。")
 
 	# Store the post-debit anchor before adding the live event. A later use can
 	# restore the post-debit world but cannot replenish the consumed machine.
@@ -238,7 +238,7 @@ static func use_time_machine(game: Object, player_id: int, params: Dictionary) -
 	game._replace_time_anchor_after_restore(player_id, staged)
 	game._set_action_options(player_id)
 	game._record_event("tool_used", {"player_id": player_id, "tool_id": TIME_MACHINE, "effect": "time_restore"})
-	return game._result(true, "已還原時光錨點", {"tool_id": TIME_MACHINE, "effect": "time_restore"})
+	return game._result(true, "已回到上次移動前", {"tool_id": TIME_MACHINE, "effect": "time_restore"})
 
 
 static func _transport_context_available(game: Object) -> bool:

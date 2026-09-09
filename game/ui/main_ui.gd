@@ -3389,6 +3389,11 @@ func _player_rest_status(player: Dictionary) -> Dictionary:
 		return {"kind":"prison", "count":int(player.prison_days)}
 	return SleepPresentation.status(player) if _has_original_statuses() else {}
 
+func _detained_turn_active() -> bool:
+	if not _has_original_statuses() or game_state == null or not game_state.has_method("_status_active"):
+		return false
+	return bool(game_state.call("_status_active", _current_player()))
+
 func _rest_status_label(rest_status: Dictionary) -> String:
 	if rest_status.get("kind", "") in ["winter", "dream"]:
 		return SleepPresentation.label(rest_status)
@@ -3524,6 +3529,7 @@ func _append_tool_inventory() -> void:
 	cards_popup_list.add_child(_make_label("道具（取得上限每類 9 個）", 15, TEXT_GOLD))
 	var tools: Dictionary = _current_player().get("tools", {})
 	var has_tools := false
+	var detained_turn_active := _detained_turn_active()
 	for record in InventoryCatalogue.tools():
 		var item_id := str(record.id)
 		var count := int(tools.get(item_id, 0))
@@ -3572,17 +3578,19 @@ func _append_tool_inventory() -> void:
 		use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
 		if tile_option != null and tile_option.disabled:
 			use.disabled = true
+		if detained_turn_active and item_id != "時光機":
+			use.disabled = true
 		if transport_picker != null:
 			use.disabled = use.disabled or transport_picker.selection().is_empty()
 			transport_picker.selection_changed.connect(func(available: bool) -> void:
-				use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool") or not available
+				use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool") or (detained_turn_active and item_id != "時光機") or not available
 			)
+		var time_status_label: Label = null
 		if item_id == "時光機" and game_state != null and game_state.has_method("time_machine_status"):
 			var time_status: Variant = game_state.call("time_machine_status")
-			var time_status_label := _make_label(str(time_status.get("message", "")) if time_status is Dictionary else "", 10, TEXT_MUTED)
+			time_status_label = _make_label(str(time_status.get("message", "")) if time_status is Dictionary else "", 10, TEXT_MUTED)
 			time_status_label.name = "TimeMachineStatus"
 			time_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			row.add_child(time_status_label)
 			use.disabled = use.disabled or not (time_status is Dictionary and bool(time_status.get("available", false)))
 		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car") or (item_id == "工程車" and vehicle == "engineering"):
 			use.disabled = true
@@ -3591,6 +3599,14 @@ func _append_tool_inventory() -> void:
 			use.text = "尚未還原"
 		row.add_child(use)
 		cards_popup_list.add_child(row)
+		if time_status_label != null:
+			var time_status_row := HBoxContainer.new()
+			time_status_row.name = "TimeMachineStatusRow"
+			time_status_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			time_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			time_status_label.custom_minimum_size = Vector2(0, 28)
+			time_status_row.add_child(time_status_label)
+			cards_popup_list.add_child(time_status_row)
 	if not has_tools:
 		cards_popup_list.add_child(_make_label("目前沒有道具。", 12, TEXT_MUTED))
 

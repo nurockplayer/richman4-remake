@@ -59,8 +59,43 @@ func run() -> void:
 	var time_status: Label = ui.cards_popup.find_child("TimeMachineStatus", true, false)
 	check(time_use != null and time_use.disabled, "time tool cannot run without an anchor")
 	check(time_status != null and not time_status.text.is_empty(), "time tool visibly explains unavailable anchor")
+	check(time_status != null and time_use != null and time_status.get_parent() != time_use.get_parent(), "time status uses a separate readable row")
 	var use: Button = ui.cards_popup.find_child("UseTool_傳送機", true, false)
 	check(use != null and not use.disabled, "transport has executable backpack control")
+	# Regression: status turns may expose the coarse use_tool action option for
+	# the detained exception, but the backpack must keep every other tool gated.
+	var detained_ui = MainScene.instantiate()
+	root.add_child(detained_ui)
+	await process_frame
+	check(detained_ui._new_game(8182, 4, Fixture.definition(), Fixture.new_game_options()), "detained time/vehicle UI fixture starts")
+	detained_ui.set_process(false)
+	var detained_game: Object = detained_ui.game_state
+	for id in range(4): detained_game.set_player_ai(id, false)
+	detained_game.state.god_objects = []
+	check(detained_game.call("_admit_player_status", 0, "hospital", 2).get("ok", false), "detained UI fixture enters hospital")
+	check(Inventory.grant_tool(detained_game.state.inventory_supply, detained_game.state.players[0].tools, "時光機", 1).get("ok", false), "detained UI fixture receives time machine")
+	check(Inventory.grant_tool(detained_game.state.inventory_supply, detained_game.state.players[0].tools, "機車", 1).get("ok", false), "detained UI fixture receives motorcycle tool")
+	detained_game.state.phase = "await_roll"
+	detained_game.call("_set_action_options", 0)
+	detained_ui._refresh_from_state()
+	detained_ui._on_cards_pressed()
+	await process_frame
+	var detained_time: Button = detained_ui.cards_popup.find_child("UseTool_時光機", true, false)
+	var detained_motorcycle: Button = detained_ui.cards_popup.find_child("UseTool_機車", true, false)
+	check(detained_time != null and detained_time.disabled, "detained time tool follows unavailable anchor status")
+	check(detained_motorcycle != null and detained_motorcycle.disabled, "detained motorcycle remains disabled despite coarse use_tool option")
+	detained_ui.cards_popup.hide()
+	check(bool(detained_game.call("_capture_time_anchor", 0)), "detained UI fixture captures a legal time anchor")
+	detained_game.call("_set_action_options", 0)
+	detained_ui._refresh_from_state()
+	detained_ui._on_cards_pressed()
+	await process_frame
+	detained_time = detained_ui.cards_popup.find_child("UseTool_時光機", true, false)
+	detained_motorcycle = detained_ui.cards_popup.find_child("UseTool_機車", true, false)
+	check(detained_time != null and not detained_time.disabled, "detained time tool becomes enabled when anchor is available")
+	check(detained_motorcycle != null and detained_motorcycle.disabled, "detained motorcycle stays disabled with an available time anchor")
+	detained_ui.queue_free()
+	await process_frame
 	# Regression: an initially empty property category must become executable
 	# when switching to a legal player target, then become disabled again when
 	# switching back to the still-invalid property category.

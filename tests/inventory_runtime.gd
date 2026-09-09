@@ -221,6 +221,7 @@ func _test_inventory_missile_capability_admission() -> void:
 	game.state["phase"] = "await_roll"
 	game.state["action_options"] = []
 	game._set_action_options(0)
+	_expect(GameState.validate_save(game.to_dict()).get("ok", false), "v4 missile fixture validates before public admission")
 	var before: String = game.to_json()
 	_expect(game.inventory_target_tiles("飛彈").is_empty(), "v4 missile target picker fails closed without status support")
 	var target_error: String = game._inventory_target_error(0, "飛彈", 0)

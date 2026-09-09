@@ -31,6 +31,8 @@ const STATUS_SAVE_VERSION := 8
 const HAZARD_SAVE_VERSION := 9
 const PROPERTY_CARD_SAVE_VERSION := 10
 const REMODEL_SAVE_VERSION := 11
+const RESEARCH_SAVE_VERSION := 12
+const RESEARCH_TOOLS := ["機器工人", "時光機", "傳送機", "工程車", "核子飛彈"]
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
 const PANEL_BORDER := Color("#36546b")
@@ -69,6 +71,9 @@ var stocks_shortcut: Button
 var roll_button: Button
 var buy_button: Button
 var upgrade_button: Button
+var research_button: Button
+var research_popup: PopupPanel
+var research_popup_list: VBoxContainer
 var end_turn_button: Button
 var bank_button: Button
 var cards_button: Button
@@ -426,6 +431,10 @@ func _build_action_bar() -> Control:
 	upgrade_button = _make_button("升級建設", _on_upgrade_pressed)
 	upgrade_button.custom_minimum_size = Vector2(112.0, 52.0)
 	row.add_child(upgrade_button)
+	research_button = _make_button("研究", _on_research_pressed)
+	research_button.name = "ResearchButton"
+	research_button.custom_minimum_size = Vector2(88.0, 52.0)
+	row.add_child(research_button)
 	end_turn_button = _make_button("結束回合", _on_end_turn_pressed)
 	end_turn_button.custom_minimum_size = Vector2(112.0, 52.0)
 	row.add_child(end_turn_button)
@@ -643,6 +652,20 @@ func _build_popups() -> void:
 	cancel_facility.name = "CancelFacility"
 	facility_box.add_child(cancel_facility)
 
+	research_popup = _make_popup(Vector2i(590, 430))
+	research_popup.name = "ResearchPopup"
+	var research_box := _popup_box(research_popup)
+	research_box.add_child(_make_label("研究所生產", 19, TEXT_MAIN))
+	var research_help := _make_label("選定後於第 5 次輪到你時交付；再次造訪可改選。", 12, TEXT_MUTED)
+	research_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	research_box.add_child(research_help)
+	research_popup_list = VBoxContainer.new()
+	research_popup_list.add_theme_constant_override("separation", 8)
+	research_box.add_child(research_popup_list)
+	var research_cancel := _make_button("取消", research_popup.hide)
+	research_cancel.name = "CancelResearch"
+	research_box.add_child(research_cancel)
+
 	shop_popup = _make_popup(Vector2i(700, 530))
 	shop_popup.min_size = Vector2i(700, 530)
 	var shop_box := _popup_box(shop_popup)
@@ -807,6 +830,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_hazards": bool(capability_definition.get("supports_original_hazards", false)),
 		"original_property_cards": bool(capability_definition.get("supports_original_property_cards", false)),
 		"original_remodel": bool(capability_definition.get("supports_original_remodel", false)),
+		"original_research": bool(capability_definition.get("supports_original_research", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -881,14 +905,15 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_companies", false)),
 		"original_statuses": _has_original_statuses(),
 		"original_hazards": _has_original_hazards(),
 		"original_property_cards": _has_original_property_cards(),
 		"original_remodel": _has_original_remodel(),
+		"original_research": _has_original_research(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -968,6 +993,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_hazards": bool(_selected_map_definition.get("supports_original_hazards", false)),
 		"original_property_cards": bool(_selected_map_definition.get("supports_original_property_cards", false)),
 		"original_remodel": bool(_selected_map_definition.get("supports_original_remodel", false)),
+		"original_research": bool(_selected_map_definition.get("supports_original_research", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -1545,7 +1571,7 @@ func _open_facility_builder(action: String = "build_facility") -> void:
 	var price := int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
 	var price_text := "購地 %s · 福神免費建成第 1 級" if action == "buy" else "建造費 %s · 選擇後立即建成第 1 級"
 	facility_popup_list.add_child(_make_label(price_text % _format_money(price), 13, TEXT_GOLD))
-	var descriptions := ["不收設施費，最高 1 級", "依輪盤收費，最高 5 級", "依輪盤收費，最高 5 級", "向搭乘載具的訪客收費，最高 1 級", "道具生產尚未開放"]
+	var descriptions := ["不收設施費，最高 1 級", "依輪盤收費，最高 5 級", "依輪盤收費，最高 5 級", "向搭乘載具的訪客收費，最高 1 級", "生產研究工具，最高 5 級" if _has_original_research() else "道具生產尚未開放"]
 	for type_id in range(5):
 		var choice := type_id
 		var button := _make_button("%s · %s" % [_facility_name(choice), descriptions[choice]], func() -> void:
@@ -1558,10 +1584,38 @@ func _open_facility_builder(action: String = "build_facility") -> void:
 			facility_popup.hide()
 		)
 		button.name = "BuildFacility_%d" % choice
-		button.disabled = choice == 4 or price > int(_current_player().get("cash", 0)) or not _is_human_turn() or not _has_action_option(_as_array(state.get("action_options", [])), action)
+		button.disabled = (choice == 4 and not _has_original_research()) or price > int(_current_player().get("cash", 0)) or not _is_human_turn() or not _has_action_option(_as_array(state.get("action_options", [])), action)
 		facility_popup_list.add_child(button)
 	facility_popup.popup_centered(Vector2i(590, 390))
 	_settle_inventory_popup(facility_popup, Vector2i(590, 390))
+
+func _on_research_pressed() -> void:
+	if research_button.disabled or not _has_action_option(_as_array(state.get("action_options", [])), "choose_research"):
+		return
+	for child in research_popup_list.get_children():
+		child.free()
+	var tile := _current_tile()
+	var tile_index := int(tile.get("index", -1))
+	var player_id := int(state.get("current_player", -1))
+	var level := int(tile.get("building_level", 0))
+	for index in range(RESEARCH_TOOLS.size()):
+		var tool_id: String = RESEARCH_TOOLS[index]
+		var button := _make_button("%s · 需 %d 級" % [tool_id, index + 1], func() -> void:
+			if int(_current_tile().get("index", -1)) != tile_index or int(state.get("current_player", -1)) != player_id:
+				research_popup.hide()
+				return
+			var result := _invoke_game("choose_action", ["choose_research", {"tool_id": tool_id}])
+			_append_local_log("研究所：%s" % _result_text(result, "已送出生產選擇。"))
+			_handle_result(result)
+			research_popup.hide()
+		)
+		button.name = "ResearchTool_%d" % (index + 9)
+		button.disabled = index >= level
+		if index > 0:
+			button.tooltip_text = "可生產並持有；此工具的使用效果尚未還原。"
+		research_popup_list.add_child(button)
+	research_popup.popup_centered(Vector2i(590, 430))
+	_settle_inventory_popup(research_popup, Vector2i(590, 430))
 
 func _on_end_turn_pressed() -> void:
 	if end_turn_button.disabled:
@@ -1897,6 +1951,13 @@ func _update_property_card(tile: Dictionary) -> void:
 		if level > 0:
 			var type_id := clampi(int(tile.get("facility_type", 0)), 0, 4)
 			details += " · 最高 %d 級" % [1, 5, 5, 1, 5][type_id]
+		if _has_original_research() and int(tile.get("facility_type", 0)) == 4:
+			var product := int(tile.get("research_tool", 0))
+			var turns := int(tile.get("research_turns", 0))
+			if product > 0 and product <= RESEARCH_TOOLS.size() and turns > 0:
+				details += "\n%s · 剩餘自己的回合 %d 次" % [RESEARCH_TOOLS[product - 1], turns]
+			else:
+				details += "\n目前沒有生產排程"
 		var status := int(tile.get("facility_state", 0))
 		if status > 0:
 			details += "\n%s · 剩餘 %d 天" % ["查封，暫停服務" if (status & 15) != 0 else "漲價，費用加倍", status >> 4]
@@ -1931,6 +1992,10 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var can_company_upgrade := _has_action_option(action_options, "company_upgrade")
 	upgrade_button.text = "企業建設" if can_company_upgrade else "建造設施" if can_build else "升級"
 	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build or can_company_upgrade))
+	research_button.visible = _has_original_research() and _has_action_option(action_options, "choose_research")
+	research_button.disabled = not (human_turn and phase == "await_action" and research_button.visible)
+	if research_button.disabled:
+		research_popup.hide()
 	end_turn_button.disabled = not (human_turn and phase == "await_action" and _has_action_option(action_options, "end_turn"))
 	bank_button.disabled = not human_turn or detained or reaction_pending
 	cards_button.disabled = not human_turn or detained or reaction_pending
@@ -2148,9 +2213,9 @@ func _update_cards_popup() -> void:
 					remodel_option.name = "RemodelType_改建"
 					remodel_option.custom_minimum_size = Vector2(180.0, 34.0)
 					for type_id in range(5):
-						remodel_option.add_item(_facility_name(type_id) + ("（尚未開放）" if type_id == 4 else ""), type_id)
-					remodel_option.set_item_disabled(4, true)
-					remodel_option.select(clampi(int(current_tile.get("facility_type", 0)), 0, 3))
+						remodel_option.add_item(_facility_name(type_id) + ("（尚未開放）" if type_id == 4 and not _has_original_research() else ""), type_id)
+					remodel_option.set_item_disabled(4, not _has_original_research())
+					remodel_option.select(clampi(int(current_tile.get("facility_type", 0)), 0, 4 if _has_original_research() else 3))
 					row.add_child(remodel_option)
 				elif current_tile.get("kind", "") == "property":
 					row.add_child(_make_label("改為普通住宅" if bool(current_tile.get("is_chain_store", false)) else "改為 1 級連鎖店", 11, TEXT_MUTED))
@@ -2412,7 +2477,7 @@ func _ensure_company_facility_type_picker(tile: Dictionary) -> void:
 		_company_service_type.custom_minimum_size = Vector2(0.0, 36.0)
 		_company_service_type.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_company_service_type.add_theme_font_size_override("font_size", 11)
-		for facility_type in range(4):
+		for facility_type in range(5 if _has_original_research() else 4):
 			_company_service_type.add_item(_facility_name(facility_type), facility_type)
 		company_popup_list.add_child(_company_service_type)
 		if _company_service_target != null:
@@ -2947,25 +3012,28 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 func _has_original_hazards() -> bool:
-	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_hazards", false))
+	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_hazards", false))
 
 func _has_original_property_cards() -> bool:
-	return int(state.get("version", 0)) in [PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_property_cards", false))
+	return int(state.get("version", 0)) in [PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_property_cards", false))
+
+func _has_original_research() -> bool:
+	return int(state.get("version", 0)) == RESEARCH_SAVE_VERSION and bool(state.get("original_research", false))
 
 func _has_original_remodel() -> bool:
-	return int(state.get("version", 0)) == REMODEL_SAVE_VERSION and bool(state.get("original_remodel", false))
+	return int(state.get("version", 0)) in [REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_remodel", false))
 
 func _has_original_statuses() -> bool:
-	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION] and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 func _player_rest_status(player: Dictionary) -> Dictionary:
 	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:

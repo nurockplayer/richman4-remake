@@ -379,10 +379,10 @@ static func resolve(game: Object, player_id: int, event_id: int) -> Dictionary:
 				if int(target_player.get("loan", 0)) != 0 or deposit <= 0:
 					continue
 				var interest: int = int(floor(float(deposit) * 0.1))
-				if interest <= 0 or deposit > 1000000000000 - interest:
+				var bank: Dictionary = game.state.get("bank", {})
+				if interest <= 0 or deposit > 1000000000000 - interest or int(bank.get("deposits", 0)) > 1000000000000 - interest:
 					continue
 				target_player["deposit"] = deposit + interest
-				var bank: Dictionary = game.state.get("bank", {})
 				bank["deposits"] = int(bank.get("deposits", 0)) + interest
 				game.state["bank"] = bank
 				game._bank_subtract_cash(interest)
@@ -713,7 +713,7 @@ static func _apply_company(game: Object, company: Dictionary, event_id: int) -> 
 	var rate := -10.0
 	if event_id == 35:
 		var doubled: int = old_monthly * 2
-		if doubled > 1000000000000 - old_cumulative:
+		if doubled > 1000000000000 or doubled > 1000000000000 - old_cumulative:
 			return {"ok": false, "reason": "earnings_limit"}
 		company["monthly_profit"] = doubled
 		company["cumulative_profit"] = old_cumulative + doubled

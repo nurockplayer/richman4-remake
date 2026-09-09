@@ -348,6 +348,8 @@ static func _transport_destination_error(game: Object, player_id: int, target_ki
 	var board: Array = game.state.get("board", [])
 	if destination_id < 0 or destination_id >= board.size() or typeof(board[destination_id]) != TYPE_DICTIONARY:
 		return "傳送目的地無效"
+	if not game._inventory_graph_node_reachable(destination_id):
+		return "傳送目的地不在可通行圖形路徑"
 	var source_node := _target_source_node(game, target_kind, target_id)
 	if source_node < 0:
 		return "傳送來源無效"

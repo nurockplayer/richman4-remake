@@ -37,6 +37,7 @@ func _initialize() -> void:
 	_test_transport_property_and_auction_boundary()
 	_test_transport_facility_and_research_location()
 	_test_transport_players_gods_and_no_landing()
+	_test_transport_rejects_disconnected_destinations()
 	_test_transport_cancel_invalid_and_type_atomicity()
 	_test_ai_transport_and_time_determinism()
 	print("Time/transport flow checks: %d, failures: %d, qualified_red: %d" % [checks, failures, qualified_red])
@@ -696,6 +697,70 @@ func _test_transport_players_gods_and_no_landing() -> void:
 		_expect_equal(int(unbound.state["god_objects"][0].get("node", -1)), ROAD, "unbound god transport moves only the god node")
 		_expect_equal(int(unbound.state["players"][0].get("position", -1)), CENTRE, "unbound god transport leaves the actor position unchanged")
 		_expect(bool(Game.validate_save(unbound.to_dict()).get("ok", false)), "unbound god transport leaves a valid save")
+
+
+func _append_isolated_component(game: Object) -> Array:
+	# Keep this fixture in line with the isolated non-property component used by
+	# tests/gods_save.gd.  Such road nodes are allowed to exist in a save, while
+	# players and unbound gods may not be placed there.
+	var board: Array = game.state.get("board", [])
+	var first_node := board.size()
+	for offset in range(2):
+		var node_id := first_node + offset
+		var other_id := first_node + (1 if offset == 0 else 0)
+		var tile: Dictionary = board[0].duplicate(true)
+		tile["index"] = node_id
+		tile["source_node_id"] = node_id + 1
+		tile["adjacent"] = [other_id]
+		tile["x"] = int(tile.get("x", 0)) + 10000 + offset * 120
+		tile["y"] = int(tile.get("y", 0)) + 10000
+		board.append(tile)
+	return [first_node, first_node + 1]
+
+
+func _test_transport_rejects_disconnected_destinations() -> void:
+	var cases: Array = [
+		{"kind": "player", "id": 1, "god": {}},
+		{"kind": "god", "id": 1, "god": {"id": 1, "node": PROPERTY_SOURCE, "owner": 1, "days": 7}},
+		{"kind": "god", "id": 3, "god": {"id": 3, "node": ROAD, "owner": -1, "days": 0}},
+	]
+	for offset in range(cases.size()):
+		var item: Dictionary = cases[offset]
+		var game: Object = _new_game(8255 + offset, 3)
+		if game == null:
+			continue
+		var isolated_nodes: Array = _append_isolated_component(game)
+		game.state["players"][1]["position"] = PROPERTY_SOURCE
+		game.state["players"][1]["previous_position"] = PRISON
+		if str(item["kind"]) == "god":
+			game.state["players"][1]["god_id"] = int(item["id"]) if int(item["god"].get("owner", -1)) >= 0 else 0
+			game.state["god_objects"] = [item["god"].duplicate(true)]
+		game._sync_state()
+		game._set_action_options(0)
+		var label := "disconnected " + str(item["kind"])
+		var before_query: String = game.to_json()
+		var target_ids: Array = game.transport_targets(str(item["kind"]))
+		_expect(target_ids.has(int(item["id"])), label + " target selector keeps the legal target")
+		var destinations: Array = game.transport_destinations(str(item["kind"]), int(item["id"]))
+		for node_id in isolated_nodes:
+			_expect(not destinations.has(int(node_id)), label + " destination selector excludes isolated node " + str(node_id))
+		_expect_equal(game.to_json(), before_query, label + " selectors are read-only")
+		_expect(bool(Game.validate_save(game.to_dict()).get("ok", false)), label + " isolated component fixture remains save-valid")
+		var restored: Object = Game.from_dict(JSON.parse_string(game.to_json()))
+		_expect(restored != null, label + " isolated component fixture reloads")
+		if restored != null:
+			_expect_equal(restored.to_json(), game.to_json(), label + " isolated component round-trips exactly")
+		_stage_tool(game, 0, TRANSPORTER, label + " transporter")
+		_prepare_action(game, 0, CENTRE)
+		_assert_rejected_atomic(game, TRANSPORTER, {
+			"tool_id": TRANSPORTER,
+			"target_kind": str(item["kind"]),
+			"target_id": int(item["id"]),
+			"destination_id": int(isolated_nodes[0]),
+		}, label + " direct command")
+		_expect(bool(Game.validate_save(game.to_dict()).get("ok", false)), label + " direct rejection leaves a valid save")
+		var reloaded: Object = Game.from_dict(JSON.parse_string(game.to_json()))
+		_expect(reloaded != null, label + " direct rejection result reloads")
 
 
 func _test_transport_cancel_invalid_and_type_atomicity() -> void:

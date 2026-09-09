@@ -9,7 +9,13 @@ var _pending: Dictionary = {}
 
 func _init() -> void:
 	name = "FinancialResponsePopup"
-	size = Vector2i(540, 240)
+	size = Vector2i(540, 280)
+	var panel := StyleBoxFlat.new()
+	panel.bg_color = Color("#203447")
+	panel.border_color = Color("#54748a")
+	panel.set_border_width_all(1)
+	panel.set_corner_radius_all(16)
+	add_theme_stylebox_override("panel", panel)
 	exclusive = true
 	popup_window = false
 	popup_hide.connect(func() -> void: call_deferred("_restore_unanswered"))
@@ -20,8 +26,15 @@ func _init() -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 12)
 	margin.add_child(box)
+	var title := Label.new()
+	title.text = "付款選擇"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("#edf5fa"))
+	box.add_child(title)
 	prompt = Label.new()
 	prompt.name = "FinancialPrompt"
+	prompt.add_theme_font_size_override("font_size", 15)
+	prompt.add_theme_color_override("font_color", Color("#edf5fa"))
 	prompt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	prompt.custom_minimum_size.x = 490
 	box.add_child(prompt)

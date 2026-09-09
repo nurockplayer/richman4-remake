@@ -432,12 +432,13 @@ func _test_nonlab_and_unowned_jobs() -> void:
 	_advance_to_owner(game, 1)
 	_expect_equal(int(game.state["board"][1].get("research_turns", -1)), 3, "unowned lab does not tick production")
 
+	var before_invalid_rank: int = int(game.state["players"][1]["tools"].get(RESEARCH_TOOLS[2], 0))
 	_set_facility_state(game, 1, 1, 1, LAB_TYPE, 2, 3)
 	game.state["current_player"] = 0
 	game.state["phase"] = "await_roll"
 	_advance_to_owner(game, 1)
 	_expect_equal(int(game.state["board"][1].get("research_turns", -1)), 0, "rank above current lab level cancels countdown")
-	_expect_equal(int(game.state["players"][1]["tools"].get(RESEARCH_TOOLS[2], 0)), 1, "rank above current lab level produces no tool")
+	_expect_equal(int(game.state["players"][1]["tools"].get(RESEARCH_TOOLS[2], 0)), before_invalid_rank, "rank above current lab level produces no tool")
 
 
 func _test_lab_worker_upgrade() -> void:

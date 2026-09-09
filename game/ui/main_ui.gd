@@ -2299,7 +2299,7 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 	if sleeping:
 		_append_local_log("%s：%s" % [str(player.get("name", "玩家")), _result_text(result, "自動推進回合。")])
 	else:
-		_append_local_log("%s 等待嫁禍卡回應。" % str(player.get("name", "AI")) if bool(result.get("awaiting_response", false)) else "%s 完成了自動回合。" % str(player.get("name", "AI")))
+		_append_local_log("%s 等待玩家回應。" % str(player.get("name", "AI")) if bool(result.get("awaiting_response", false)) else "%s 完成了自動回合。" % str(player.get("name", "AI")))
 	_handle_result(result)
 
 func _update_cards_popup() -> void:
@@ -2460,9 +2460,13 @@ func _update_cards_popup() -> void:
 				use.tooltip_text = "改建腳下設施；選擇同類型也會消耗改建卡。" if current_tile.get("kind", "") == "facility" else "改建腳下已有建物的住宅；轉為連鎖店會降至 1 級。"
 			if not implemented:
 				use.text = "尚未還原"
+			elif card_id == "免費":
+				use.disabled = true
+				use.text = "付款時選擇"
+				use.tooltip_text = "符合條件的地租、設施、企業服務或查稅發生時，可選擇使用一次。"
 			elif _has_original_statuses() and card_id in ["免罪", "復仇", "嫁禍"]:
 				use.disabled = true
-				use.text = "遭陷害時選擇" if card_id == "嫁禍" else "自動觸發"
+				use.text = "遭效果時選擇" if card_id == "嫁禍" else "自動觸發"
 			row.add_child(use)
 			cards_popup_list.add_child(row)
 

@@ -32,6 +32,7 @@ const HAZARD_SAVE_VERSION := 9
 const PROPERTY_CARD_SAVE_VERSION := 10
 const REMODEL_SAVE_VERSION := 11
 const RESEARCH_SAVE_VERSION := 12
+const BUILDING_CARD_SAVE_VERSION := 13
 const RESEARCH_TOOLS := ["機器工人", "時光機", "傳送機", "工程車", "核子飛彈"]
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
@@ -831,6 +832,7 @@ func _default_setup_options(player_count: int, map_definition: Dictionary = {}) 
 		"original_property_cards": bool(capability_definition.get("supports_original_property_cards", false)),
 		"original_remodel": bool(capability_definition.get("supports_original_remodel", false)),
 		"original_research": bool(capability_definition.get("supports_original_research", false)),
+		"original_building_cards": bool(capability_definition.get("supports_original_building_cards", false)),
 		"initial_fund": 200000,
 		"day_limit": 0,
 		"wealth_multiplier": 0,
@@ -905,15 +907,16 @@ func _setup_options_from_state() -> Dictionary:
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
 	return {
-		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
-		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
-		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION],
-		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_companies", false)),
+		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
+		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
+		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
+		"original_companies": int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_companies", false)),
 		"original_statuses": _has_original_statuses(),
 		"original_hazards": _has_original_hazards(),
 		"original_property_cards": _has_original_property_cards(),
 		"original_remodel": _has_original_remodel(),
 		"original_research": _has_original_research(),
+		"original_building_cards": _has_original_building_cards(),
 		"initial_fund": int(state.get("initial_fund", 200000)),
 		"day_limit": int(state.get("day_limit", 0)),
 		"wealth_multiplier": int(state.get("wealth_multiplier", 0)),
@@ -994,6 +997,7 @@ func _collect_setup_options() -> Dictionary:
 		"original_property_cards": bool(_selected_map_definition.get("supports_original_property_cards", false)),
 		"original_remodel": bool(_selected_map_definition.get("supports_original_remodel", false)),
 		"original_research": bool(_selected_map_definition.get("supports_original_research", false)),
+		"original_building_cards": bool(_selected_map_definition.get("supports_original_building_cards", false)),
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -2199,7 +2203,7 @@ func _update_cards_popup() -> void:
 					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"
 				row.add_child(target_option)
 			var tile_option: OptionButton = null
-			if card_id in ["拆除", "漲價", "查封", "換地", "換屋"]:
+			if card_id in ["拆除", "漲價", "查封", "換地", "換屋", "天使", "惡魔", "怪獸"]:
 				tile_option = _make_inventory_tile_picker(card_id)
 				row.add_child(tile_option)
 			if card_id == "購地":
@@ -2219,8 +2223,26 @@ func _update_cards_popup() -> void:
 					row.add_child(remodel_option)
 				elif current_tile.get("kind", "") == "property":
 					row.add_child(_make_label("改為普通住宅" if bool(current_tile.get("is_chain_store", false)) else "改為 1 級連鎖店", 11, TEXT_MUTED))
+			var angel_option: OptionButton = null
+			if card_id == "天使" and tile_option != null:
+				angel_option = OptionButton.new()
+				angel_option.name = "AngelFacilityType"
+				angel_option.custom_minimum_size = Vector2(150.0, 34.0)
+				for type_id in range(5):
+					angel_option.add_item(_facility_name(type_id), type_id)
+				angel_option.tooltip_text = "空設施的建造類型"
+				row.add_child(angel_option)
+				var refresh_angel_type := func(_index: int = 0) -> void:
+					var target_id := tile_option.get_selected_id()
+					var board: Array = state.get("board", [])
+					var target: Dictionary = board[target_id] if target_id >= 0 and target_id < board.size() else {}
+					angel_option.visible = target.get("kind", "") == "facility" and int(target.get("building_level", 0)) == 0
+				tile_option.item_selected.connect(refresh_angel_type)
+				refresh_angel_type.call()
 			var use := _make_button("使用", func() -> void:
 				var params: Dictionary = {"card_id": card_id}
+				if angel_option != null and angel_option.visible:
+					params["facility_type"] = angel_option.get_selected_id()
 				if remodel_option != null:
 					params["facility_type"] = remodel_option.get_selected_id()
 				if symbol_option != null:
@@ -3012,28 +3034,31 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	return int(tile.get("cost", 0))
 
 func _has_original_gods() -> bool:
-	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_gods", false))
+	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))
 
 func _has_original_inventory() -> bool:
-	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION]
+	return int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION]
 
 func _has_original_companies() -> bool:
-	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_companies", false))
+	return int(state.get("version", 0)) in [COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_companies", false))
 
 func _has_original_hazards() -> bool:
-	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_hazards", false))
+	return int(state.get("version", 0)) in [HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_hazards", false))
 
 func _has_original_property_cards() -> bool:
-	return int(state.get("version", 0)) in [PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_property_cards", false))
+	return int(state.get("version", 0)) in [PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_property_cards", false))
+
+func _has_original_building_cards() -> bool:
+	return int(state.get("version", 0)) == BUILDING_CARD_SAVE_VERSION and bool(state.get("original_building_cards", false))
 
 func _has_original_research() -> bool:
-	return int(state.get("version", 0)) == RESEARCH_SAVE_VERSION and bool(state.get("original_research", false))
+	return int(state.get("version", 0)) in [RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_research", false))
 
 func _has_original_remodel() -> bool:
-	return int(state.get("version", 0)) in [REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_remodel", false))
+	return int(state.get("version", 0)) in [REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_remodel", false))
 
 func _has_original_statuses() -> bool:
-	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION] and bool(state.get("original_statuses", false))
+	return int(state.get("version", 0)) in [STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_statuses", false))
 
 func _player_rest_status(player: Dictionary) -> Dictionary:
 	if _has_original_gods() and int(player.get("hospital_days", 0)) > 0:

@@ -501,6 +501,10 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	# partial and legacy caches loadable while withholding the capability marker
 	# when any prerequisite source evidence is absent.
 	var supports_original_research := supports_original_remodel
+	# Building cards are a v13 extension of the complete v12 source contract.
+	# Derive the capability from the existing research evidence so raw maps do
+	# not need a second marker that could drift from the source prerequisites.
+	var supports_original_building_cards := supports_original_research
 	if supports_original_statuses:
 		for tile in board:
 			if int(tile.type_and_idx) in [8001,8002]:
@@ -518,5 +522,6 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"companies": companies, "stock_rows": stock_rows,
 		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses,
 		"supports_original_hazards": supports_original_statuses, "supports_original_property_cards": supports_original_property_cards,
-		"supports_original_remodel": supports_original_remodel, "supports_original_research": supports_original_research}
+		"supports_original_remodel": supports_original_remodel, "supports_original_research": supports_original_research,
+		"supports_original_building_cards": supports_original_building_cards}
 	return {"ok": true, "error": "", "definition": definition}

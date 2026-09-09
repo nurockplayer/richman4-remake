@@ -208,6 +208,20 @@ func _test_tax_direct_payment_and_selection_atomicity() -> void:
 	expect(not player(game, 0).cards.has(TAX_CARD), "successful tax consumes 查稅")
 	expect(pending(game).is_empty(), "tax without 免費 has no pending response")
 
+	# Crediting the caster must preserve the save cash ceiling.  Reject the
+	# selection atomically before consuming 查稅 when the immediate transfer
+	# would exceed the representable 1e12 player-cash limit.
+	var cap: Object = fresh(74114)
+	if cap == null:
+		return
+	set_cash(cap, 0, 1000000000000 - 1999)
+	stage_card(cap, 0, TAX_CARD)
+	expect(bool(Game.validate_save(cap.to_dict()).get("ok", false)), "tax cash-cap fixture validates before public tax")
+	var cap_before: String = cap.to_json()
+	var cap_result: Dictionary = use_tax(cap, 1)
+	expect(not bool(cap_result.get("ok", false)), "tax rejects caster credit overflow at the cash cap")
+	expect_equal(cap.to_json(), cap_before, "tax cash-cap rejection preserves state, RNG and supply")
+
 	# A zero-cash target still receives the initial 免費 choice.  This keeps the
 	# source's card-consumption and response semantics visible at amount zero.
 	var zero: Object = fresh(74103)
@@ -392,9 +406,10 @@ func _test_ai_tax_fallback_and_dream_wait() -> void:
 	stage_card(game, 0, TAX_CARD)
 	stage_card(game, 1, FREE_CARD)
 	game.call("_admit_player_status", 2, "hospital", 3)
-	game.state["players"][3]["alive"] = false
+	game.call("_admit_player_status", 3, "hospital", 3)
 	game.set_player_ai(0, true)
 	prepare(game, 0, "await_action", 0)
+	expect(bool(Game.validate_save(game.to_dict()).get("ok", false)), "AI tax fixture validates before public AI turn")
 	var ai_before: String = game.to_json()
 	var ai_result: Dictionary = game.run_ai_turn()
 	expect(bool(ai_result.get("ok", false)), "AI tax turn completes to a pending human response")
@@ -408,6 +423,61 @@ func _test_ai_tax_fallback_and_dream_wait() -> void:
 	if not ai_pending.is_empty():
 		var ai_accept: Dictionary = respond(game, false, 1)
 		expect(bool(ai_accept.get("ok", false)), "human resolves the AI tax 免費 response")
+
+	# Passive AI 免費 decisions use the original random threshold policy.  Tax
+	# provides deterministic boundary amounts without depending on a random
+	# trace: 20% of 40,000 is 8,000 and always exceeds the 3,000..5,999
+	# threshold, while 20% of 10,000 is 2,000 and never reaches it.  A JSON
+	# mirror must make the same public choice and preserve the same RNG state.
+	var consume_game: Object = fresh(74112)
+	if consume_game == null:
+		return
+	stage_card(consume_game, 0, TAX_CARD)
+	stage_card(consume_game, 1, FREE_CARD)
+	set_cash(consume_game, 1, 40000)
+	consume_game.set_player_ai(1, true)
+	prepare(consume_game, 0, "await_action", 0)
+	expect(bool(Game.validate_save(consume_game.to_dict()).get("ok", false)), "AI high-tax fixture validates before public tax")
+	var consume_mirror: Object = Game.from_dict(JSON.parse_string(consume_game.to_json()))
+	expect(consume_mirror != null, "AI high-tax fixture reloads before public tax")
+	var consume_result: Dictionary = use_tax(consume_game, 1)
+	var consume_mirror_result: Dictionary = {}
+	if consume_mirror != null:
+		consume_mirror_result = use_tax(consume_mirror, 1)
+	expect(bool(consume_result.get("ok", false)), "AI consumes 免費 when tax exceeds its threshold")
+	if consume_mirror != null:
+		expect(bool(consume_mirror_result.get("ok", false)), "reloaded AI high-tax choice succeeds")
+	if bool(consume_result.get("ok", false)):
+		expect_equal(int(player(consume_game, 1).cash), 40000, "AI 免費 prevents the high tax payment")
+		expect(not player(consume_game, 1).cards.has(FREE_CARD), "AI high-tax choice consumes 免費")
+		expect(pending(consume_game).is_empty(), "AI high-tax choice does not wait for a human")
+	if consume_mirror != null:
+		expect_equal(consume_mirror.to_json(), consume_game.to_json(), "AI high-tax choice has exact JSON replay")
+
+	var decline_game: Object = fresh(74113)
+	if decline_game == null:
+		return
+	stage_card(decline_game, 0, TAX_CARD)
+	stage_card(decline_game, 1, FREE_CARD)
+	set_cash(decline_game, 1, 10000)
+	decline_game.set_player_ai(1, true)
+	prepare(decline_game, 0, "await_action", 0)
+	expect(bool(Game.validate_save(decline_game.to_dict()).get("ok", false)), "AI low-tax fixture validates before public tax")
+	var decline_mirror: Object = Game.from_dict(JSON.parse_string(decline_game.to_json()))
+	expect(decline_mirror != null, "AI low-tax fixture reloads before public tax")
+	var decline_result: Dictionary = use_tax(decline_game, 1)
+	var decline_mirror_result: Dictionary = {}
+	if decline_mirror != null:
+		decline_mirror_result = use_tax(decline_mirror, 1)
+	expect(bool(decline_result.get("ok", false)), "AI declines 免費 when tax is below its threshold")
+	if decline_mirror != null:
+		expect(bool(decline_mirror_result.get("ok", false)), "reloaded AI low-tax choice succeeds")
+	if bool(decline_result.get("ok", false)):
+		expect_equal(int(player(decline_game, 1).cash), 8000, "AI low-tax choice pays the 2,000 tax")
+		expect(player(decline_game, 1).cards.has(FREE_CARD), "AI low-tax choice preserves 免費")
+		expect(pending(decline_game).is_empty(), "AI low-tax choice does not wait for a human")
+	if decline_mirror != null:
+		expect_equal(decline_mirror.to_json(), decline_game.to_json(), "AI low-tax choice has exact JSON replay")
 
 	# A human dream target must also pause its restricted turn when the passive
 	# 免費 response is requested.  The sleep counter/control identity survives
@@ -423,7 +493,8 @@ func _test_ai_tax_fallback_and_dream_wait() -> void:
 	dream_player["vehicle"] = "walking"
 	dream_player["dice_count"] = 1
 	dream_player["dream_vehicle_backup"] = {"previous_vehicle": "walking", "previous_dice_count": 1}
-	game.call("_set_action_options", 0)
+	dream.call("_set_action_options", 0)
+	expect(bool(Game.validate_save(dream.to_dict()).get("ok", false)), "dream tax fixture validates before public tax")
 	var dream_tax: Dictionary = use_tax(dream, 1)
 	expect(bool(dream_tax.get("ok", false)), "tax against a dreaming human reaches passive 免費")
 	var dream_pending: Dictionary = pending(dream)

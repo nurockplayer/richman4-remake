@@ -131,6 +131,7 @@ var trap_popup: PopupPanel
 var trap_prompt_label: Label
 var trap_target_option: OptionButton
 var trap_redirect_button: Button
+var trap_decline_button: Button
 var _trap_response_busy := false
 var audio_controller: Object
 var audio_button: Button
@@ -757,6 +758,7 @@ func _build_popups() -> void:
 
 	trap_popup = _make_popup(Vector2i(570, 290))
 	trap_popup.name = "TrapResponsePopup"
+	trap_popup.exclusive = true
 	var trap_box := _popup_box(trap_popup)
 	trap_box.add_child(_make_label("使用嫁禍卡？", 19, TEXT_MAIN))
 	trap_prompt_label = _make_label("", 13, TEXT_MAIN)
@@ -770,9 +772,9 @@ func _build_popups() -> void:
 	trap_redirect_button = _make_button("使用嫁禍卡", func() -> void: _respond_to_trap(false))
 	trap_redirect_button.name = "RedirectTrap"
 	trap_box.add_child(trap_redirect_button)
-	var decline_trap := _make_button("不使用，接受入獄", func() -> void: _respond_to_trap(true))
-	decline_trap.name = "DeclineTrap"
-	trap_box.add_child(decline_trap)
+	trap_decline_button = _make_button("不使用，接受入獄", func() -> void: _respond_to_trap(true))
+	trap_decline_button.name = "DeclineTrap"
+	trap_box.add_child(trap_decline_button)
 	trap_popup.popup_hide.connect(func() -> void:
 		if not _trap_response_busy and _human_trap_response_pending():
 			call_deferred("_respond_to_trap", true)
@@ -2217,6 +2219,7 @@ func _update_trap_response_popup() -> void:
 		trap_popup.hide()
 		return
 	var pending := _pending_trap_for_ui()
+	trap_decline_button.text = "不使用，接受夢遊" if state.get("pending_trap_card", "") == "夢遊" else "不使用，接受入獄"
 	trap_prompt_label.text = SleepPresentation.defense_prompt(_player_name(int(pending.get("caster_id", -1))), str(state.get("pending_trap_card", "陷害")))
 	var prior_target := trap_target_option.get_selected_id() if trap_target_option.item_count > 0 else -1
 	trap_target_option.clear()
@@ -2395,10 +2398,11 @@ func _update_cards_popup() -> void:
 					params["target_id"] = target_option.get_selected_id()
 				if tile_option != null:
 					params["tile_id"] = tile_option.get_selected_id()
+				# Close inventory before a card can open its reaction window.
+				cards_popup.hide()
 				var result := _invoke_game("choose_action", ["use_card", params])
 				_append_local_log("使用卡片 %s：%s" % [card_id, _result_text(result, "已送出卡片指令。")])
 				_handle_result(result)
-				cards_popup.hide()
 			)
 			var implemented := _item_implemented("card", card_id)
 			use.disabled = not implemented or not _has_action_option(options, "use_card")
@@ -2935,11 +2939,17 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 		"trap_response_requested":
 			return "%s 決定是否使用嫁禍卡" % _player_name(int(event.get("target_id", -1)))
 		"trap_blocked":
-			return "免罪卡自動抵銷陷害"
+			return "免罪卡自動抵銷%s" % str(event.get("card_id", "陷害"))
 		"trap_redirected":
 			return "嫁禍卡將處罰轉給%s" % _player_name(int(event.get("target_id", -1)))
 		"trap_revenge":
-			return "復仇卡自動反擊，%s也被送入監獄" % _player_name(int(event.get("caster_id", -1)))
+			return "復仇卡自動反擊，%s也%s" % [_player_name(int(event.get("caster_id", -1))), "進入夢遊" if event.get("card_id", "") == "夢遊" else "被送入監獄"]
+		"trap_resolved":
+			return "已接受%s" % ("夢遊狀態" if event.get("card_id", "") == "夢遊" else "入獄處罰")
+		"sleep_admitted", "sleep_ticked":
+			return SleepPresentation.label({"kind": event.get("sleep_kind", "dream"), "count": int(event.get("remaining", 0))})
+		"sleep_released":
+			return "已從%s醒來" % ("冬眠" if event.get("sleep_kind", "") == "winter" else "夢遊")
 		"status_admitted":
 			return "%s · %s" % ["送往醫院" if event.get("status_kind", "") == "hospital" else "送往監獄", _tile_name(int(event.get("node", -1)))]
 		"status_skipped":

@@ -2904,8 +2904,13 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 				return "使用%s：%s" % [tool_name, _tile_name(int(event.get("tile_id", -1)))]
 			return "使用%s" % tool_name
 		"vehicle_selected":
-			var names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
+			var names := {"walking": "步行", "motorcycle": "機車", "car": "汽車", "engineering": "工程車"}
 			return "%s · %d 顆骰子" % [str(names.get(str(event.get("vehicle", "walking")), "交通工具")), int(event.get("dice_count", 1))]
+		"engineering_demolition":
+			return "工程車拆除了%s的建物" % _tile_name(int(event.get("tile_id", -1)))
+		"engineering_expired":
+			var names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
+			return "工程車期限結束，恢復%s" % str(names.get(str(event.get("vehicle", "walking")), "步行"))
 		"item_bought", "item_sold":
 			var item_name := _inventory_item_name(str(event.get("item_kind", "")), str(event.get("item_id", "")))
 			return "%s %s × %d · %d 點券" % ["買入" if event_type == "item_bought" else "出售", item_name, int(event.get("quantity", 1)), int(event.get("price", event.get("sale_price", 0)))]
@@ -3183,8 +3188,8 @@ func _shop_transaction(action: String, item_kind: String, item_id: String, quant
 func _append_tool_inventory() -> void:
 	var player := _current_player()
 	var vehicle := str(player.get("vehicle", "walking"))
-	var vehicle_names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
-	var vehicle_dice := {"walking": 1, "motorcycle": 2, "car": 3}
+	var vehicle_names := {"walking": "步行", "motorcycle": "機車", "car": "汽車", "engineering": "工程車"}
+	var vehicle_dice := {"walking": 1, "motorcycle": 2, "car": 3, "engineering": 1}
 	var vehicle_row := HBoxContainer.new()
 	var vehicle_label := _make_label("目前交通：%s" % str(vehicle_names.get(vehicle, vehicle)), 12, TEXT_MAIN)
 	vehicle_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3212,6 +3217,11 @@ func _append_tool_inventory() -> void:
 		walk.disabled = dice_option.disabled
 		vehicle_row.add_child(walk)
 	cards_popup_list.add_child(vehicle_row)
+	if vehicle == "engineering":
+		var engineering: Dictionary = player.get("engineering_vehicle", {})
+		var status := _make_label("工程車：剩餘 %d 回合" % int(engineering.get("remaining_admissions", 0)), 12, TEXT_GOLD)
+		status.name = "EngineeringVehicleStatus"
+		cards_popup_list.add_child(status)
 	cards_popup_list.add_child(_make_label("道具（取得上限每類 9 個）", 15, TEXT_GOLD))
 	var tools: Dictionary = _current_player().get("tools", {})
 	var has_tools := false
@@ -3252,7 +3262,7 @@ func _append_tool_inventory() -> void:
 		use.disabled = not implemented or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
 		if tile_option != null and tile_option.disabled:
 			use.disabled = true
-		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car"):
+		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car") or (item_id == "工程車" and vehicle == "engineering"):
 			use.disabled = true
 			use.text = "使用中"
 		if not implemented:

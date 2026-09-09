@@ -8,7 +8,7 @@
 
 來源是 owner-authorized 原版 PE、既有位址級反組譯與 companion C-like 摘要。核對範圍含命運 dispatcher、traffic remap、god gate、住宅與金流 mutation、status helper 及神明附身的 signed16 delta table。這些是靜態證據，並非原版runtime逐值golden trace；原始程式、二進位與素材不放進public repo。
 
-收入直接加玩家現金，不扣銀行準備金；費用沿既有現金／存款／破產處理。存款分配直接做玩家間deposit轉移，銀行現金與總存款不變。住宅處分只影響抽中的自有住宅，房屋拆除保留土地所有權；空地出售才清除所有權。神明修飾使用已建模的附身效果，不猜尚未建模的基礎buff。
+收入直接加玩家現金，不扣銀行準備金；費用沿既有現金／存款／破產處理。存款分配直接做玩家間deposit轉移，銀行現金與總存款不變。住宅處分只影響抽中的自有住宅，房屋拆除清除連鎖店旗標並保留土地所有權；空地出售才清除所有權。0、1、4不套神明gate；其他神明修飾使用已建模的附身效果，不猜尚未建模的基礎buff。狀態目的地不可用的候選在抽選時跳過。
 
 ## 已知差異
 
@@ -26,8 +26,10 @@
 
 第一次命運落點才以Godot RNG洗牌；原版初始化時機與libc rand序列不同。preview及apply同步完成，未重現1600ms等候、原畫與音效；繁體中文摘要依實際效果撰寫，沒有原版逐字文案承諾。一般費用的其他來源保險helper與未建模buff仍有差異。
 
+來源空地出售亦清除住宅期限；目前住宅沒有對應的期限欄位，本批不新增存檔schema，這部分仍是未建模差異。
+
 ## 存檔與驗證
 
 optional `fate={order,cursor,draw_count,last}` 保存抽選與已完成結果；last含原候選、remap ID、map slot、玩家、目標、變更、摘要、applied／blocked、原額度／天數與gate結果。UI關閉、重新整理及存讀不抽選或重新套用。舊type0/event3的unsupported道路可做一次kind migration；不增加save version或舊開發玩法分支。
 
-驗證入口為`tests/fate_flow.gd`、`tests/fate_save.gd`、`tests/fate_graph.gd`、`tests/fate_public_charge.gd`與`tests/fate_ui.gd`。`tools/fate_source_smoke.gd -- <existing-catalog>`沿兩張來源圖實際擲骰／選路並作bounded JSON AI續玩，不建立素材副本。實際RED／GREEN、native與審查紀錄保留於active PR；這份範圍文件本身不是完成驗收。
+驗證入口為`tests/fate_flow.gd`、`tests/fate_save.gd`、`tests/fate_graph.gd`、`tests/fate_public_charge.gd`、`tests/fate_ui.gd`，以及`tests/fate_contract_regressions.gd`、`tests/fate_state_contract.gd`的review反例。`tools/fate_source_smoke.gd -- <existing-catalog>`沿兩張來源圖實際擲骰／選路並作bounded JSON AI續玩，不建立素材副本。實際RED／GREEN、native與審查紀錄保留於active PR；這份範圍文件本身不是完成驗收。

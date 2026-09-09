@@ -132,7 +132,7 @@ static func _validate_last(last: Dictionary) -> Array:
 				errors.append("fate last change is invalid")
 	if typeof(last.get("summary", null)) != TYPE_STRING or str(last.get("summary", "")).is_empty():
 		errors.append("fate last summary is invalid")
-	if not ["applied", "blocked", "unsupported", "unresolved"].has(str(last.get("outcome", ""))):
+	if not ["applied", "blocked"].has(str(last.get("outcome", ""))):
 		errors.append("fate last outcome is invalid")
 	if not _valid_int(last.get("raw_amount", null), 0, 1000000000000):
 		errors.append("fate last amount is invalid")
@@ -163,8 +163,10 @@ static func has_eligible_target(game: Object, event_id: int) -> bool:
 		10, 11:
 			return str(player.get("vehicle", "walking")) in ["motorcycle", "car"]
 		12, 13:
-			return str(player.get("vehicle", "walking")) in ["walking", "motorcycle"]
+			return str(player.get("vehicle", "walking")) in ["walking", "motorcycle"] and _status_available(game, "hospital")
 		14, 15, 16:
+			if event_id == 15 and str(player.get("vehicle", "walking")) == "walking":
+				return _status_available(game, "hospital")
 			return str(player.get("vehicle", "walking")) in ["walking", "motorcycle", "car"]
 		33, 34, 35, 36:
 			return _map_prison_available(game)
@@ -496,19 +498,11 @@ static func _blocked_result(result: Dictionary, player_id: int, target_id: int, 
 
 
 static func _admit_status(game: Object, player_id: int, kind: String, days: int) -> bool:
-	if game.has_method("_admit_player_status") and bool(game._is_statuses()):
-		return bool(game._admit_player_status(player_id, kind, days).get("ok", false))
-	var player: Dictionary = game.state.players[player_id]
-	var key := "hospital_days" if kind == "hospital" else "prison_days"
-	player[key] = (int(player.get(key, 0)) + days) & 127
-	var node: int = -1
-	if game.has_method("_status_node_index"):
-		node = int(game._status_node_index(kind))
-	if node >= 0:
-		player["position"] = node
-		if player.has("previous_position"):
-			player["previous_position"] = -1
-	return true
+	return _status_available(game, kind) and bool(game._admit_player_status(player_id, kind, days).get("ok", false))
+
+
+static func _status_available(game: Object, kind: String) -> bool:
+	return game.has_method("_admit_player_status") and bool(game._is_statuses()) and int(game._status_node_index(kind)) >= 0
 
 
 static func _return_vehicle_for_status(game: Object, player_id: int) -> void:
@@ -572,9 +566,9 @@ static func _map_prison_available(game: Object) -> bool:
 	var source: Variant = game.state.get("map_source", {})
 	if typeof(source) != TYPE_DICTIONARY or str(source.get("edition", "")) != "Game":
 		return false
-	if game.state.has("game_stage") and int(game.state.get("game_stage", 0)) != 0:
+	if not _valid_int(source.get("map_number", null), 1, 4):
 		return false
-	return true
+	return _status_available(game, "prison")
 
 
 static func _god_gate_value(game: Object, player_id: int, first_arg: int) -> int:

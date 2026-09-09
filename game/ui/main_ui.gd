@@ -19,6 +19,7 @@ const TheftPicker = preload("res://game/ui/theft_picker.gd")
 const FinancialPresentation = preload("res://game/ui/financial_presentation.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
+const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -3540,6 +3541,11 @@ func _append_tool_inventory() -> void:
 			for value in range(1, 7):
 				value_option.add_item("%d 點" % value, value)
 			row.add_child(value_option)
+		var transport_picker: TransportPicker = null
+		if item_id == "傳送機":
+			transport_picker = TransportPicker.new()
+			row.add_child(transport_picker)
+			transport_picker.configure(game_state, state)
 		var tile_option: OptionButton = null
 		if ["路障", "機器工人", "飛彈", "核子飛彈"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
 			tile_option = _make_inventory_tile_picker(item_id)
@@ -3550,6 +3556,11 @@ func _append_tool_inventory() -> void:
 				params["value"] = value_option.get_selected_id()
 			if tile_option != null:
 				params["tile_id"] = tile_option.get_selected_id()
+			if transport_picker != null:
+				var transport_selection := transport_picker.selection()
+				if transport_selection.is_empty():
+					return
+				params.merge(transport_selection)
 			var result := _invoke_game("choose_action", ["use_tool", params])
 			_append_local_log("使用道具 %s：%s" % [item_id, _result_text(result, "已送出道具指令。")])
 			_handle_result(result)
@@ -3561,6 +3572,18 @@ func _append_tool_inventory() -> void:
 		use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
 		if tile_option != null and tile_option.disabled:
 			use.disabled = true
+		if transport_picker != null:
+			use.disabled = use.disabled or transport_picker.selection().is_empty()
+			transport_picker.selection_changed.connect(func(available: bool) -> void:
+				use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool") or not available
+			)
+		if item_id == "時光機" and game_state != null and game_state.has_method("time_machine_status"):
+			var time_status: Variant = game_state.call("time_machine_status")
+			var time_status_label := _make_label(str(time_status.get("message", "")) if time_status is Dictionary else "", 10, TEXT_MUTED)
+			time_status_label.name = "TimeMachineStatus"
+			time_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			row.add_child(time_status_label)
+			use.disabled = use.disabled or not (time_status is Dictionary and bool(time_status.get("available", false)))
 		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car") or (item_id == "工程車" and vehicle == "engineering"):
 			use.disabled = true
 			use.text = "使用中"
@@ -3570,6 +3593,7 @@ func _append_tool_inventory() -> void:
 		cards_popup_list.add_child(row)
 	if not has_tools:
 		cards_popup_list.add_child(_make_label("目前沒有道具。", 12, TEXT_MUTED))
+
 
 func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 	var picker := OptionButton.new()

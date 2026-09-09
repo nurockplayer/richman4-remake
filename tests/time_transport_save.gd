@@ -2,11 +2,9 @@ extends SceneTree
 
 ## Issue #81 save contract for the v13 時光機／傳送機 batch.
 ##
-## The transport and time effects are intentionally still qualified RED until
-## their production implementation lands.  This file keeps the save boundary
-## executable beforehand: every world snapshot is a legal v13 graph, private
-## time anchors never become serialized state, and an unavailable post-load
-## restore remains byte/RNG/inventory atomic.
+## The save boundary covers every world snapshot as a legal v13 graph, keeps
+## private time anchors out of serialized state, and makes an unavailable
+## post-load restore byte/RNG/inventory atomic.
 
 const Game = preload("res://game/core/game_state.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
@@ -491,6 +489,14 @@ func _test_stay_and_status_skip_keep_anchor() -> void:
 			continue
 		var anchor_position: int = int(game.state["players"][0].get("position", -1))
 		game.state["players"][0][str(entry["field"])] = int(entry["value"])
+		if str(entry["field"]) == "hospital_days":
+			# Stage the status through the same location invariant enforced by
+			# validate_save; roll() must not repair an invalid fixture for us.
+			game.state["players"][0]["position"] = int(game.call("_status_node_index", "hospital"))
+			game.state["players"][0]["previous_position"] = -1
+		game._set_action_options(0)
+		var before_skip_validation: Dictionary = Game.validate_save(game.to_dict())
+		_expect(bool(before_skip_validation.get("ok", false)), str(entry["label"]) + " skip fixture validates immediately before public roll: " + str(before_skip_validation.get("errors", [])))
 		var skip_result: Dictionary = game.roll(1)
 		_expect(bool(skip_result.get("ok", false)), str(entry["label"]) + " turn skips through public roll")
 		_expect_equal(str(game.state.get("phase", "")), "await_action", str(entry["label"]) + " skip leaves an action phase")

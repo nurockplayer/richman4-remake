@@ -61,6 +61,47 @@ func run() -> void:
 	check(time_status != null and not time_status.text.is_empty(), "time tool visibly explains unavailable anchor")
 	var use: Button = ui.cards_popup.find_child("UseTool_傳送機", true, false)
 	check(use != null and not use.disabled, "transport has executable backpack control")
+	# Regression: an initially empty property category must become executable
+	# when switching to a legal player target, then become disabled again when
+	# switching back to the still-invalid property category.
+	var property_snapshots: Dictionary = {}
+	for index in range(game.state.board.size()):
+		var tile: Dictionary = game.state.board[index]
+		if tile.get("kind", "") != "property":
+			continue
+		property_snapshots[index] = tile.duplicate(true)
+		game.state.board[index]["owner"] = -1
+		game.state.board[index]["building_level"] = 0
+		game.state.board[index]["is_chain_store"] = false
+		game.call("_update_tile_rent", game.state.board[index])
+	var properties_snapshots: Array = []
+	for player in game.state.players:
+		properties_snapshots.append(player.get("properties", []).duplicate(true))
+		player["properties"] = []
+	game.call("_recalculate_property_values")
+	game.call("_set_action_options", 0)
+	ui.cards_popup.hide()
+	ui._refresh_from_state()
+	ui._on_cards_pressed()
+	await process_frame
+	use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+	check(use != null and use.disabled, "transport is disabled when the property category has no source")
+	check(select_id(ui.cards_popup.find_child("TransportKind", true, false), 2), "transport switches from empty property category to player category")
+	use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+	check(use != null and not use.disabled, "transport becomes enabled for a legal player selection")
+	check(select_id(ui.cards_popup.find_child("TransportKind", true, false), 0), "transport switches back to the empty property category")
+	use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+	check(use != null and use.disabled, "transport becomes disabled again for the invalid property selection")
+	ui.cards_popup.hide()
+	for index_value in property_snapshots.keys():
+		game.state.board[int(index_value)] = property_snapshots[index_value].duplicate(true)
+	for index in range(properties_snapshots.size()):
+		game.state.players[index]["properties"] = properties_snapshots[index].duplicate(true)
+	game.call("_recalculate_property_values")
+	game.call("_set_action_options", 0)
+	ui._refresh_from_state()
+	ui._on_cards_pressed()
+	await process_frame
 	check(select_transport(ui, 0, 2, 3), "transport selects property source and empty destination")
 	var before: String = game.to_json()
 	ui.cards_popup.hide()

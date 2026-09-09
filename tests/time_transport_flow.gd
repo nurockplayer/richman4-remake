@@ -3,12 +3,13 @@ extends SceneTree
 ## Issue #81 TEST-ONLY seed for 時光機 (ID10) and 傳送機 (ID11).
 ##
 ## The fixture is a synthetic, asset-free v13 graph.  Positive public entries
-## deliberately remain qualified RED until the two tools are implemented.  The
-## strict target, save, RNG, and inventory assertions keep an implementation
-## from hiding behind a top-level capability gate.
+## exercise the implemented effects.  The strict target, save, RNG, and
+## inventory assertions keep an implementation from hiding behind a top-level
+## capability gate.
 
 const Game = preload("res://game/core/game_state.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
+const TimeTransportRules = preload("res://game/core/time_transport_rules.gd")
 const Fixture = preload("res://tests/fixtures/time_transport_fixture.gd")
 
 const V13 := 13
@@ -238,6 +239,22 @@ func _assert_rejected_atomic(game: Object, tool_id: String, params: Dictionary, 
 	_expect_equal(int(game.state["players"][0]["tools"].get(tool_id, 0)), before_held, label + " keeps the held tool")
 
 
+func _assert_action_rejected_atomic(game: Object, action: String, params: Dictionary, label: String) -> void:
+	var before_json: String = game.to_json()
+	var before_rng: String = str(game.to_dict().get("rng_state_text", ""))
+	var before_event: Dictionary = game.state.get("last_event", {}).duplicate(true)
+	var before_supply: Dictionary = game.state["inventory_supply"]["tools"].duplicate(true)
+	var before_tools: Dictionary = game.state["players"][0].get("tools", {}).duplicate(true)
+	var result: Dictionary = game.choose_action(action, params)
+	_expect(not bool(result.get("ok", false)), label + " is rejected")
+	_expect(not str(result.get("message", "")).is_empty(), label + " explains the rejection")
+	_expect_equal(game.to_json(), before_json, label + " is byte-for-byte atomic")
+	_expect_equal(str(game.to_dict().get("rng_state_text", "")), before_rng, label + " keeps RNG continuation")
+	_expect_equal(game.state.get("last_event", {}), before_event, label + " appends no event")
+	_expect_equal(game.state["inventory_supply"]["tools"], before_supply, label + " keeps all supply")
+	_expect_equal(game.state["players"][0].get("tools", {}), before_tools, label + " keeps held tools")
+
+
 func _static_property_snapshot(tile: Dictionary) -> Dictionary:
 	var result: Dictionary = {}
 	for key in ["index", "source_node_id", "x", "y", "adjacent", "type_and_idx", "visual_index", "event_code", "source_status_bits", "source_object_id", "kind", "name", "cost", "upgrade_cost", "base_rent", "land_price", "house_price", "rent_by_level", "group", "tax_amount"]:
@@ -416,6 +433,10 @@ func _test_time_machine_ordering_and_missing_tools() -> void:
 	if not _establish_human_anchor(late_tool, "late time tool anchor"):
 		return
 	_stage_tool(late_tool, 0, TIME_MACHINE, "time tool acquired after anchor")
+	var missing_anchor_status: Dictionary = _status_query(late_tool, "time status with missing anchor tool")
+	if late_tool.has_method("time_machine_status"):
+		_expect_equal(bool(missing_anchor_status.get("available", true)), false, "time status requires the anchor and current player to hold the tool")
+		_expect(str(missing_anchor_status.get("message", "")).contains("上次移動前沒有時光機"), "time status explains the missing anchor tool")
 	var missing_in_anchor: Dictionary = _public_use(late_tool, {"tool_id": TIME_MACHINE}, "time restore with missing anchor tool")
 	_mark_qualified_red(missing_in_anchor, "time restore with missing anchor tool")
 	_expect(not bool(missing_in_anchor.get("ok", false)), "time restore rejects a tool absent from the anchor")
@@ -634,6 +655,31 @@ func _test_transport_players_gods_and_no_landing() -> void:
 		_expect_equal(int(attached.state["players"][1].get("position", -1)), ROAD, "attached god target resolves through its player")
 		_expect_equal(int(attached.state["god_objects"][0].get("node", -1)), ROAD, "attached god follows its player")
 
+	var own_attached: Object = _new_game(8253, 2)
+	if own_attached == null:
+		return
+	own_attached.state["players"][0]["position"] = CENTRE
+	own_attached.state["players"][0]["previous_position"] = -1
+	own_attached.state["players"][0]["god_id"] = 1
+	own_attached.state["god_objects"] = [{"id": 1, "node": CENTRE, "owner": 0, "days": 7}]
+	_stage_tool(own_attached, 0, TIME_MACHINE)
+	_stage_tool(own_attached, 0, TRANSPORTER)
+	_prepare_action(own_attached, 0, CENTRE)
+	var own_transport: Dictionary = _transport_result(own_attached, {
+		"tool_id": TRANSPORTER,
+		"target_kind": "god",
+		"target_id": 1,
+		"destination_id": ROAD,
+	}, "own attached god transport")
+	if _expect_success(own_transport, "own attached god transport"):
+		_expect_equal(int(own_attached.state["players"][0].get("position", -1)), ROAD, "own attached god transport moves the actor")
+		_expect_equal(int(own_attached.state["god_objects"][0].get("node", -1)), ROAD, "own attached god transport follows the actor")
+		var own_restore: Dictionary = _public_use(own_attached, {"tool_id": TIME_MACHINE}, "own attached god time restore")
+		if _expect_success(own_restore, "own attached god time restore"):
+			_expect_equal(int(own_attached.state["players"][0].get("position", -1)), CENTRE, "own attached god restore returns the actor")
+			_expect_equal(int(own_attached.state["god_objects"][0].get("node", -1)), CENTRE, "own attached god restore returns the god")
+			_expect_equal(int(own_attached.state["players"][0]["tools"].get(TRANSPORTER, 0)), 1, "own attached god restore recovers the transporter")
+
 	var unbound: Object = _new_game(8252, 3)
 	if unbound == null:
 		return
@@ -711,6 +757,33 @@ func _test_transport_cancel_invalid_and_type_atomicity() -> void:
 		_stage_tool(detained, 0, TRANSPORTER)
 		_prepare_action(detained, 0, CENTRE)
 		_assert_rejected_atomic(detained, TRANSPORTER, {"tool_id": TRANSPORTER, "target_kind": "player", "target_id": 1, "destination_id": ROAD}, "detained player target")
+
+	var blocked: Object = _new_game(8282, 2)
+	if blocked != null:
+		_stage_tool(blocked, 0, TRANSPORTER)
+		_prepare_action(blocked, 0, CENTRE)
+		blocked.state["players"][0]["skip_turns"] = 1
+		blocked._set_action_options(0)
+		var blocked_targets: Array = blocked.transport_targets("player")
+		_expect(blocked_targets.is_empty(), "movement-blocked transport query exposes no targets")
+		var blocked_before: String = blocked.to_json()
+		var blocked_result: Dictionary = TimeTransportRules.use_transport(blocked, 0, {
+			"tool_id": TRANSPORTER,
+			"target_kind": "player",
+			"target_id": 0,
+			"destination_id": ROAD,
+		})
+		_expect(not bool(blocked_result.get("ok", false)), "movement-blocked transport mutator is rejected")
+		_expect(str(blocked_result.get("message", "")).contains("傳送機"), "movement-blocked transport rejection explains the context")
+		_expect_equal(blocked.to_json(), blocked_before, "movement-blocked transport mutator is atomic")
+
+	var spoof: Object = _new_game(8283, 2)
+	if spoof != null:
+		var admitted: Dictionary = spoof._admit_player_status(0, "hospital", 2)
+		_expect(bool(admitted.get("ok", false)), "spoof action stages through status admission")
+		_stage_tool(spoof, 0, TIME_MACHINE, "spoof time tool")
+		spoof._set_action_options(0)
+		_assert_action_rejected_atomic(spoof, "use_card", {"tool_id": TIME_MACHINE, "card_id": "搶奪"}, "detention time-tool spoof action")
 
 
 func _ai_transport_game(seed_value: int, tool_id: String) -> Object:

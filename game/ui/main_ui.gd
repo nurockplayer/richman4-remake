@@ -1984,6 +1984,16 @@ func _update_players(players: Array, current_index: int) -> void:
 			name_column.add_child(_make_label("%s · %d 天" % [OriginalGods.name_for(god_id), days], 10, TEXT_GOLD))
 		if _has_original_hazards() and int(player.get("bomb_steps", 0)) > 0:
 			name_column.add_child(_make_label("定時炸彈 · 剩餘 %d 步" % int(player.bomb_steps), 10, TEXT_GOLD))
+		var alliance: Dictionary = player.get("alliance", {})
+		if not alliance.is_empty():
+			var partner_id := int(alliance.get("partner_id", -1))
+			var all_players: Array = state.get("players", [])
+			if partner_id >= 0 and partner_id < all_players.size():
+				var turns := int(alliance.get("turns", 0))
+				var remaining := "下回合到期" if turns == 128 else "剩餘 %d 回合" % turns
+				var alliance_label := _make_label("同盟：%s · %s" % [str(all_players[partner_id].get("name", "")), remaining], 10, TEXT_GOLD)
+				alliance_label.name = "AllianceStatus_%d" % index
+				name_column.add_child(alliance_label)
 		var rest_status := _player_rest_status(player)
 		if not rest_status.is_empty():
 			name_column.add_child(_make_label(_rest_status_label(rest_status), 10, TEXT_GOLD))
@@ -2314,20 +2324,20 @@ func _update_cards_popup() -> void:
 				var visible: Array = board_view.visible_node_indices() if board_view != null else []
 				theft_picker.configure(state, choices, visible)
 			var target_option: OptionButton = null
-			if ["停留", "烏龜", "轉向", "均貧", "陷害", "夢遊"].has(card_id):
+			if ["停留", "烏龜", "轉向", "均貧", "陷害", "夢遊", "同盟"].has(card_id):
 				target_option = OptionButton.new()
 				target_option.name = "CardTarget_" + card_id
 				target_option.custom_minimum_size = Vector2(120.0, 34.0)
 				target_option.add_theme_font_size_override("font_size", 11)
 				var target_players: Array = state.get("players", [])
-				var target_method := "dream_target_players" if card_id == "夢遊" else "trap_target_players"
-				var trap_targets: Array = _as_array(game_state.call(target_method, int(state.get("current_player", -1)))) if card_id in ["陷害", "夢遊"] and game_state != null and game_state.has_method(target_method) else []
-				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id in ["陷害", "夢遊"] and board_view != null and board_view.has_method("visible_node_indices") else []
+				var target_method := "alliance_target_players" if card_id == "同盟" else ("dream_target_players" if card_id == "夢遊" else "trap_target_players")
+				var trap_targets: Array = _as_array(game_state.call(target_method, int(state.get("current_player", -1)))) if card_id in ["陷害", "夢遊", "同盟"] and game_state != null and game_state.has_method(target_method) else []
+				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id in ["陷害", "夢遊", "同盟"] and board_view != null and board_view.has_method("visible_node_indices") else []
 				for target_index in range(target_players.size()):
 					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
-					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id not in ["陷害", "夢遊"] or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
+					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id not in ["陷害", "夢遊", "同盟"] or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
-				if card_id in ["陷害", "夢遊"] and target_option.item_count == 0:
+				if card_id in ["陷害", "夢遊", "同盟"] and target_option.item_count == 0:
 					target_option.add_item("畫面內沒有可用目標", -1)
 					target_option.disabled = true
 					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"

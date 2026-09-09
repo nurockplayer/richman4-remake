@@ -29,6 +29,7 @@ const OriginalMaps = preload("res://game/content/original_maps.gd")
 const OriginalInventory = preload("res://game/core/inventory_rules.gd")
 const OriginalInventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
+const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -82,7 +83,7 @@ const AI_SUMMON_GOD_IDS = [1, 2, 3, 4, 12]
 const PROPERTY_CARD_IDS = ["換地", "換屋"]
 const REMODEL_CARD_ID = "改建"
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
-const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人"]
+const IMPLEMENTED_TOOL_IDS = ["機車", "汽車", "路障", "地雷", "定時炸彈", "機器娃娃", "遙控骰子", "機器工人", "工程車"]
 const VEHICLE_TOOL_IDS = {
 	"motorcycle": "機車",
 	"car": "汽車",
@@ -92,6 +93,7 @@ const VEHICLE_DICE = {
 	"walking": 1,
 	"motorcycle": 2,
 	"car": 3,
+	"engineering": 1,
 }
 const VEHICLE_COSTS = {
 	"walking": 0,
@@ -1804,6 +1806,7 @@ func _clear_player_inventory(player_id: int) -> void:
 	player["tools"] = {}
 	player["vehicle"] = "walking"
 	player["dice_count"] = 1
+	player.erase("engineering_vehicle")
 	player["vehicles"] = {"walking": true, "motorcycle": false, "car": false}
 	_record_event("god_inventory_cleared", {"player_id": player_id, "card_count": dropped_cards.size(), "tool_ids": dropped_tools.keys()})
 
@@ -2123,6 +2126,8 @@ func _set_action_options(player_id: int) -> void:
 					options.push_front("buy_vehicle")
 	var action_pending_remote: Variant = state.get("pending_remote_dice", {})
 	var action_remote_pending: bool = _is_inventory() and typeof(action_pending_remote) == TYPE_DICTIONARY and not action_pending_remote.is_empty()
+	if _is_inventory() and not hospitalized and not _stationary_turn() and not action_remote_pending and not _inventory_movement_blocked(player) and not EngineeringVehicle.is_active(player) and int(player.get("tools", {}).get("工程車", 0)) > 0:
+		options.push_front("use_tool")
 	if player.get("cards", []).size() > 0 and not action_remote_pending:
 		var can_use_card: bool = not hospitalized
 		if hospitalized:
@@ -2996,6 +3001,11 @@ func _is_graph() -> bool:
 	return state.get("board_mode", "") == GRAPH_BOARD_MODE
 
 
+func _stationary_turn() -> bool:
+	var value: Variant = state.get("stationary_turn", false)
+	return typeof(value) == TYPE_BOOL and bool(value)
+
+
 func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
@@ -3136,6 +3146,149 @@ func _inventory_vehicle_tool_id(vehicle: String) -> String:
 	return str(VEHICLE_TOOL_IDS.get(vehicle, ""))
 
 
+func _engineering_activation(player_id: int) -> Dictionary:
+	if not _is_inventory():
+		return _error("工程車只適用於道具地圖")
+	if _stationary_turn():
+		return _error("停留回合無法使用工程車")
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("目前玩家無法行動")
+	if _status_active(player) or _is_gods_hospital_action(player):
+		return _error("目前狀態無法使用工程車")
+	if _inventory_movement_blocked(player):
+		return _error("目前移動狀態無法使用工程車")
+	if EngineeringVehicle.is_active(player):
+		return _error("工程車效果已經啟用")
+	if player.has("engineering_vehicle"):
+		return _error("工程車狀態無效")
+	var tools_value: Variant = player.get("tools", {})
+	if typeof(tools_value) != TYPE_DICTIONARY or int(tools_value.get("工程車", 0)) <= 0:
+		return _error("玩家沒有這項道具")
+	var previous_vehicle: String = str(player.get("vehicle", "walking"))
+	if not EngineeringVehicle.ORDINARY_DICE.has(previous_vehicle):
+		return _error("目前交通工具無效")
+	var previous_dice: Variant = player.get("dice_count", null)
+	if typeof(previous_dice) != TYPE_INT or int(previous_dice) < 1 or int(previous_dice) > EngineeringVehicle.ordinary_dice(previous_vehicle):
+		return _error("目前骰子數量無效")
+	var staged_tools: Dictionary = tools_value.duplicate(true)
+	var engineer_quantity: int = int(staged_tools.get("工程車", 0)) - 1
+	if engineer_quantity <= 0:
+		staged_tools.erase("工程車")
+	else:
+		staged_tools["工程車"] = engineer_quantity
+	var previous_tool_id: String = _inventory_vehicle_tool_id(previous_vehicle)
+	if not previous_tool_id.is_empty():
+		if int(staged_tools.get(previous_tool_id, 0)) >= OriginalInventory.VEHICLE_STORAGE_CAPACITY:
+			return _error("道具數量超出上限")
+		staged_tools[previous_tool_id] = int(staged_tools.get(previous_tool_id, 0)) + 1
+	player["tools"] = staged_tools
+	player["vehicle"] = EngineeringVehicle.VEHICLE_ID
+	player["dice_count"] = 1
+	player["engineering_vehicle"] = EngineeringVehicle.metadata(previous_vehicle, int(previous_dice))
+	_record_event("tool_used", {"player_id": player_id, "tool_id": "工程車", "effect": "engineering_vehicle", "vehicle": EngineeringVehicle.VEHICLE_ID, "previous_vehicle": previous_vehicle, "previous_dice_count": int(previous_dice), "remaining_admissions": EngineeringVehicle.MAX_ADMISSIONS})
+	_set_action_options(player_id)
+	return _result(true, "已啟用工程車", {"tool_id": "工程車", "vehicle": EngineeringVehicle.VEHICLE_ID, "remaining_admissions": EngineeringVehicle.MAX_ADMISSIONS})
+
+
+func _engineering_admit(player_id: int) -> void:
+	if not _is_inventory() or not _valid_player(player_id, true):
+		return
+	var player: Dictionary = _player(player_id)
+	if not EngineeringVehicle.is_active(player):
+		return
+	var timer: Dictionary = EngineeringVehicle.tick(player.get("engineering_vehicle", null))
+	if not bool(timer.get("ok", false)):
+		player.erase("engineering_vehicle")
+		player["vehicle"] = "walking"
+		player["dice_count"] = 1
+		return
+	if not bool(timer.get("expired", false)):
+		player["engineering_vehicle"] = timer.get("metadata", {})
+		return
+	var metadata_value: Dictionary = timer.get("metadata", {})
+	var previous_vehicle: String = str(metadata_value.get("previous_vehicle", "walking"))
+	var previous_tool_id: String = _inventory_vehicle_tool_id(previous_vehicle)
+	var available: bool = previous_tool_id.is_empty() or int(player.get("tools", {}).get(previous_tool_id, 0)) > 0
+	var restored: Dictionary = EngineeringVehicle.restore(metadata_value, available)
+	var restored_vehicle: String = str(restored.get("vehicle", "walking"))
+	var restored_dice: int = int(restored.get("dice_count", 1))
+	if available and not previous_tool_id.is_empty():
+		_hazard_consume_tool_without_supply(player, previous_tool_id)
+	var vehicles: Dictionary = player.get("vehicles", {}).duplicate(true)
+	vehicles[restored_vehicle] = true
+	player["vehicles"] = vehicles
+	player["vehicle"] = restored_vehicle
+	player["dice_count"] = restored_dice
+	player.erase("engineering_vehicle")
+	_record_event("engineering_expired", {"player_id": player_id, "previous_vehicle": previous_vehicle, "previous_dice_count": int(metadata_value.get("previous_dice_count", 1)), "restored_vehicle": restored_vehicle, "restored_dice_count": restored_dice, "restored_from_held": available})
+
+
+func _engineering_landing_target(player_id: int, allow_unowned: bool = false) -> Dictionary:
+	if not _is_inventory() or not _is_graph() or state.get("phase", "") != "await_action":
+		return {}
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return {}
+	if _stationary_turn():
+		return {}
+	if typeof(state.get("last_roll", [])) != TYPE_ARRAY or state.get("last_roll", []).is_empty():
+		return {}
+	var tile: Dictionary = _tile_at(int(player.get("position", -1)))
+	if tile.is_empty():
+		return {}
+	var owner_id: int = int(tile.get("owner", -1))
+	var level: int = int(tile.get("building_level", 0))
+	if tile.get("kind", "") == "facility":
+		tile = _facility_record(int(tile.get("index", -1)))
+		owner_id = int(tile.get("owner", -1))
+		level = int(tile.get("building_level", 0))
+	if tile.get("kind", "") not in ["property", "facility"] or owner_id == player_id or level <= 0 or (owner_id < 0 and not allow_unowned):
+		return {}
+	return tile
+
+
+func _engineering_ai_action(player_id: int) -> bool:
+	var player: Dictionary = _player(player_id)
+	if player.is_empty():
+		return false
+	var target: Dictionary = _engineering_landing_target(player_id)
+	if target.is_empty():
+		return false
+	var current_god_id: int = _player_god_id(player_id)
+	var target_level: int = int(target.get("building_level", 0))
+	if current_god_id == 12 or (current_god_id == 10 and target_level <= 1):
+		return false
+	if int(player.get("tools", {}).get("工程車", 0)) > 0:
+		var result: Dictionary = _engineering_activation(player_id)
+		return bool(result.get("ok", false))
+	return false
+
+
+func _engineering_demolition(player_id: int) -> void:
+	if not _is_inventory() or _stationary_turn() or not EngineeringVehicle.is_active(_player(player_id)):
+		return
+	var target: Dictionary = _engineering_landing_target(player_id, true)
+	if target.is_empty():
+		return
+	var tile_id: int = int(target.get("index", -1))
+	var owner_id: int = int(target.get("owner", -1))
+	var level: int = int(target.get("building_level", 0))
+	var next_level: int = 0
+	var payload: Dictionary = {"player_id": player_id, "tile_id": tile_id, "owner_id": owner_id, "kind": str(target.get("kind", "")), "from_level": level, "to_level": next_level}
+	if target.get("kind", "") == "facility":
+		var source_object_id: int = int(target.get("source_object_id", -1))
+		_update_facility_records(source_object_id, {"building_level": next_level, "facility_type": 0 if next_level == 0 else int(target.get("facility_type", 0))})
+		payload["source_object_id"] = source_object_id
+	else:
+		target["building_level"] = next_level
+		if _is_remodel() and next_level == 0:
+			target["is_chain_store"] = false
+		_update_tile_rent(target)
+	_recalculate_property_values()
+	_record_event("engineering_demolition", payload)
+
+
 static func _inventory_movement_blocked(player: Dictionary) -> bool:
 	for field in ["skip_turns", "turtle_days", "stay_next"]:
 		if _valid_int(player.get(field, 0), 1):
@@ -3219,6 +3372,11 @@ func _hazard_return_active_vehicle(player: Dictionary) -> String:
 	if player.is_empty():
 		return ""
 	var vehicle := str(player.get("vehicle", "walking"))
+	if vehicle == EngineeringVehicle.VEHICLE_ID:
+		player.erase("engineering_vehicle")
+		player["vehicle"] = "walking"
+		player["dice_count"] = 1
+		return vehicle
 	var tool_id := _inventory_vehicle_tool_id(vehicle)
 	if not tool_id.is_empty() and _is_inventory():
 		var supply: Variant = state.get("inventory_supply", {})
@@ -3484,6 +3642,8 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 	if selected < 1 or selected > maximum:
 		return _error("骰子數量超出交通工具限制")
 	var current_vehicle: String = str(player.get("vehicle", "walking"))
+	if vehicle == EngineeringVehicle.VEHICLE_ID:
+		return _error("工程車只能透過研究道具啟用")
 	if current_vehicle == vehicle:
 		player["dice_count"] = selected
 		_record_event("vehicle_selected", {"player_id": int(player["id"]), "vehicle": vehicle, "dice_count": selected})
@@ -3514,6 +3674,8 @@ func _set_inventory_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary
 	player["vehicles"] = vehicles
 	player["vehicle"] = vehicle
 	player["dice_count"] = selected
+	if current_vehicle == EngineeringVehicle.VEHICLE_ID:
+		player.erase("engineering_vehicle")
 	_record_event("vehicle_selected", {"player_id": int(player["id"]), "vehicle": vehicle, "dice_count": selected})
 	_set_action_options(int(player["id"]))
 	return _result(true, "已選擇交通工具")
@@ -3529,6 +3691,14 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 	var player: Dictionary = _current_player()
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法行動")
+	if vehicle == EngineeringVehicle.VEHICLE_ID:
+		if not EngineeringVehicle.is_active(player):
+			return _error("工程車只能透過研究道具啟用")
+		if dice_count > 1:
+			return _error("工程車只能使用一顆骰子")
+		player["dice_count"] = 1
+		_record_event("vehicle_selected", {"player_id": int(player["id"]), "vehicle": vehicle, "dice_count": 1})
+		return _result(true, "已選擇交通工具")
 	if not VEHICLE_DICE.has(vehicle):
 		return _error("未知的交通工具")
 	if _is_inventory():
@@ -3634,6 +3804,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 		return _error("骰子數量超出交通工具限制")
 	var dice: Array = []
 	var total: int = 0
+	var stationary_turn: bool = int(player.get("stay_next", 0)) > 0
 	if not pending_remote.is_empty():
 		var remote_value: Variant = pending_remote.get("value", null)
 		if not _valid_int(remote_value, 1, 6):
@@ -3649,6 +3820,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 			var face: int = _rng.randi_range(1, 6)
 			dice.append(face)
 			total += face
+	if stationary_turn and _is_inventory() and _is_graph():
+		state["stationary_turn"] = true
+	else:
+		state.erase("stationary_turn")
 	state["last_roll"] = dice
 	state["last_total"] = total
 	if _is_facilities():
@@ -3659,7 +3834,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 	state["property_action_used"] = false
 	var graph_should_move: bool = false
 	var dog_collision: bool = false
-	if int(player.get("stay_next", 0)) > 0:
+	if stationary_turn:
 		player["stay_next"] = int(player.get("stay_next", 0)) - 1
 		if _is_research():
 			# A positive roll without an edge traversal is not a new research visit.
@@ -4193,7 +4368,7 @@ func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
 	if facility_type == 3:
 		var vehicle: String = str(_player(player_id).get("vehicle", "walking"))
 		var roll_total: int = int(state.get("last_roll_total", state.get("last_total", 0)))
-		var vehicle_multiplier: int = 1 if vehicle == "motorcycle" else 2 if vehicle == "car" else 0
+		var vehicle_multiplier: int = 4 if vehicle == EngineeringVehicle.VEHICLE_ID else 1 if vehicle == "motorcycle" else 2 if vehicle == "car" else 0
 		payload["vehicle"] = vehicle
 		payload["last_roll_total"] = roll_total
 		payload["resolved_roll"] = roll_total
@@ -4443,6 +4618,10 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		for owner_god_id in owner_god_ids:
 			if _god_object_index(owner_god_id) >= 0:
 				_detach_god(owner_god_id, "bankrupt", true)
+	if EngineeringVehicle.is_active(debtor):
+		debtor.erase("engineering_vehicle")
+		debtor["vehicle"] = "walking"
+		debtor["dice_count"] = 1
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
 	var loan: int = int(debtor.get("loan", 0))
 	if loan > 0:
@@ -4583,7 +4762,9 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	if normalized == "buy_stock" or normalized == "sell_stock":
 		return _trade_stock(normalized, params)
 	var inventory_card_phase: bool = _is_inventory() and normalized == "use_card" and state.get("phase", "") in ["await_roll", "await_action"]
-	var inventory_tool_phase: bool = _is_inventory() and normalized == "use_tool" and state.get("phase", "") == "await_roll"
+	var requested_tool_id: String = str(params.get("tool_id", ""))
+	var engineering_action_phase: bool = _is_inventory() and normalized == "use_tool" and requested_tool_id == "工程車" and state.get("phase", "") == "await_action"
+	var inventory_tool_phase: bool = _is_inventory() and normalized == "use_tool" and (state.get("phase", "") == "await_roll" or engineering_action_phase)
 	if not inventory_card_phase and not inventory_tool_phase and not _require_phase("await_action"):
 		return _error("目前不是行動階段")
 	var player_id: int = int(state.get("current_player", -1))
@@ -4600,6 +4781,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	_set_action_options(player_id)
 	var allowed_options: Array = state.get("action_options", [])
 	if not allowed_options.has(normalized):
+		state["action_options"] = action_options_before
 		return _error("目前位置不能執行此行動")
 	match normalized:
 		"company_upgrade":
@@ -4699,10 +4881,13 @@ func _trade_item(player_id: int, action: String, params: Dictionary) -> Dictiona
 
 
 func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
-	if not _is_inventory() or not _require_phase("await_roll"):
-		return _error("道具只能在擲骰前使用")
+	if not _is_inventory():
+		return _error("道具只適用於道具地圖")
 	var player: Dictionary = _player(player_id)
 	var tool_id: String = str(params.get("tool_id", ""))
+	var engineering_landing: bool = tool_id == "工程車" and state.get("phase", "") == "await_action"
+	if state.get("phase", "") != "await_roll" and not engineering_landing:
+		return _error("道具只能在擲骰前使用")
 	if not IMPLEMENTED_TOOL_IDS.has(tool_id):
 		return _error("此道具效果尚未還原")
 	if tool_id in ["地雷", "定時炸彈", "機器娃娃"] and not _is_hazards():
@@ -4710,6 +4895,15 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	var tools: Dictionary = player.get("tools", {})
 	if int(tools.get(tool_id, 0)) <= 0:
 		return _error("玩家沒有這項道具")
+	if tool_id == "工程車":
+		if typeof(params.get("cancel", false)) != TYPE_BOOL:
+			return _error("工程車操作格式無效")
+		if bool(params.get("cancel", false)):
+			return _result(true, "已取消工程車", {"tool_id": tool_id, "cancelled": true})
+		var pending_engineering_remote: Variant = state.get("pending_remote_dice", {})
+		if typeof(pending_engineering_remote) == TYPE_DICTIONARY and not pending_engineering_remote.is_empty():
+			return _error("遙控骰子已經排程")
+		return _engineering_activation(player_id)
 	if tool_id == "遙控骰子" and _inventory_movement_blocked(player):
 		return _error("目前移動狀態無法使用遙控骰子")
 	if tool_id in ["路障", "機器工人"] and _inventory_movement_blocked(player):
@@ -5562,6 +5756,8 @@ func end_turn() -> Dictionary:
 		var last_roll_value: Variant = state.get("last_roll", [])
 		if _is_gods() and typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and not _status_active(player):
 			_apply_god_property_effect(player_id, _tile_at(int(player.get("position", -1))), true)
+		if typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and not _status_active(player):
+			_engineering_demolition(player_id)
 	state["bank_access"] = false
 	state["bank_landing"] = false
 	state["doubles_count"] = 0
@@ -5572,6 +5768,7 @@ func end_turn() -> Dictionary:
 
 func _advance_to_next_alive(previous_id: int) -> void:
 	_check_game_over()
+	state.erase("stationary_turn")
 	if state.get("phase", "") == "game_over":
 		return
 	var players: Array = _players()
@@ -5639,6 +5836,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	if not (_is_setup() and wraps):
 		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
+	_engineering_admit(next_id)
 	if _is_research():
 		# The action guard belongs to the newly admitted turn. Production is
 		# processed once here, after ownership changes and before the next roll.
@@ -6037,6 +6235,8 @@ func _ai_action(player_id: int) -> void:
 		if selected>=0:
 			choose_action("company_upgrade",{"tile_id":selected,"facility_type":1})
 			return
+	if _engineering_ai_action(player_id):
+		return
 	if _ai_god_card_action(player_id):
 		return
 	if _ai_remodel_action(player_id):
@@ -6648,6 +6848,8 @@ func _ai_roll_action(player_id: int) -> void:
 	for tool_id in ["汽車", "機車", "遙控骰子"]:
 		if int(tools.get(tool_id, 0)) <= 0:
 			continue
+		if active_vehicle == EngineeringVehicle.VEHICLE_ID and tool_id in ["汽車", "機車"]:
+			continue
 		if tool_id == "機車" and active_vehicle == "car":
 			continue
 		var params: Dictionary = {"tool_id": tool_id}
@@ -7168,6 +7370,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
+	if data.has("stationary_turn") and typeof(data.get("stationary_turn")) != TYPE_BOOL:
+		errors.append("invalid stationary turn")
 
 	var expected_save_version: int = BUILDING_CARD_SAVE_VERSION if building_cards_save else RESEARCH_SAVE_VERSION if research_save else REMODEL_SAVE_VERSION if remodel_save else PROPERTY_CARD_SAVE_VERSION if property_cards_save else HAZARD_SAVE_VERSION if hazards_save else STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
@@ -8016,6 +8220,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("player %d dice count exceeds vehicle" % index)
 			if not vehicle_valid:
 				errors.append("player %d vehicle invalid" % index)
+			var engineering_present: bool = player.has("engineering_vehicle") or vehicle_value == EngineeringVehicle.VEHICLE_ID
+			if engineering_present and (not inventory_save or not graph_save):
+				errors.append("player %d engineering vehicle requires inventory graph save" % index)
+			elif engineering_present:
+				var engineering_validation: Dictionary = EngineeringVehicle.validate_player(player)
+				if not bool(engineering_validation.get("ok", false)):
+					errors.append("player %d engineering vehicle invalid: %s" % [index, str(engineering_validation.get("error", ""))])
 			var properties: Variant = player.get("properties", null)
 			if typeof(properties) != TYPE_ARRAY:
 				errors.append("player %d properties invalid" % index)
@@ -8096,7 +8307,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				for vehicle in ["walking", "motorcycle", "car"]:
 					if not _valid_bool(vehicles.get(vehicle, null)):
 						errors.append("player %d vehicle ownership invalid" % index)
-				if vehicle_valid and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
+				if vehicle_valid and vehicle_value != EngineeringVehicle.VEHICLE_ID and (not vehicles.has(vehicle_value) or not bool(vehicles.get(vehicle_value, false))):
 					errors.append("player %d selected vehicle is not owned" % index)
 
 	if status_save:

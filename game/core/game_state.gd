@@ -3963,13 +3963,9 @@ func _use_tool(player_id: int, params: Dictionary) -> Dictionary:
 	if tool_id == "機器工人" and _god_investment_blocked(player_id):
 		return _error("目前神明效果使建設失敗")
 	if tool_id == "機器娃娃":
-		if _is_hazards():
-			if not _hazard_consume_tool_without_supply(player, tool_id):
-				return _error("玩家沒有這項道具")
-		else:
-			var doll_consume_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
-			if not bool(doll_consume_result.get("ok", false)):
-				return _error(str(doll_consume_result.get("error", "道具無法使用")))
+		var doll_consume_result: Dictionary = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, 1)
+		if not bool(doll_consume_result.get("ok", false)):
+			return _error(str(doll_consume_result.get("error", "道具無法使用")))
 		var doll_result: Dictionary = _machine_doll_use(player_id)
 		_set_action_options(player_id)
 		return _result(true, "機器娃娃已清除道路物件", {"tool_id": tool_id, "path": doll_result.get("path", []), "removed_hazards": doll_result.get("removed_hazards", []), "removed_roadblocks": doll_result.get("removed_roadblocks", []), "removed_gods": doll_result.get("removed_gods", [])})
@@ -7036,13 +7032,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			var tool_initial: int = int(record["initial_supply"])
 			var tool_held: int = int(held_inventory_tools.get(tool_id, 0)) + int(hazard_active_tool_counts.get(tool_id, 0))
 			var tool_total: int = supply_quantity + tool_held
-			# The v9 machine doll is a consumed action rather than a persistent
-			# road object. Its direct use therefore may lower the total finite pool;
-			# reject fabrication above the initial pool while allowing spent dolls.
-			if hazards_save and tool_id == "機器娃娃":
-				if tool_total > tool_initial:
-					errors.append("inventory tool conservation mismatch %s" % tool_id)
-			elif tool_total != tool_initial:
+			if tool_total != tool_initial:
 				errors.append("inventory tool conservation mismatch %s" % tool_id)
 
 	if graph_save:

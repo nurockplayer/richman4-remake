@@ -198,7 +198,7 @@ func _test_ai_machine_doll_cleanup() -> void:
 	expect(game.state.roadblocks.is_empty(), "AI machine removes staged roadblock")
 	expect(game.state.god_objects.size() == 1 and int(game.state.god_objects[0].get("id", -1)) == 3, "AI machine preserves attached god")
 	expect(int(game.state.players[0].bomb_steps) > 0 and int(game.state.players[0].bomb_steps) <= 7, "AI machine preserves carried bomb countdown")
-	expect(int(game.state.inventory_supply.tools["機器娃娃"]) == machine_supply_before, "AI machine consumption follows v9 supply semantics")
+	expect(int(game.state.inventory_supply.tools["機器娃娃"]) == machine_supply_before + 1, "AI machine returns its finite supply after use")
 	valid_save(game, "AI machine cleanup save")
 
 

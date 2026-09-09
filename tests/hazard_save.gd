@@ -278,7 +278,23 @@ func _test_legacy_versions_and_pool_replay() -> void:
 		expect(int(status_game.state.inventory_supply.tools["路障"]) == roadblock_pool_before + 1, "v8 roadblock placement returns supply")
 
 
+func _test_machine_doll_conservation() -> void:
+	var game: Object = make_hazard_game(3415)
+	if game == null:
+		return
+	var missing_pool: Dictionary = game.to_dict().duplicate(true)
+	missing_pool.inventory_supply.tools["機器娃娃"] -= 1
+	reject(missing_pool, "missing machine doll supply rejected")
+	var missing_held: Dictionary = game.to_dict().duplicate(true)
+	missing_held.players[0].tools["機器娃娃"] -= 1
+	reject(missing_held, "missing held machine doll rejected")
+	var result: Dictionary = game.choose_action("use_tool", {"tool_id": "機器娃娃"})
+	expect(result.get("ok", false), "machine doll production use succeeds before roundtrip")
+	expect(Game.from_dict(JSON.parse_string(game.to_json())) != null, "used machine doll state reloads")
+
+
 func _initialize() -> void:
+	_test_machine_doll_conservation()
 	_test_v9_roundtrip_and_route_overlap()
 	_test_carried_bomb_roundtrip()
 	_test_status_anchor_hazard_overlap()

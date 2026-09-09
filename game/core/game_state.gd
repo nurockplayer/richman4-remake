@@ -3281,10 +3281,6 @@ func _engineering_ai_action(player_id: int) -> bool:
 	var target: Dictionary = _engineering_landing_target(player_id)
 	if target.is_empty():
 		return false
-	var current_god_id: int = _player_god_id(player_id)
-	var target_level: int = int(target.get("building_level", 0))
-	if current_god_id == 12 or (current_god_id == 10 and target_level <= 1):
-		return false
 	if int(player.get("tools", {}).get("工程車", 0)) > 0:
 		var result: Dictionary = _engineering_activation(player_id)
 		return bool(result.get("ok", false))
@@ -5817,6 +5813,9 @@ func end_turn() -> Dictionary:
 		if _is_gods() and typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and not _status_active(player):
 			_apply_god_property_effect(player_id, _tile_at(int(player.get("position", -1))), true)
 		if typeof(last_roll_value) == TYPE_ARRAY and not last_roll_value.is_empty() and not _status_active(player):
+			# Decide after cards and god effects have settled the real landing.
+			if bool(player.get("is_ai", false)):
+				_engineering_ai_action(player_id)
 			_engineering_demolition(player_id)
 	state["bank_access"] = false
 	state["bank_landing"] = false
@@ -6303,8 +6302,6 @@ func _ai_action(player_id: int) -> void:
 	if _ai_property_card_action(player_id):
 		return
 	if _ai_building_card_action(player_id):
-		return
-	if _engineering_ai_action(player_id):
 		return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":

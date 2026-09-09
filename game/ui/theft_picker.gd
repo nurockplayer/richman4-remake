@@ -82,9 +82,11 @@ func _refresh_items() -> void:
 
 func _refresh_warning() -> void:
 	var full := false
+	var card := false
 	if not _items.disabled and _items.selected >= 0:
 		var value: Variant = _items.get_item_metadata(_items.selected)
 		full = value is Dictionary and bool(value.get("capacity_full", false))
-	_warning.text = "持有已滿：物品不會加入背包，仍會消耗搶奪卡。" if full else ""
+		card = value is Dictionary and value.get("item_kind", "") == "card"
+	_warning.text = ("手牌已滿：先捨棄點券價格最低的一張卡，再收取目標卡。" if card else "持有已滿：物品不會加入背包，仍會消耗搶奪卡。") if full else ""
 	_warning.visible = full
 	selection_changed.emit(not selection().is_empty())

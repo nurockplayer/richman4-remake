@@ -2967,6 +2967,20 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s暫無可出現的位置" % OriginalGods.name_for(int(event.get("god_id", 0)))
 		"dog_encounter":
 			return "遭惡犬咬傷，住院 3 天" if int(event.get("hospital_days", 0)) > 0 else "乘坐交通工具通過惡犬"
+		"financial_response_requested":
+			return "%s決定是否使用免費卡 · %s" % [_player_name(int(event.get("payer_id", -1))), _format_money(int(event.get("amount", 0)))]
+		"financial_redirect_requested":
+			return "%s決定是否使用嫁禍卡" % _player_name(int(event.get("payer_id", -1)))
+		"financial_free_used":
+			return "%s使用免費卡，免付 %s" % [_player_name(int(event.get("payer_id", -1))), _format_money(int(event.get("amount", 0)))]
+		"financial_free_declined":
+			return "%s不使用免費卡" % _player_name(int(event.get("payer_id", -1)))
+		"financial_tax_redirected":
+			return "嫁禍卡將查稅轉給%s · %s" % [_player_name(int(event.get("payer_id", -1))), _format_money(int(event.get("amount", 0)))]
+		"financial_payment_waived":
+			return "免除本次付款 %s" % _format_money(int(event.get("amount", 0)))
+		"financial_response_error":
+			return "付款選擇未能完成：%s" % str(event.get("error", "請重試"))
 		"trap_response_requested":
 			return "%s 決定是否使用嫁禍卡" % _player_name(int(event.get("target_id", -1)))
 		"trap_blocked":

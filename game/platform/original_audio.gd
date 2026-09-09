@@ -22,8 +22,8 @@ func _ready() -> void:
 		volume = clampf(float(settings.get_value("audio", "volume", 0.35)), 0.0, 1.0)
 		enabled = bool(settings.get_value("audio", "enabled", true))
 		_preferred_source_path = str(settings.get_value("audio", "source", ""))
-	configure_default()
 	player.volume_linear = volume
+	configure_default()
 
 
 ## Load the user's preferred library, then the bundled and developer defaults.

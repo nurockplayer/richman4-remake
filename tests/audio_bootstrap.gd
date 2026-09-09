@@ -6,6 +6,7 @@ class AudioFixture extends OriginalAudio:
 	var settings_path_override := ""
 	var default_paths_override: Array[String] = []
 	var selected_path := ""
+	var observed_startup_volume := -1.0
 
 	func _settings_path() -> String:
 		return settings_path_override
@@ -18,6 +19,7 @@ class AudioFixture extends OriginalAudio:
 
 	func next_track() -> void:
 		selected_path = tracks[0] if not tracks.is_empty() else ""
+		observed_startup_volume = player.volume_linear
 
 
 var failures := 0
@@ -104,6 +106,13 @@ func run() -> void:
 	custom_audio.set_enabled(true)
 	_expect(custom_audio.selected_path == custom_track, "enabling custom library must select its track")
 	custom_audio.queue_free()
+
+	var autoplay_settings := temporary_root.path_join("autoplay.cfg")
+	_write_settings(autoplay_settings, custom, true, 0.17)
+	var autoplay_audio := _new_fixture(autoplay_settings, [bundled, developer])
+	root_node.add_child(autoplay_audio)
+	_expect(is_equal_approx(autoplay_audio.observed_startup_volume, 0.17), "automatic startup playback must use the saved volume")
+	autoplay_audio.queue_free()
 
 	var invalid_settings := temporary_root.path_join("invalid.cfg")
 	_write_settings(invalid_settings, temporary_root.path_join("missing-custom"), false, 0.4)

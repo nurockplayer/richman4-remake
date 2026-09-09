@@ -8,7 +8,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import package_music
 from package_music import package
 from verify_private_assets import VerificationError
 
@@ -138,6 +140,40 @@ class PrivateMusicPackageTests(unittest.TestCase):
 
         with self.assertRaises(VerificationError):
             package(repository, destination, config)
+        self.assertFalse(destination.exists())
+
+    def test_rejects_source_change_during_copy_before_publish(self) -> None:
+        temporary, repository, config, _ = self._make_fixture()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(temporary)], check=False))
+        destination = temporary / "audio"
+        original_copyfile = package_music.shutil.copyfile
+
+        def change_source(source: str | Path, target: str | Path) -> str:
+            source_path = Path(source)
+            if source_path.name == "track01.ogg":
+                source_path.write_bytes(b"changed during copy\n")
+            return original_copyfile(source, target)
+
+        with patch.object(package_music.shutil, "copyfile", side_effect=change_source):
+            with self.assertRaises(VerificationError):
+                package(repository, destination, config)
+        self.assertFalse(destination.exists())
+
+    def test_rejects_output_change_during_copy_before_publish(self) -> None:
+        temporary, repository, config, _ = self._make_fixture()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(temporary)], check=False))
+        destination = temporary / "audio"
+        original_copyfile = package_music.shutil.copyfile
+
+        def change_output(source: str | Path, target: str | Path) -> str:
+            result = original_copyfile(source, target)
+            if Path(source).name == "track01.ogg":
+                Path(target).write_bytes(b"changed after copy\n")
+            return result
+
+        with patch.object(package_music.shutil, "copyfile", side_effect=change_output):
+            with self.assertRaises(VerificationError):
+                package(repository, destination, config)
         self.assertFalse(destination.exists())
 
 

@@ -13,6 +13,7 @@ func _initialize() -> void:
 	_test_inventory_setup_and_round_trip()
 	_test_inventory_validation_and_conservation()
 	_test_shop_landing_and_atomic_trades()
+	_test_inventory_missile_capability_admission()
 	_test_equipped_vehicle_tool_capacity()
 	_test_inventory_card_lifecycle()
 	_test_inventory_ai_skips_unsupported_cards()
@@ -160,7 +161,7 @@ func _test_shop_landing_and_atomic_trades() -> void:
 	_expect(game.item_is_implemented("card", "免費") and game.item_is_implemented("card", "查稅"), "financial card capabilities are available in inventory games")
 	_expect(game.item_is_implemented("card", "同盟"), "alliance card capability is available in inventory games")
 	_expect(not game.item_is_implemented("card", "拍賣"), "v4 auction capability remains unavailable")
-	_expect_equal(research_tools, 5, "shop metadata marks five implemented finite tools including missiles")
+	_expect_equal(research_tools, 4, "shop metadata marks four implemented finite tools while missiles require status support")
 	_expect(game.item_is_implemented("card", "均富"), "implemented card metadata is public")
 	_expect(not game.item_is_implemented("card", "天使"), "unimplemented card metadata is public")
 	_expect(game.item_is_implemented("tool", "機車"), "implemented tool metadata is public")
@@ -199,6 +200,35 @@ func _test_shop_landing_and_atomic_trades() -> void:
 		pass_game.state["players"][0]["position"] = 0
 		pass_game._set_action_options(0)
 		_expect(not pass_game.is_shop_available(), "shop is unavailable away from landing")
+
+
+func _test_inventory_missile_capability_admission() -> void:
+	var game: Object = _new_graph_inventory()
+	_expect(game != null, "v4 missile capability fixture creates a graph game")
+	if game == null:
+		return
+	var missile_item: Dictionary = {}
+	for item in game.shop_items():
+		if item.get("item_kind", "") == "tool" and item.get("item_id", "") == "飛彈":
+			missile_item = item
+			break
+	_expect(not bool(game.item_is_implemented("tool", "飛彈")), "v4 graph inventory does not advertise missile without status support")
+	_expect(not bool(missile_item.get("implemented", true)), "v4 shop metadata disables missile without status support")
+	var player: Dictionary = game.state["players"][0]
+	var grant: Dictionary = Inventory.grant_tool(game.state["inventory_supply"], player["tools"], "飛彈", 1)
+	_expect(bool(grant.get("ok", false)), "v4 capability fixture can stage a legacy missile for admission testing")
+	game.state["current_player"] = 0
+	game.state["phase"] = "await_roll"
+	game.state["action_options"] = []
+	game._set_action_options(0)
+	var before: String = game.to_json()
+	_expect(game.inventory_target_tiles("飛彈").is_empty(), "v4 missile target picker fails closed without status support")
+	var target_error: String = game._inventory_target_error(0, "飛彈", 0)
+	_expect_equal(target_error, "飛彈效果只適用於原版圖形背包地圖", "v4 missile target validation reports unsupported capability")
+	var result: Dictionary = game.choose_action("use_tool", {"tool_id": "飛彈", "tile_id": 0})
+	_expect(not bool(result.get("ok", false)), "v4 missile action fails closed without status support")
+	_expect_equal(str(result.get("message", "")), "飛彈效果只適用於原版圖形背包地圖", "v4 missile action reports unsupported capability")
+	_expect_equal(game.to_json(), before, "v4 missile capability rejection leaves state unchanged")
 
 
 func _test_equipped_vehicle_tool_capacity() -> void:

@@ -159,6 +159,10 @@ func _test_stationary_public_landing() -> void:
 	_expect_equal(int(player.get("stay_next", -1)), 0, "停留 consumes its one stationary turn")
 	_expect_equal(str(game.state.get("phase", "")), "await_action", "stationary roll reaches the action phase")
 	_expect(bool(game.state.get("last_roll", []).size() > 0), "stationary positive roll remains observable")
+	var after_roll_validation: Dictionary = Game.validate_save(game.to_dict())
+	_expect(bool(after_roll_validation.get("ok", false)), "stationary action-phase state validates before save")
+	var action_reloaded: Object = Game.from_dict(JSON.parse_string(game.to_json()))
+	_expect(action_reloaded != null, "stationary action-phase save reloads before end_turn")
 	var end_result: Dictionary = game.end_turn()
 	_expect(bool(end_result.get("ok", false)), "stationary public end_turn succeeds")
 	_expect_equal(int(game.state["board"][target].get("building_level", -1)), 2, "stationary public landing does not demolish the enemy building")
@@ -166,6 +170,10 @@ func _test_stationary_public_landing() -> void:
 	_expect_equal(game.state["inventory_supply"]["tools"], supply_before, "stationary public turn preserves finite tool supply")
 	var poststate: Dictionary = Game.validate_save(game.to_dict())
 	_expect(bool(poststate.get("ok", false)), "stationary public post-turn state validates: %s" % str(poststate.get("errors", [])))
+	if action_reloaded != null:
+		_expect(bool(action_reloaded.end_turn().get("ok", false)), "loaded stationary action ends successfully")
+		_expect_equal(int(action_reloaded.state["board"][target].building_level), 2, "loaded stationary action does not demolish")
+		_expect_equal(action_reloaded.to_json(), game.to_json(), "stationary save continues with exact canonical JSON")
 
 
 func _clear_inventory(game: Object, player_id: int) -> bool:

@@ -127,3 +127,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_ui.gd
 
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_action_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_stationary.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_capability.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_restore_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_god_ai.gd

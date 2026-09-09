@@ -6296,8 +6296,6 @@ func _ai_action(player_id: int) -> void:
 		if selected>=0:
 			choose_action("company_upgrade",{"tile_id":selected,"facility_type":1})
 			return
-	if _engineering_ai_action(player_id):
-		return
 	if _ai_god_card_action(player_id):
 		return
 	if _ai_remodel_action(player_id):
@@ -6305,6 +6303,8 @@ func _ai_action(player_id: int) -> void:
 	if _ai_property_card_action(player_id):
 		return
 	if _ai_building_card_action(player_id):
+		return
+	if _engineering_ai_action(player_id):
 		return
 	var tile: Dictionary = _tile_at(int(player.get("position", 0)))
 	if tile.get("kind", "") == "property":

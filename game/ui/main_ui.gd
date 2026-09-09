@@ -2535,6 +2535,8 @@ func _update_cards_popup() -> void:
 				use.tooltip_text = "改建腳下設施；選擇同類型也會消耗改建卡。" if current_tile.get("kind", "") == "facility" else "改建腳下已有建物的住宅；轉為連鎖店會降至 1 級。"
 			if card_id == "拍賣":
 				use.disabled = use.disabled or str(state.get("phase", "")) != "await_action"
+				var auction_tile := _current_tile()
+				use.disabled = use.disabled or str(auction_tile.get("kind", "")) not in ["property", "facility"] or not game_state.item_is_implemented("card", card_id)
 				use.tooltip_text = "在目前位置發起地產拍賣。"
 			if not implemented:
 				use.text = "尚未還原"
@@ -3539,7 +3541,7 @@ func _append_tool_inventory() -> void:
 				value_option.add_item("%d 點" % value, value)
 			row.add_child(value_option)
 		var tile_option: OptionButton = null
-		if ["路障", "機器工人"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
+		if ["路障", "機器工人", "飛彈", "核子飛彈"].has(item_id) or (_has_original_hazards() and item_id in ["地雷", "定時炸彈"]):
 			tile_option = _make_inventory_tile_picker(item_id)
 			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:

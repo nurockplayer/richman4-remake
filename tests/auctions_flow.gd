@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_entry_and_opening()
 	_test_increment_and_cash_limit()
 	_test_owner_participation_and_no_sale()
+	_test_status_owner_participation_boundaries()
 	_test_sale_accounting_and_self_owner()
 	_test_capacity_no_deadlock()
 	_test_ai_initiated_bounded_auction()
@@ -357,6 +358,56 @@ func _test_owner_participation_and_no_sale() -> void:
 		if not owner_pending.is_empty():
 			_expect(owner_pending.get("participants", []).has(1), "current owner remains an eligible bidder")
 			_drain_passes(owner_game, "owner-cleanup")
+
+
+func _status_node(game: Object, kind: String) -> int:
+	var status_type: int = 8001 if kind == "hospital" else 8002
+	for node_id in range(game.state["board"].size()):
+		var tile_value: Variant = game.state["board"][node_id]
+		if typeof(tile_value) == TYPE_DICTIONARY and int(tile_value.get("type_and_idx", -1)) == status_type:
+			return node_id
+	return -1
+
+
+func _test_status_owner_participation_boundaries() -> void:
+	for status_kind in ["hospital", "prison", "sleep"]:
+		var game: Object = Fixture.new_game(7833 + ["hospital", "prison", "sleep"].find(status_kind))
+		if game == null:
+			continue
+		var property_id := _property_node(game)
+		Fixture.set_owner(game, property_id, 1)
+		Fixture.prepare(game, 0, property_id)
+		var owner: Dictionary = game.state["players"][1]
+		var excluded: Dictionary = game.state["players"][2]
+		if status_kind == "hospital" or status_kind == "prison":
+			var status_node := _status_node(game, status_kind)
+			_expect(status_node >= 0, "%s status node exists" % status_kind)
+			if status_node < 0:
+				continue
+			owner["position"] = status_node
+			owner["previous_position"] = -1
+			excluded["position"] = status_node
+			excluded["previous_position"] = -1
+			if status_kind == "hospital":
+				owner["hospital_days"] = 2
+				excluded["hospital_days"] = 2
+			else:
+				owner["prison_days"] = 2
+				excluded["prison_days"] = 2
+		else:
+			owner["winter_sleep_days"] = 2
+			excluded["winter_sleep_days"] = 2
+		var staged := Fixture.stage_card(game, 0)
+		_expect(bool(staged.get("ok", false)), "%s owner boundary stages card" % status_kind)
+		var started := _start_or_red(game, "%s owner boundary" % status_kind)
+		if not started:
+			continue
+		var pending := _pending(game)
+		_expect(pending.get("participants", []).has(0), "%s keeps caster participant row" % status_kind)
+		_expect(pending.get("participants", []).has(1), "%s keeps status owner participant row" % status_kind)
+		_expect(not pending.get("participants", []).has(2), "%s excludes status non-owner participant" % status_kind)
+		_expect(bool(Fixture.validate(game).get("ok", false)), "%s status owner pending save validates" % status_kind)
+		_drain_passes(game, "%s-owner-boundary-cleanup" % status_kind)
 
 	var no_sale: Object = Fixture.new_game(7831)
 	if no_sale == null:

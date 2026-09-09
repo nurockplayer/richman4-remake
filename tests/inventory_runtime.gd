@@ -156,10 +156,11 @@ func _test_shop_landing_and_atomic_trades() -> void:
 			implemented_cards += 1
 		if item.get("item_kind", "") == "tool" and bool(item.get("implemented", false)):
 			research_tools += 1
-	_expect_equal(implemented_cards, 14, "shop metadata includes financial, alliance and auction cards")
+	_expect_equal(implemented_cards, 13, "v4 shop metadata keeps v6-only auction unavailable")
 	_expect(game.item_is_implemented("card", "免費") and game.item_is_implemented("card", "查稅"), "financial card capabilities are available in inventory games")
 	_expect(game.item_is_implemented("card", "同盟"), "alliance card capability is available in inventory games")
-	_expect_equal(research_tools, 4, "shop metadata marks four implemented finite tools")
+	_expect(not game.item_is_implemented("card", "拍賣"), "v4 auction capability remains unavailable")
+	_expect_equal(research_tools, 5, "shop metadata marks five implemented finite tools including missiles")
 	_expect(game.item_is_implemented("card", "均富"), "implemented card metadata is public")
 	_expect(not game.item_is_implemented("card", "天使"), "unimplemented card metadata is public")
 	_expect(game.item_is_implemented("tool", "機車"), "implemented tool metadata is public")

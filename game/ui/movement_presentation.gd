@@ -25,6 +25,7 @@ const UNSAFE_EVENT_PARTS := [
 	"terminal", "game_over", "gameover", "bankrupt", "death",
 	"movement_blocked", "movement_invalid", "player_removed",
 ]
+const INFORMATION_EVENT_TYPES := ["status_facility_passed", "status_facility_landed"]
 
 
 static func plan(before: Dictionary, after: Dictionary) -> Array:
@@ -350,6 +351,8 @@ static func _valid_move_event(event: Dictionary, nodes: Dictionary) -> bool:
 
 static func _unsafe_event(event: Dictionary) -> bool:
 	var event_type := str(event.get("type", "")).to_lower()
+	if INFORMATION_EVENT_TYPES.has(event_type):
+		return false
 	for unsafe_part in UNSAFE_EVENT_PARTS:
 		if event_type.contains(unsafe_part):
 			return true

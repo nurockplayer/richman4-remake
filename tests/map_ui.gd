@@ -60,7 +60,7 @@ func _run() -> void:
 	await _test_new_game_popup_layout(ui)
 	_test_catalog_fallback(ui)
 	_test_catalog_selection_and_map8(ui, Fixture.make())
-	_test_route_controls_and_ai_guard(ui, definition)
+	await _test_route_controls_and_ai_guard(ui, definition)
 	_test_saved_map_identity(ui, definition)
 	_test_v3_classic_map_fallback(ui, definition)
 	_test_invalid_seed_preserves_game(ui)
@@ -248,8 +248,18 @@ func _test_route_controls_and_ai_guard(ui: Control, definition: Dictionary) -> v
 	ui._refresh_from_state()
 	_expect(ui.action_hint_label.text == "請選擇行進方向", "route phase action hint is understandable")
 	_expect(ui.route_options_box.get_child_count() == 2, "route phase renders text choices")
-	ui._on_route_selected(2)
+	var old_route_button := ui.route_options_box.get_child(0) as Button
+	_expect(old_route_button != null, "route phase exposes a physical button")
+	if old_route_button != null:
+		old_route_button.pressed.emit()
 	_expect(human_stub.route_calls == [2], "legal text route choice reaches core")
+	_expect(ui.route_options_box.get_child_count() == 0, "route choice removes stale buttons immediately")
+	if old_route_button != null:
+		_expect(is_instance_valid(old_route_button), "pressed route button stays alive until signal emission completes")
+		if is_instance_valid(old_route_button):
+			_expect(not old_route_button.is_inside_tree(), "pressed route button is detached before deferred free")
+		await process_frame
+		_expect(not is_instance_valid(old_route_button), "pressed route button is freed after the signal turn")
 
 	var ai_state: Dictionary = route_state.duplicate(true)
 	ai_state["current_player"] = 1

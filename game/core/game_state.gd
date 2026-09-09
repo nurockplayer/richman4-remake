@@ -3393,6 +3393,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 	var dog_collision: bool = false
 	if int(player.get("stay_next", 0)) > 0:
 		player["stay_next"] = int(player.get("stay_next", 0)) - 1
+		if _is_research():
+			# A positive roll without an edge traversal is not a new research visit.
+			# Persist the existing per-visit guard through save/load; admission resets it.
+			state["research_action_used"] = true
 		_record_event("stay_resolved", {"player_id": player_id, "tile": int(player.get("position", 0))})
 	elif _is_graph():
 		graph_should_move = true
@@ -4560,8 +4564,8 @@ func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 		if fortune_facility_buy and facility_level == 0:
 			var requested_type: Variant = params.get("facility_type", null)
 			if bool(player.get("is_ai", false)) and not params.has("facility_type"):
-				fortune_facility_type = _rng.randi_range(1, FACILITY_LAB_TYPE - 1)
-			elif not _valid_int(requested_type, 0, FACILITY_LAB_TYPE - 1):
+				fortune_facility_type = _rng.randi_range(1, FACILITY_LAB_TYPE if _is_research() else FACILITY_LAB_TYPE - 1)
+			elif not _valid_int(requested_type, 0, FACILITY_LAB_TYPE if _is_research() else FACILITY_LAB_TYPE - 1):
 				return _error("請選擇有效的設施類型")
 			else:
 				fortune_facility_type = int(requested_type)
@@ -5698,7 +5702,7 @@ func _ai_action(player_id: int) -> void:
 				# Source records use type zero for an unbuilt site. Pick the first
 				# operational upgradeable type so the next visit has a legal upgrade.
 				var build_type: int = facility_type
-				if build_type <= 0 or build_type >= FACILITY_LAB_TYPE:
+				if build_type <= 0 or build_type > FACILITY_LAB_TYPE or (build_type == FACILITY_LAB_TYPE and not _is_research()):
 					build_type = 1
 				var facility_build_result: Dictionary = choose_action("build_facility", {"facility_type": build_type})
 				if bool(facility_build_result.get("ok", false)):

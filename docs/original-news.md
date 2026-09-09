@@ -31,7 +31,7 @@ optional `news` 保存 `order`、`cursor`、`draw_count` 與已完成的 `last`�
 
 - `tests/news_flow.gd`：抽選與效果契約。
 - `tests/news_save.gd`：optional 資料、拒貸 counter、結構 migration 及 JSON continuation。
-- `tests/news_graph.gd`：新聞節點分類、落點與經過行為。
+- `tests/graph_flow.gd`：新聞節點分類、落點與經過行為。
 - `tests/news_public_tax.gd`：實際擲骰／選路落點的全體稅款、行動者破產與單次交接。
 - `tests/news_ui.gd`：實際結果視窗、關閉、重新整理及存讀不重做效果。
 - `tests/news_bank_ui.gd`：拒貸期限、貸款操作及仍可使用的存提款。

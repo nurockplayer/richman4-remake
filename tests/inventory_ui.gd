@@ -3,6 +3,7 @@ const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 const InventoryRules = preload("res://game/core/inventory_rules.gd")
+const GameState = preload("res://game/core/game_state.gd")
 var checks := 0
 var failures := 0
 func _initialize() -> void:
@@ -12,13 +13,33 @@ func expect(condition: bool, message: String) -> void:
 	if not condition:
 		failures += 1
 		push_error(message)
+
+func _expected_setup_save_version(map_definition: Dictionary) -> int:
+	if bool(map_definition.get("supports_original_building_cards", false)):
+		return GameState.BUILDING_CARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_research", false)):
+		return GameState.RESEARCH_SAVE_VERSION
+	if bool(map_definition.get("supports_original_remodel", false)):
+		return GameState.REMODEL_SAVE_VERSION
+	if bool(map_definition.get("supports_original_property_cards", false)):
+		return GameState.PROPERTY_CARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_hazards", false)):
+		return GameState.HAZARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_statuses", false)):
+		return GameState.STATUS_SAVE_VERSION
+	if bool(map_definition.get("supports_original_companies", false)):
+		return GameState.COMPANY_SAVE_VERSION
+	if bool(map_definition.get("original_facilities", false)):
+		return GameState.GODS_SAVE_VERSION
+	return GameState.INVENTORY_SAVE_VERSION
+
 func run() -> void:
 	var ui = MainScene.instantiate()
 	root.add_child(ui)
 	await process_frame
 	await process_frame
 	ui.set_process(false)
-	expect(int(ui.state.get("version", 0)) == (11 if bool(ui._selected_map_definition.get("supports_original_remodel", false)) else 10 if bool(ui._selected_map_definition.get("supports_original_property_cards", false)) else 9 if bool(ui._selected_map_definition.get("supports_original_hazards", false)) else 8 if bool(ui._selected_map_definition.get("supports_original_statuses", false)) else 7 if bool(ui._selected_map_definition.get("supports_original_companies", false)) else 6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "UI uses facility graph or classic inventory save for selected map")
+	expect(int(ui.state.get("version", 0)) == _expected_setup_save_version(ui._selected_map_definition), "UI uses facility graph or classic inventory save for selected map")
 	ui._on_cards_pressed()
 	expect(ui.cards_popup.visible, "backpack opens before rolling")
 	await process_frame

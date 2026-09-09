@@ -47,8 +47,27 @@ func _set_date(ui: Control, year: int, month: int, day: int) -> void:
 	ui.start_month_input.value = month
 	ui.start_day_input.value = day
 
+func _expected_setup_save_version(map_definition: Dictionary) -> int:
+	if bool(map_definition.get("supports_original_building_cards", false)):
+		return GameState.BUILDING_CARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_research", false)):
+		return GameState.RESEARCH_SAVE_VERSION
+	if bool(map_definition.get("supports_original_remodel", false)):
+		return GameState.REMODEL_SAVE_VERSION
+	if bool(map_definition.get("supports_original_property_cards", false)):
+		return GameState.PROPERTY_CARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_hazards", false)):
+		return GameState.HAZARD_SAVE_VERSION
+	if bool(map_definition.get("supports_original_statuses", false)):
+		return GameState.STATUS_SAVE_VERSION
+	if bool(map_definition.get("supports_original_companies", false)):
+		return GameState.COMPANY_SAVE_VERSION
+	if bool(map_definition.get("original_facilities", false)):
+		return GameState.GODS_SAVE_VERSION
+	return GameState.INVENTORY_SAVE_VERSION
+
 func _test_default_setup_and_four_players(ui: Control) -> void:
-	_expect(int(ui.state.get("version", 0)) == (9 if bool(ui._selected_map_definition.get("supports_original_hazards", false)) else 8 if bool(ui._selected_map_definition.get("supports_original_statuses", false)) else 7 if bool(ui._selected_map_definition.get("supports_original_companies", false)) else 6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "startup save version matches selected map capability")
+	_expect(int(ui.state.get("version", 0)) == _expected_setup_save_version(ui._selected_map_definition), "startup save version matches selected map capability")
 	_expect(int(ui.state.get("initial_fund", 0)) == 200000, "startup uses the default initial fund")
 	_expect(int(ui.state.get("day_limit", -1)) == 0, "startup has no day limit")
 	_expect(int(ui.state.get("wealth_multiplier", -1)) == 0, "startup has no wealth target")
@@ -81,7 +100,7 @@ func _test_actual_setup(ui: Control) -> void:
 	await process_frame
 	var snapshot: Dictionary = ui.state
 	_expect(int(snapshot.get("seed", 0)) == 101, "setup keeps the requested seed")
-	_expect(int(snapshot.get("version", 0)) == (9 if bool(ui._selected_map_definition.get("supports_original_hazards", false)) else 8 if bool(ui._selected_map_definition.get("supports_original_statuses", false)) else 7 if bool(ui._selected_map_definition.get("supports_original_companies", false)) else 6 if bool(ui._selected_map_definition.get("original_facilities", false)) else 4), "confirmed setup preserves selected map capability")
+	_expect(int(snapshot.get("version", 0)) == _expected_setup_save_version(ui._selected_map_definition), "confirmed setup preserves selected map capability")
 	_expect(int(snapshot.get("initial_fund", 0)) == 100000, "confirmed setup stores initial fund")
 	_expect(int(snapshot.get("day_limit", 0)) == 365, "confirmed setup stores day limit")
 	_expect(int(snapshot.get("wealth_multiplier", 0)) == 3, "confirmed setup stores wealth multiplier")

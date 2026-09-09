@@ -5308,6 +5308,7 @@ func _use_god_card(player_id: int, card_id: String, visible_tile_ids: Variant = 
 	var target_actor: Dictionary = _god_object(target_god_id)
 	if target_actor.is_empty() or int(target_actor.get("owner", -1)) >= 0:
 		return _error("請神目標已不可用")
+	var summon_phase: String = str(state.get("phase", ""))
 	var summon_consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
 	if not bool(summon_consume_result.get("ok", false)):
 		return _error(str(summon_consume_result.get("error", "卡片無法使用")))
@@ -5321,8 +5322,14 @@ func _use_god_card(player_id: int, card_id: String, visible_tile_ids: Variant = 
 		"target_node": summon_node,
 		"effect": "summon_god",
 	}
+	var caster_alive: bool = bool(_player(player_id).get("alive", false))
+	if not caster_alive and summon_phase == "await_action" and state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		# Bankruptcy during an action-phase summon has not been handed off by the
+		# charge path. Movement-phase summons already advance inside bankruptcy.
+		_advance_to_next_alive(player_id)
 	_record_event("card_used", summon_event)
-	_set_action_options(player_id)
+	if caster_alive:
+		_set_action_options(player_id)
 	return _result(true, "已使用請神符", {"card_id": card_id, "god_id": target_god_id, "target_node": summon_node, "effect": "summon_god"})
 
 

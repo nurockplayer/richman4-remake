@@ -68,6 +68,7 @@ static func use_card(game: Object, player_id: int, card_id: String, target_id: V
 	# consumption so a save-ceiling failure leaves the whole action unchanged.
 	if not _can_tax_transfer(game, player_id, int(target_id), amount):
 		return game._error("查稅轉帳超出現金上限")
+	var rng_before_decision: int = game._rng.state
 	# 免費 is always offered first for a human payer, including amount zero.
 	# AI decisions use the source threshold and never create a human prompt.
 	if _has_card(target, FREE_CARD):
@@ -104,6 +105,7 @@ static func use_card(game: Object, player_id: int, card_id: String, target_id: V
 		if redirect_id >= 0:
 			var redirected_amount: int = _tax_amount(game._player(redirect_id))
 			if not _can_tax_transfer(game, player_id, redirect_id, redirected_amount):
+				game._rng.state = rng_before_decision
 				return game._error("嫁禍後查稅轉帳超出現金上限")
 			var consume_ai_redirect: Dictionary = _consume_tax_card(game, player_id, int(target_id), amount)
 			if not bool(consume_ai_redirect.get("ok", false)):

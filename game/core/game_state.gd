@@ -6590,6 +6590,11 @@ func _ai_action(player_id: int) -> void:
 					inventory_card_params["tile_id"] = int(building_target.get("tile_id", -1))
 					if card_id == "天使" and building_target.has("facility_type"):
 						inventory_card_params["facility_type"] = int(building_target.get("facility_type", 1))
+				if card_id == SleepRules.DREAM_CARD:
+					var dream_target: int = SleepRules.ai_dream_target(self, player_id)
+					if dream_target < 0:
+						continue
+					inventory_card_params["target_id"] = dream_target
 				if card_id == "陷害":
 					var trap_target: int = _ai_trap_target(player_id)
 					if trap_target < 0:

@@ -277,6 +277,15 @@ static func _sleep_restore_vehicle(game: Object, player_id: int) -> Dictionary:
 	return game._result(true, "夢遊已醒來", {"player_id": player_id, "restored_vehicle": restored_vehicle, "restored_dice_count": restored_dice})
 
 
+static func ai_dream_target(game: Object, player_id: int) -> int:
+	# Deterministic fallback; exact original AI scoring remains unverified.
+	for target_id in dream_target_players(game, player_id):
+		var target: Dictionary = game._player(int(target_id))
+		if int(target_id) != player_id and not is_active(target.get("winter_sleep_days", 0)) and not game._trap_has_card(target, "復仇"):
+			return int(target_id)
+	return -1
+
+
 static func use_card(game: Object, player_id: int, card_id: String, target_id: Variant, cancel: Variant) -> Dictionary:
 	if not game._is_statuses() or not game._is_inventory():
 		return game._error("目前地圖不支援睡眠卡")

@@ -7,6 +7,7 @@ class_name RichmanBoardView
 
 signal tile_selected(index: int)
 signal route_selected(next_index: int)
+signal movement_finished
 
 const BOARD_INSET := 24.0
 const MIN_ZOOM := 0.55
@@ -50,6 +51,55 @@ var _drag_button := MOUSE_BUTTON_NONE
 var _drag_start := Vector2.ZERO
 var _pan_start := Vector2.ZERO
 var _layout_size := Vector2.ZERO
+var _movement_queue: Array = []
+var _movement_index := 0
+var _movement_elapsed := 0.0
+var _movement_step_seconds := 0.16
+var _player_directions: Dictionary = {}
+
+func _process(delta: float) -> void:
+	_advance_movement(delta)
+
+func play_movement(moves: Array, step_seconds := 0.16) -> void:
+	cancel_movement()
+	_movement_queue = moves.duplicate(true)
+	_movement_step_seconds = maxf(0.01, step_seconds)
+	if not _movement_queue.is_empty():
+		var move: Dictionary = _movement_queue[0]
+		_player_directions[int(move.player_id)] = int(move.direction)
+	queue_redraw()
+
+func cancel_movement(reset_directions := false) -> void:
+	_movement_queue.clear()
+	_movement_index = 0
+	_movement_elapsed = 0.0
+	if reset_directions:
+		_player_directions.clear()
+	queue_redraw()
+
+func _advance_movement(delta: float) -> void:
+	if _movement_queue.is_empty():
+		return
+	_movement_elapsed += maxf(0.0, delta)
+	while _movement_elapsed >= _movement_step_seconds:
+		_movement_elapsed -= _movement_step_seconds
+		_movement_index += 1
+		if _movement_index >= _movement_queue.size():
+			cancel_movement()
+			movement_finished.emit()
+			return
+		var move: Dictionary = _movement_queue[_movement_index]
+		_player_directions[int(move.player_id)] = int(move.direction)
+	queue_redraw()
+
+func get_player_screen_position(player_id: int) -> Vector2:
+	if not _movement_queue.is_empty():
+		var move: Dictionary = _movement_queue[_movement_index]
+		if int(move.player_id) == player_id:
+			return get_screen_position_for_index(int(move.from)).lerp(get_screen_position_for_index(int(move.to)), _movement_elapsed / _movement_step_seconds)
+	if player_id >= 0 and player_id < players_data.size():
+		return get_screen_position_for_index(int(players_data[player_id].get("position", 0)))
+	return Vector2.ZERO
 
 func _ready() -> void:
 	clip_contents = true
@@ -433,7 +483,9 @@ func _draw_original_players() -> void:
 			var angle: float = TAU * float(occupant_index) / max(1.0, float(occupants.size()))
 			var radius: float = _node_radii[int(tile_index)]
 			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
-			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index))) if _background != null else {}
+			if not _movement_queue.is_empty() and int(_movement_queue[_movement_index].player_id) == player_index:
+				center = get_player_screen_position(player_index)
+			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index)), int(_player_directions.get(player_index, 0))) if _background != null else {}
 			if visuals.texture(frame) != null:
 				_scene_draws.append({"kind": "player", "layer": 2, "frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
 				continue

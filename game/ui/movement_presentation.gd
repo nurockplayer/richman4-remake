@@ -62,7 +62,8 @@ static func plan(before: Dictionary, after: Dictionary) -> Array:
 		return []
 
 	var move_events: Array = []
-	for event_value in new_events:
+	for event_index in range(new_events.size()):
+		var event_value: Variant = new_events[event_index]
 		if typeof(event_value) != TYPE_DICTIONARY:
 			return []
 		var event: Dictionary = event_value
@@ -71,7 +72,20 @@ static func plan(before: Dictionary, after: Dictionary) -> Array:
 		var event_type: Variant = event.get("type", null)
 		if typeof(event_type) != TYPE_STRING or str(event_type).is_empty():
 			return []
-		if str(event_type) == "move":
+		if str(event_type) == "route_chosen":
+			# choose_route() traverses this edge itself and records no "move"
+			# for it. A following identical move is the same presentation edge.
+			var route_move: Dictionary = event.duplicate(true)
+			route_move["steps"] = 1
+			if not _valid_move_event(route_move, before_players.get("nodes", {})):
+				return []
+			var duplicate_move := false
+			if event_index + 1 < new_events.size() and typeof(new_events[event_index + 1]) == TYPE_DICTIONARY:
+				var following: Dictionary = new_events[event_index + 1]
+				duplicate_move = following.get("type", "") == "move" and following.get("player_id") == event.get("player_id") and following.get("from") == event.get("from") and following.get("to") == event.get("to") and following.get("steps") == 1
+			if not duplicate_move:
+				move_events.append(route_move)
+		elif str(event_type) == "move":
 			if not _valid_move_event(event, before_players.get("nodes", {})):
 				return []
 			move_events.append(event)
@@ -96,7 +110,7 @@ static func plan(before: Dictionary, after: Dictionary) -> Array:
 		var new_player: Dictionary = after_by_id[player_id]
 		if int(old_player["position"]) != int(new_player["position"]):
 			changed_players.append(int(player_id))
-	if changed_players.size() != 1 or int(changed_players[0]) != actor_id:
+	if changed_players.size() > 1 or (changed_players.size() == 1 and int(changed_players[0]) != actor_id):
 		return []
 
 	var cursor := int(before_by_id[actor_id]["position"])
@@ -170,11 +184,20 @@ static func _valid_snapshot_shell(snapshot: Dictionary) -> bool:
 
 
 static func _same_map_identity(before: Dictionary, after: Dictionary) -> bool:
-	for key in ["map_id", "map_name", "map_schema", "map_version", "map_source", "start_position"]:
+	for key in ["map_id", "map_name", "map_schema", "map_version", "start_position"]:
 		if before.has(key) != after.has(key):
 			return false
 		if before.has(key) and before.get(key) != after.get(key):
 			return false
+	var old_source: Dictionary = before.get("map_source", {}).duplicate(true)
+	var new_source: Dictionary = after.get("map_source", {}).duplicate(true)
+	# Facility aliases and company records retain mutable gameplay fields.
+	# Node geometry is checked independently; these records are not map identity.
+	for key in ["lands", "facilities", "companies"]:
+		old_source.erase(key)
+		new_source.erase(key)
+	if old_source != new_source:
+		return false
 	return true
 
 

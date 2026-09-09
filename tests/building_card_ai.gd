@@ -16,6 +16,7 @@ func _initialize() -> void:
 	_test_angel_prefers_own_beneficial_target()
 	_test_demon_chooses_enemy_without_group_collateral()
 	_test_monster_chooses_enemy_built_target()
+	_test_demon_avoids_shared_own_group()
 	print("Original building-card AI checks: %d, failures: %d, bootstrap_red: %d" % [checks, failures, bootstrap_red])
 	quit(1 if failures or bootstrap_red > 0 else 0)
 
@@ -157,3 +158,13 @@ func _test_monster_chooses_enemy_built_target() -> void:
 	var game: Object = _stage_game(13103, "怪獸", 1, 3, "own-group", "enemy-group")
 	_assert_ai_card_case(game, "怪獸", 3, "怪獸 enemy strategy", 2)
 
+
+
+func _test_demon_avoids_shared_own_group() -> void:
+	var game: Object = _stage_game(13104, "惡魔", 2, 3, "shared-group", "shared-group")
+	if game == null: return
+	var result: Dictionary = game.run_ai_turn()
+	_expect(result.get("ok", false) and result.get("completed", false), "collateral-avoidance AI turn completes")
+	_expect(game.state.players[0].cards.has("惡魔"), "AI retains demon when only enemy target would destroy its own group")
+	_expect(_card_event(game, "惡魔").is_empty(), "AI produces no destructive card event for shared own group")
+	_expect(game.state.board[2].building_level == 2 and game.state.board[3].building_level == 3, "AI preserves both buildings when avoiding group collateral")

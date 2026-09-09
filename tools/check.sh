@@ -72,6 +72,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_review.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/property_card_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/property_card_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/property_card_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/property_card_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/property_card_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ai.gd

@@ -18,6 +18,8 @@ func _initialize() -> void:
 	_test_monster_chooses_enemy_built_target()
 	_test_demon_avoids_shared_own_group()
 	_test_angel_minimizes_other_gains()
+	_test_monster_prefers_enemy_over_unowned_building()
+	_test_demon_retains_card_when_only_unowned_building_exists()
 	print("Original building-card AI checks: %d, failures: %d, bootstrap_red: %d" % [checks, failures, bootstrap_red])
 	quit(1 if failures or bootstrap_red > 0 else 0)
 
@@ -183,3 +185,34 @@ func _test_angel_minimizes_other_gains() -> void:
 	game._set_action_options(0)
 	_assert_ai_card_case(game, "天使", 1, "Angel equal-own-benefit conservative choice", 3)
 	_expect(game.state.board[3].building_level == 1, "Angel tie choice leaves the rival building unchanged")
+
+
+func _test_monster_prefers_enemy_over_unowned_building() -> void:
+	var game: Object = _stage_game(13106, "怪獸", 4, 1, "own-group", "enemy-group")
+	if game == null:
+		return
+	game._update_facility_records(1, {"owner": -1, "building_level": 5, "facility_type": 1})
+	game._recalculate_property_values()
+	game._set_action_options(0)
+	_assert_ai_card_case(game, "怪獸", 3, "Monster selects enemy over a taller unowned building", 1)
+	_expect(game.state.board[1].building_level == 5, "Monster AI preserves the unowned building")
+
+
+func _test_demon_retains_card_when_only_unowned_building_exists() -> void:
+	var game: Object = _stage_game(13107, "惡魔", 0, 0, "own-group", "enemy-group")
+	if game == null:
+		return
+	game._update_facility_records(1, {"owner": -1, "building_level": 4, "facility_type": 2})
+	game._recalculate_property_values()
+	game._set_action_options(0)
+	var mirror: Object = Game.from_dict(JSON.parse_string(game.to_json()))
+	_expect(mirror != null, "unowned-only AI fixture validates")
+	var result: Dictionary = game.run_ai_turn()
+	_expect(result.get("ok", false) and result.get("completed", false), "unowned-only AI turn completes")
+	_expect(game.state.players[0].cards.has("惡魔"), "Demon AI retains its card without a built enemy target")
+	_expect(_card_event(game, "惡魔").is_empty(), "Demon AI does not treat an unowned building as an enemy")
+	_expect(game.state.board[1].building_level == 4, "Demon AI leaves unowned buildings intact")
+	if mirror != null:
+		mirror.run_ai_turn()
+		_expect(game.to_json() == mirror.to_json(), "unowned-only AI continuation replays exactly")
+	_expect(Game.validate_save(game.to_dict()).get("ok", false), "unowned-only AI continuation validates")

@@ -53,6 +53,7 @@ func run() -> void:
 		check(not g.state.players[0].cards.has("同盟"), "UI consumes one confirmed alliance card")
 		var badge: Node = ui.players_list.find_child("AllianceStatus_0", true, false)
 		check(badge is Label and str(g.state.players[1].name) in badge.text and "7" in badge.text, "player status shows partner and remaining turns")
+		check(not ui.event_log_view.text.contains("alliance_formed") and ui.event_log_view.text.contains("與%s建立同盟" % str(g.state.players[1].name)), "visible alliance event names the partner without raw event IDs")
 		check(Game.validate_save(g.to_dict()).get("ok", false), "alliance UI result remains legal")
 		var restored: Object = Game.from_dict(JSON.parse_string(g.to_json()))
 		check(restored != null and restored.to_json() == g.to_json(), "alliance UI pair survives exact JSON reload")

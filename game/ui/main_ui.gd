@@ -2910,7 +2910,7 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "工程車拆除了%s的建物" % _tile_name(int(event.get("tile_id", -1)))
 		"engineering_expired":
 			var names := {"walking": "步行", "motorcycle": "機車", "car": "汽車"}
-			return "工程車期限結束，恢復%s" % str(names.get(str(event.get("vehicle", "walking")), "步行"))
+			return "工程車期限結束，恢復%s" % str(names.get(str(event.get("restored_vehicle", "walking")), "步行"))
 		"item_bought", "item_sold":
 			var item_name := _inventory_item_name(str(event.get("item_kind", "")), str(event.get("item_id", "")))
 			return "%s %s × %d · %d 點券" % ["買入" if event_type == "item_bought" else "出售", item_name, int(event.get("quantity", 1)), int(event.get("price", event.get("sale_price", 0)))]

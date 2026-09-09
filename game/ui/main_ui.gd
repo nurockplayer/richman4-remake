@@ -2977,6 +2977,16 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s暫無可出現的位置" % OriginalGods.name_for(int(event.get("god_id", 0)))
 		"dog_encounter":
 			return "遭惡犬咬傷，住院 3 天" if int(event.get("hospital_days", 0)) > 0 else "乘坐交通工具通過惡犬"
+		"alliance_formed":
+			return "與%s建立同盟 · %d 回合" % [_player_name(int(event.get("partner_id", -1))), int(event.get("turns", 7))]
+		"alliance_timer_tick":
+			return "與%s的同盟剩餘 %d 回合" % [_player_name(int(event.get("partner_id", -1))), int(event.get("turns", 0))]
+		"alliance_timer_marker":
+			return "與%s的同盟將於下回合到期" % _player_name(int(event.get("partner_id", -1)))
+		"alliance_expired":
+			return "與%s的同盟已到期" % _player_name(int(event.get("partner_id", -1)))
+		"alliance_fee_waived":
+			return "同盟免付%s的%s" % [_player_name(int(event.get("creditor_id", -1))), "設施費" if event.get("kind", "") == "facility" else "地租"]
 		"financial_response_requested":
 			return "%s決定是否使用免費卡 · %s" % [_player_name(int(event.get("payer_id", -1))), _format_money(int(event.get("amount", 0)))]
 		"financial_redirect_requested":

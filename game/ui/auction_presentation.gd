@@ -5,8 +5,11 @@ extends PopupPanel
 
 signal answered(params: Dictionary)
 
-const INCREMENTS := [100, 500, 1000, 5000, 10000]
+const AuctionRules = preload("res://game/core/auction_rules.gd")
+const INCREMENTS := AuctionRules.INCREMENTS
 
+var target_label: Label
+var high_bidder_label: Label
 var prompt: Label
 var status: Label
 var increment_buttons: Dictionary = {}
@@ -41,6 +44,18 @@ func _init() -> void:
 	title.add_theme_font_size_override("font_size", 21)
 	title.add_theme_color_override("font_color", Color("#edf5fa"))
 	box.add_child(title)
+	target_label = Label.new()
+	target_label.name = "AuctionTarget"
+	target_label.add_theme_font_size_override("font_size", 16)
+	target_label.add_theme_color_override("font_color", Color("#edf5fa"))
+	target_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	target_label.custom_minimum_size.x = 560
+	box.add_child(target_label)
+	high_bidder_label = Label.new()
+	high_bidder_label.name = "AuctionHighBidder"
+	high_bidder_label.add_theme_font_size_override("font_size", 14)
+	high_bidder_label.add_theme_color_override("font_color", Color("#e2b25b"))
+	box.add_child(high_bidder_label)
 	prompt = Label.new()
 	prompt.name = "AuctionPrompt"
 	prompt.add_theme_font_size_override("font_size", 15)
@@ -109,7 +124,6 @@ func sync(snapshot: Dictionary) -> void:
 		hide()
 		return
 	var pending: Dictionary = pending_value
-	var same := pending == _pending
 	_pending = pending.duplicate(true)
 	var players: Array = snapshot.get("players", [])
 	var bidder_id := int(pending.get("bidder_id", -1))
@@ -117,14 +131,31 @@ func sync(snapshot: Dictionary) -> void:
 	var caster_id := int(pending.get("caster_id", -1))
 	var current_bid := int(pending.get("current_bid", 0))
 	var opening_bid := int(pending.get("opening_bid", 0))
+	var board: Array = snapshot.get("board", [])
+	var node_id := int(pending.get("node_id", -1))
+	var target_name := "地產"
+	if node_id >= 0 and node_id < board.size() and typeof(board[node_id]) == TYPE_DICTIONARY:
+		target_name = str(board[node_id].get("name", "地產"))
+	target_label.text = "拍賣標的：%s" % target_name
+	var highest_id := int(pending.get("highest_bidder_id", -1))
+	high_bidder_label.text = "最高出價者：尚無出價"
+	if highest_id >= 0 and highest_id < players.size() and typeof(players[highest_id]) == TYPE_DICTIONARY:
+		high_bidder_label.text = "最高出價者：%s" % str(players[highest_id].get("name", "玩家 %d" % (highest_id + 1)))
 	prompt.text = "%s 請回應目前報價 $%s。" % [str(bidder.get("name", "玩家 %d" % (bidder_id + 1))), money(current_bid)]
 	status.text = "底價 $%s · 出價後輪到下一位玩家。" % money(opening_bid)
 	if caster_id >= 0 and caster_id < players.size() and typeof(players[caster_id]) == TYPE_DICTIONARY:
 		status.text += "　收款人：%s" % str(players[caster_id].get("name", "玩家 %d" % (caster_id + 1)))
-	var cash := int(bidder.get("cash", 0))
+	var maximum_bid := int(bidder.get("cash", 0))
+	if caster_id >= 0 and caster_id < players.size() and typeof(players[caster_id]) == TYPE_DICTIONARY:
+		maximum_bid = mini(maximum_bid, AuctionRules.MAX_CASH - int(players[caster_id].get("deposit", 0)))
+	var bank: Dictionary = snapshot.get("bank", {})
+	maximum_bid = mini(maximum_bid, AuctionRules.MAX_CASH - int(bank.get("deposits", 0)))
+	maximum_bid = mini(maximum_bid, AuctionRules.MAX_CASH - int(bank.get("cash", 0)))
+	if current_bid + 100 > maximum_bid:
+		status.text += "\n目前無法加價，可退出拍賣。"
 	for amount in INCREMENTS:
 		var button: Button = increment_buttons[amount]
-		button.disabled = current_bid + amount > cash
+		button.disabled = current_bid + amount > maximum_bid
 	withdraw.disabled = false
 	if not visible:
 		popup_centered()

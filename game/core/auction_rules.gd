@@ -359,7 +359,7 @@ static func _participants(game: Object, caster_id: int, target: Dictionary, open
 			continue
 		var candidate: Dictionary = candidate_value
 		var candidate_id: Variant = candidate.get("id", null)
-		if typeof(candidate_id) != TYPE_INT or not bool(candidate.get("alive", false)) or bool(candidate.get("bankrupt", false)):
+		if not _valid_json_int(candidate_id, 0, game._players().size() - 1) or not bool(candidate.get("alive", false)) or bool(candidate.get("bankrupt", false)):
 			continue
 		var id := int(candidate_id)
 		if game._status_active(candidate) or game._sleep_active(candidate):

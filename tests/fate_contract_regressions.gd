@@ -74,6 +74,7 @@ func _initialize() -> void:
 	vehicle(redirected, 0, "motorcycle")
 	vehicle(redirected, 1, "car")
 	check(Inventory.grant_card(redirected.state.inventory_supply, redirected.state.players[0].cards, "嫁禍").get("ok", false), "redirect fixture grants finite defense")
+	redirected._set_action_options(0)
 	verify(redirected, "redirect input")
 	var actor_before: Dictionary = redirected.state.players[0].duplicate(true)
 	var supply: Dictionary = redirected.state.inventory_supply.tools.duplicate(true)

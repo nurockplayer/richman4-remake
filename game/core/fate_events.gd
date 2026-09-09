@@ -302,16 +302,14 @@ static func _resolve_built_housing(game: Object, player_id: int, result: Diction
 	var house_price: int = int(tile.get("house_price", tile.get("upgrade_cost", 0)))
 	var amount: int = max(0, level * house_price)
 	result["raw_amount"] = amount
-	var gate_result: int = _gate(game, player_id, 0, 0)
-	result["gate_result"] = gate_result
-	if gate_result == 1:
-		return _blocked_result(result, player_id, target_id, "建物出售被抵銷")
-	if gate_result == 2:
-		amount *= 2
-		result["raw_amount"] = amount
+	# Source ID 0 has no god/defense gate. Its only random operation is the
+	# housing target selection above; cash and the level reset are deterministic.
+	result["gate_result"] = 0
 	var before_rent: int = int(tile.get("rent", 0))
 	var before_level: int = level
+	var before_chain_store: bool = bool(tile.get("is_chain_store", false))
 	tile["building_level"] = 0
+	tile["is_chain_store"] = false
 	game._update_tile_rent(tile)
 	var player: Dictionary = game.state.players[player_id]
 	player["cash"] = _bounded_cash(player, amount)
@@ -319,6 +317,7 @@ static func _resolve_built_housing(game: Object, player_id: int, result: Diction
 	result["targets"] = [target_id]
 	result["changes"] = [
 		{"tile_id": target_id, "field": "building_level", "from": before_level, "to": 0},
+		{"tile_id": target_id, "field": "is_chain_store", "from": before_chain_store, "to": false},
 		{"tile_id": target_id, "field": "rent", "from": before_rent, "to": int(tile.get("rent", 0))},
 		{"player_id": player_id, "field": "cash", "amount": amount},
 	]
@@ -334,13 +333,8 @@ static func _resolve_unbuilt_housing(game: Object, player_id: int, result: Dicti
 	var tile: Dictionary = game.state.board[target_id]
 	var amount: int = max(0, int(tile.get("land_price", tile.get("cost", 0))))
 	result["raw_amount"] = amount
-	var gate_result: int = _gate(game, player_id, 0, 0)
-	result["gate_result"] = gate_result
-	if gate_result == 1:
-		return _blocked_result(result, player_id, target_id, "土地出售被抵銷")
-	if gate_result == 2:
-		amount *= 2
-		result["raw_amount"] = amount
+	# Source ID 1 also has no god/defense gate. Keep the source amount intact.
+	result["gate_result"] = 0
 	var before_owner: int = int(tile.get("owner", -1))
 	tile["owner"] = -1
 	game._remove_property_reference(player_id, target_id)
@@ -441,9 +435,14 @@ static func _resolve_status(game: Object, player_id: int, result: Dictionary, ki
 			redirected = true
 			target = game.state.players[target_id]
 	if kind == "hospital" and int(result.get("id", -1)) in [12, 13]:
-		_return_vehicle_for_status(game, player_id)
+		_return_vehicle_for_status(game, target_id)
 	if not _admit_status(game, target_id, kind, applied_days):
 		return {"ok": false, "reason": "status_unavailable"}
+	# A redirected status admission does not refresh the acting player's action
+	# list inside GameState. Refresh it after consuming the defense card so the
+	# saved state remains identical after JSON reload.
+	if game.has_method("_set_action_options"):
+		game._set_action_options(player_id)
 	result["targets"] = [target_id]
 	result["changes"] = [{"player_id": target_id, "field": "status", "kind": kind, "days": applied_days, "redirected": redirected}]
 	result["summary"] = "%s%s%d天" % [_player_name(game, target_id), "住院" if kind == "hospital" else "入獄", applied_days]
@@ -453,7 +452,7 @@ static func _resolve_status(game: Object, player_id: int, result: Dictionary, ki
 static func _resolve_traffic_charge(game: Object, player_id: int, candidate_id: int, result: Dictionary) -> Dictionary:
 	var player: Dictionary = game.state.players[player_id]
 	var vehicle: String = str(player.get("vehicle", "walking"))
-	if candidate_id in [15, 16] and vehicle == "walking":
+	if int(result.get("id", -1)) == 15 and vehicle == "walking":
 		result["raw_days"] = 3
 		return _resolve_status(game, player_id, result, "hospital", 3)
 	return _resolve_money(game, player_id, candidate_id, result, false)

@@ -435,6 +435,10 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 			tile.merge({"kind": "facility", "source_object_id": facility_id,
 				"facility_node_index": int(referenced_facilities[facility_id]), "name": facility_name,
 				"facility_type": int(facility.facility_type), "facility_state": 0,
+				# Research state is runtime-owned.  Source maps only establish the
+				# zeroed fields needed by a v12 save; the capability below is derived
+				# from the complete v11 source chain.
+				"research_tool": 0, "research_turns": 0,
 				"cost": int(facility.land_price), "land_price": int(facility.land_price),
 				"upgrade_cost": int(facility_prices.upgrade_cost), "fee_by_level": facility_prices.fee_by_level.duplicate(),
 				"group": str(facility.get("name_bytes_hex", "facility:%d" % facility_id))}, true)
@@ -493,6 +497,10 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 	# normalized runtime starts with every flag cleared; this capability only
 	# authorizes the v11 ruleset and does not activate a source state.
 	var supports_original_remodel := original_facilities and supports_original_property_cards and ordinary_source_housing
+	# Research is a v12 extension of the complete v11 source contract.  Keep
+	# partial and legacy caches loadable while withholding the capability marker
+	# when any prerequisite source evidence is absent.
+	var supports_original_research := supports_original_remodel
 	if supports_original_statuses:
 		for tile in board:
 			if int(tile.type_and_idx) in [8001,8002]:
@@ -510,5 +518,5 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 		"companies": companies, "stock_rows": stock_rows,
 		"supports_original_companies": supports_original_companies, "supports_original_statuses": supports_original_statuses,
 		"supports_original_hazards": supports_original_statuses, "supports_original_property_cards": supports_original_property_cards,
-		"supports_original_remodel": supports_original_remodel}
+		"supports_original_remodel": supports_original_remodel, "supports_original_research": supports_original_research}
 	return {"ok": true, "error": "", "definition": definition}

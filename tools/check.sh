@@ -60,6 +60,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_insurance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd
@@ -85,6 +86,16 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/remodel_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/remodel_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/remodel_mutations.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/remodel_review.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_loader.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_mutations.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_construction.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_landing.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_admission.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_status_cards.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/research_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ai.gd

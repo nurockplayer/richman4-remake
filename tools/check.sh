@@ -119,3 +119,4 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_distance.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_bankruptcy.gd

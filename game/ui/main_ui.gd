@@ -1838,6 +1838,8 @@ func _cancel_presentation() -> void:
 		board_view.cancel_movement(true)
 	if news_popup != null:
 		news_popup.cancel_presentation()
+	if fate_popup != null:
+		fate_popup.cancel_presentation()
 
 func _on_movement_finished() -> void:
 	if not _presentation_busy:

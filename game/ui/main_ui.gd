@@ -16,6 +16,7 @@ const NewsPanel = preload("res://game/ui/news_panel.gd")
 const MovementPresentation = preload("res://game/ui/movement_presentation.gd")
 const FatePanel = preload("res://game/ui/fate_panel.gd")
 const TheftPicker = preload("res://game/ui/theft_picker.gd")
+const FinancialPresentation = preload("res://game/ui/financial_presentation.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
@@ -133,6 +134,8 @@ var trap_target_option: OptionButton
 var trap_redirect_button: Button
 var trap_decline_button: Button
 var _trap_response_busy := false
+var financial_popup: PopupPanel
+var _finance_response_busy := false
 var audio_controller: Object
 var audio_button: Button
 var audio_config_button: Button
@@ -513,6 +516,9 @@ func _build_event_log() -> Control:
 	return panel
 
 func _build_popups() -> void:
+	financial_popup = FinancialPresentation.new()
+	add_child(financial_popup)
+	financial_popup.answered.connect(_respond_to_finance)
 	new_game_popup = _make_popup(Vector2i(760, 680))
 	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
@@ -1800,7 +1806,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
-	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response:
+	var is_finance_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_finance" and FinancialPresentation.human_pending(state)
+	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var before := _read_snapshot().duplicate(true)
@@ -1904,6 +1911,7 @@ func _update_all() -> void:
 	_update_event_log()
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
+	_update_financial_popup()
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
 	_last_rendered_phase = phase
@@ -2086,7 +2094,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
-	var reaction_pending := not _pending_trap_for_ui().is_empty()
+	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance")
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
 		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")
@@ -2128,6 +2136,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		stocks_popup.hide()
 	if game_over:
 		action_hint_label.text = "本局已結束"
+	elif state.has("pending_finance"):
+		action_hint_label.text = "請回應付款選擇"
 	elif reaction_pending:
 		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
 	elif SleepPresentation.automatic(player):
@@ -2203,6 +2213,21 @@ func _update_end_overlay(phase: String) -> void:
 	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
 	end_overlay.show()
 
+func _update_financial_popup() -> void:
+	if financial_popup == null: return
+	var targets: Array = []
+	if FinancialPresentation.human_pending(state) and state.pending_finance.stage == "redirect" and game_state.has_method("tax_target_players"):
+		targets = game_state.call("tax_target_players", int(state.pending_finance.payer_id))
+	financial_popup.sync(state, targets)
+
+func _respond_to_finance(params: Dictionary) -> void:
+	if _finance_response_busy or not FinancialPresentation.human_pending(state): return
+	_finance_response_busy = true
+	var result := _invoke_game("choose_action", ["respond_finance", params])
+	_append_local_log(_result_text(result, "已回應付款選擇。"))
+	_handle_result(result)
+	_finance_response_busy = false
+
 func _pending_trap_for_ui() -> Dictionary:
 	if not _has_original_statuses(): return {}
 	var pending: Variant = state.get("pending_trap", {})
@@ -2247,7 +2272,7 @@ func _maybe_schedule_ai_turn() -> void:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
-	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
+	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
 		return
 	var player := _current_player()
 	if (bool(player.get("is_human", true)) and not SleepPresentation.automatic(player)) or bool(player.get("bankrupt", false)):
@@ -2264,7 +2289,7 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
-	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
+	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
 		return
 	var player := _current_player()
 	if bool(player.get("is_human", true)) and not SleepPresentation.automatic(player):
@@ -2314,20 +2339,20 @@ func _update_cards_popup() -> void:
 				var visible: Array = board_view.visible_node_indices() if board_view != null else []
 				theft_picker.configure(state, choices, visible)
 			var target_option: OptionButton = null
-			if ["停留", "烏龜", "轉向", "均貧", "陷害", "夢遊"].has(card_id):
+			if ["停留", "烏龜", "轉向", "均貧", "陷害", "夢遊", "查稅"].has(card_id):
 				target_option = OptionButton.new()
 				target_option.name = "CardTarget_" + card_id
 				target_option.custom_minimum_size = Vector2(120.0, 34.0)
 				target_option.add_theme_font_size_override("font_size", 11)
 				var target_players: Array = state.get("players", [])
-				var target_method := "dream_target_players" if card_id == "夢遊" else "trap_target_players"
-				var trap_targets: Array = _as_array(game_state.call(target_method, int(state.get("current_player", -1)))) if card_id in ["陷害", "夢遊"] and game_state != null and game_state.has_method(target_method) else []
-				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id in ["陷害", "夢遊"] and board_view != null and board_view.has_method("visible_node_indices") else []
+				var target_method := "tax_target_players" if card_id == "查稅" else ("dream_target_players" if card_id == "夢遊" else "trap_target_players")
+				var trap_targets: Array = _as_array(game_state.call(target_method, int(state.get("current_player", -1)))) if card_id in ["陷害", "夢遊", "查稅"] and game_state != null and game_state.has_method(target_method) else []
+				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id in ["陷害", "夢遊", "查稅"] and board_view != null and board_view.has_method("visible_node_indices") else []
 				for target_index in range(target_players.size()):
 					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
-					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id not in ["陷害", "夢遊"] or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
+					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id not in ["陷害", "夢遊", "查稅"] or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
-				if card_id in ["陷害", "夢遊"] and target_option.item_count == 0:
+				if card_id in ["陷害", "夢遊", "查稅"] and target_option.item_count == 0:
 					target_option.add_item("畫面內沒有可用目標", -1)
 					target_option.disabled = true
 					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"

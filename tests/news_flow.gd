@@ -7,6 +7,8 @@ extends SceneTree
 const Game = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/news_fixture.gd")
 const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
+const OriginalInventory = preload("res://game/core/inventory_rules.gd")
+const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 
 const NEWS_COUNT := 36
 const UNSUPPORTED_IDS := [4, 7, 20, 29]
@@ -76,11 +78,39 @@ func _new_game(first_id: int = 16, seed_value: int = 5400, player_count: int = 4
 func _valid_before_effect(game: Object, label: String) -> void:
 	if game == null:
 		return
+	_assert_news_permutation(game, label + " pre-effect")
 	var raw: Dictionary = game.to_dict()
 	var validation: Dictionary = Game.validate_save(raw)
 	expect(bool(validation.get("ok", false)), label + " fixture validates before effect: " + str(validation.get("errors", [])))
 	var restored: Object = Game.from_dict(JSON.parse_string(game.to_json()))
 	expect(restored != null, label + " fixture survives JSON before effect")
+
+
+func _assert_news_permutation(game: Object, label: String) -> void:
+	var news: Variant = game.state.get("news", null)
+	expect(typeof(news) == TYPE_DICTIONARY, label + " has a news dictionary")
+	if typeof(news) != TYPE_DICTIONARY:
+		return
+	var order: Variant = news.get("order", null)
+	expect(typeof(order) == TYPE_ARRAY and order.size() == NEWS_COUNT, label + " has exactly 36 news candidates")
+	if typeof(order) != TYPE_ARRAY:
+		return
+	var sorted_order: Array = order.duplicate()
+	sorted_order.sort()
+	var expected_order: Array = []
+	for event_id in range(NEWS_COUNT):
+		expected_order.append(event_id)
+	expect(sorted_order == expected_order, label + " news order is a permutation of IDs 0..35")
+	expect(typeof(news.get("cursor", null)) == TYPE_INT and int(news.get("cursor", -1)) >= 0 and int(news.get("cursor", -1)) < NEWS_COUNT, label + " cursor is bounded")
+	expect(typeof(news.get("draw_count", null)) == TYPE_INT and int(news.get("draw_count", -1)) >= 0, label + " draw count is nonnegative")
+	expect(typeof(news.get("last", null)) == TYPE_DICTIONARY, label + " last result is a dictionary")
+
+
+func _market_index(market: Dictionary) -> int:
+	var cents := 0
+	for symbol in STOCK_SYMBOLS:
+		cents += roundi(float(market.prices.get(symbol, 0.0)) * 100.0)
+	return floori(float(cents) / 10.0)
 
 
 func _land_news(game: Object, label: String, final_landing: bool = true) -> void:
@@ -95,6 +125,10 @@ func _land_news(game: Object, label: String, final_landing: bool = true) -> void
 	player["position"] = int(tile.get("index", board.size() - 1))
 	player["previous_position"] = maxi(0, int(player["position"]) - 1)
 	game._graph_visit_tile(0, tile, final_landing)
+	var validation: Dictionary = Game.validate_save(game.to_dict())
+	expect(bool(validation.get("ok", false)), label + " save validates after effect: " + str(validation.get("errors", [])))
+	var restored: Object = Game.from_dict(JSON.parse_string(game.to_json()))
+	expect(restored != null, label + " JSON reloads after effect")
 
 
 func _last(game: Object) -> Dictionary:
@@ -167,8 +201,9 @@ func _test_pass_through_and_deck() -> void:
 
 	var wrap_game := _new_game(16)
 	var wrap_order: Array = [16]
-	for event_id in range(1, NEWS_COUNT):
-		wrap_order.append(event_id)
+	for event_id in range(NEWS_COUNT):
+		if not wrap_order.has(event_id) and event_id not in [4, 7]:
+			wrap_order.append(event_id)
 	# Keep a real permutation while placing two unsupported cards at the end.
 	# The wrapped scan therefore visits exactly [4, 7, 16].
 	wrap_order.erase(4)
@@ -196,21 +231,47 @@ func _test_pass_through_and_deck() -> void:
 	expect(resumed != null, "news continuation restores after first draw")
 	if resumed == null:
 		return
-	resumed.state.players[0]["vehicle"] = "car"
-	resumed.state.players[0]["stay_next"] = 0
-	resumed.state["phase"] = "await_action"
+	# Continue through the ordinary finite inventory lifecycle: grant one car
+	# from shared supply, equip it through the existing vehicle selector, then
+	# persist that ownership/equipment state before the next news landing.
+	var car_supply_before: int = int(resumed.state.inventory_supply.tools.get("汽車", -1))
+	var car_grant: Dictionary = OriginalInventory.grant_tool(
+		resumed.state.inventory_supply,
+		resumed.state.players[0]["tools"],
+		"汽車",
+	)
+	expect(bool(car_grant.get("ok", false)), "JSON continuation grants a finite-supply car")
+	expect(int(resumed.state.players[0]["tools"].get("汽車", 0)) == 1, "JSON continuation records car ownership before equip")
+	expect(int(resumed.state.inventory_supply.tools.get("汽車", -1)) == car_supply_before - 1, "car grant decrements shared finite supply")
+	resumed.state["phase"] = "await_roll"
 	resumed.state["current_player"] = 0
-	resumed._set_action_options(0)
-	_land_news(resumed, "continuation-second")
-	_expect_last(resumed, 17, "continuation-second")
-	expect(int(resumed.state.news.cursor) == 2 and int(resumed.state.news.draw_count) == 2, "JSON continuation keeps cursor and draw count")
-	expect(resumed.to_json() != after_first, "second landing records a new deterministic result")
+	var car_equip: Dictionary = resumed.set_vehicle("car", 3)
+	expect(bool(car_equip.get("ok", false)), "JSON continuation equips car through existing API")
+	expect(str(resumed.state.players[0].get("vehicle", "")) == "car", "JSON continuation keeps equipped car")
+	expect(bool(resumed.state.players[0].get("vehicles", {}).get("car", false)), "JSON continuation keeps car ownership")
+	expect(int(resumed.state.players[0].get("tools", {}).get("汽車", 0)) == 0, "equipping car consumes the owned inventory unit")
+	var after_vehicle: String = resumed.to_json()
+	var equipped: Object = Game.from_dict(JSON.parse_string(after_vehicle))
+	expect(equipped != null, "JSON continuation reloads equipped car")
+	if equipped == null:
+		return
+	equipped.state.players[0]["stay_next"] = 0
+	equipped.state["phase"] = "await_action"
+	equipped.state["current_player"] = 0
+	equipped._set_action_options(0)
+	_land_news(equipped, "continuation-second")
+	_expect_last(equipped, 17, "continuation-second")
+	expect(int(equipped.state.news.cursor) == 2 and int(equipped.state.news.draw_count) == 2, "JSON continuation keeps cursor and draw count")
+	expect(equipped.to_json() != after_first, "second landing records a new deterministic result")
 
 
 func _test_status_effects() -> void:
 	for event_id in [0, 1, 2, 3]:
 		var game := _new_game(event_id)
-		var player: Dictionary = game.state.players[0]
+		# Keep the landing actor on the news node and place a separate active
+		# status holder on its canonical facility, so post-effect save checks can
+		# verify both movement and status invariants independently.
+		var player: Dictionary = game.state.players[1]
 		if event_id in [0, 1]:
 			player["prison_days"] = 6
 			player["position"] = 4
@@ -524,6 +585,16 @@ func _test_vehicle_and_loan_effects() -> void:
 	expect(int(loan_game.state.players[0].loan_block_days) == 128, "loan marker releases as 1 to 128 on own admission")
 	loan_game.state.current_player = 0
 	loan_game.state.phase = "await_action"
+	# Reclassify the fixture's source company node as a canonical bank node so
+	# the loan action is tested through the real bank landing path.
+	var bank_tile: Dictionary = loan_game.state.board[5]
+	bank_tile["event_code"] = 14
+	bank_tile["source_status_bits"] = 14
+	bank_tile["kind"] = "bank"
+	bank_tile["name"] = "測試銀行"
+	loan_game.state.players[0]["position"] = 5
+	loan_game.state.players[0]["previous_position"] = -1
+	loan_game.state.bank_access = true
 	loan_game.state.bank_landing = true
 	loan_game._set_action_options(0)
 	expect(loan_game.state.action_options.has("take_loan"), "released 128 loan marker no longer blocks loan action")
@@ -545,18 +616,46 @@ func _test_vehicle_and_loan_effects() -> void:
 
 func _test_stock_effects() -> void:
 	var all_down := _new_game(24)
+	var down_prices_before: Dictionary = {}
+	var down_history_tails_before: Dictionary = {}
+	for symbol in STOCK_SYMBOLS:
+		var row: Dictionary = all_down.state.market.rows[symbol]
+		down_prices_before[symbol] = float(row.price)
+		down_history_tails_before[symbol] = float(all_down.state.market.history[symbol].back())
 	_valid_before_effect(all_down, "stock-all-down")
 	_land_news(all_down, "stock-all-down")
 	_expect_last(all_down, 24, "stock-all-down")
 	for symbol in STOCK_SYMBOLS:
-		expect(int(all_down.state.market.rows[symbol].event) == 1, "ID24 sets low-nibble event on every stock")
+		var row: Dictionary = all_down.state.market.rows[symbol]
+		var expected_price: float = OriginalStockMarket.next_price(float(row.previous_price), -10.0)
+		expect(int(row.event) == 1, "ID24 sets low-nibble event on every stock")
+		expect(not is_equal_approx(float(row.price), float(down_prices_before[symbol])), "ID24 refreshes every stock row price immediately")
+		expect(is_equal_approx(float(row.price), expected_price), "ID24 recalculates each row price from its previous price")
+		expect(is_equal_approx(float(all_down.state.market.prices[symbol]), float(row.price)), "ID24 mirrors refreshed row price into market prices")
+		expect(is_equal_approx(float(all_down.state.market.history[symbol].back()), float(row.price)), "ID24 stores refreshed price as history tail")
+		expect(not is_equal_approx(float(all_down.state.market.history[symbol].back()), float(down_history_tails_before[symbol])), "ID24 changes the history sample")
+	expect(int(all_down.state.market.index) == _market_index(all_down.state.market), "ID24 refreshes aggregate market index")
 
 	var all_up := _new_game(25)
+	var up_prices_before: Dictionary = {}
+	var up_history_tails_before: Dictionary = {}
+	for symbol in STOCK_SYMBOLS:
+		var row: Dictionary = all_up.state.market.rows[symbol]
+		up_prices_before[symbol] = float(row.price)
+		up_history_tails_before[symbol] = float(all_up.state.market.history[symbol].back())
 	_valid_before_effect(all_up, "stock-all-up")
 	_land_news(all_up, "stock-all-up")
 	_expect_last(all_up, 25, "stock-all-up")
 	for symbol in STOCK_SYMBOLS:
-		expect(int(all_up.state.market.rows[symbol].event) == 0x10, "ID25 sets high-nibble event on every stock")
+		var row: Dictionary = all_up.state.market.rows[symbol]
+		var expected_price: float = OriginalStockMarket.next_price(float(row.previous_price), 10.0)
+		expect(int(row.event) == 0x10, "ID25 sets high-nibble event on every stock")
+		expect(not is_equal_approx(float(row.price), float(up_prices_before[symbol])), "ID25 refreshes every stock row price immediately")
+		expect(is_equal_approx(float(row.price), expected_price), "ID25 recalculates each row price from its previous price")
+		expect(is_equal_approx(float(all_up.state.market.prices[symbol]), float(row.price)), "ID25 mirrors refreshed row price into market prices")
+		expect(is_equal_approx(float(all_up.state.market.history[symbol].back()), float(row.price)), "ID25 stores refreshed price as history tail")
+		expect(not is_equal_approx(float(all_up.state.market.history[symbol].back()), float(up_history_tails_before[symbol])), "ID25 changes the history sample")
+	expect(int(all_up.state.market.index) == _market_index(all_up.state.market), "ID25 refreshes aggregate market index")
 
 	var market_close := _new_game(26)
 	_valid_before_effect(market_close, "stock-market-close")
@@ -566,8 +665,16 @@ func _test_stock_effects() -> void:
 
 	var halt := _new_game(27)
 	var prices_before: Dictionary = {}
+	var previous_prices_before: Dictionary = {}
+	var history_tails_before: Dictionary = {}
 	for symbol in STOCK_SYMBOLS:
-		prices_before[symbol] = float(halt.state.market.rows[symbol].price)
+		var row: Dictionary = halt.state.market.rows[symbol]
+		prices_before[symbol] = float(row.price)
+		# Keep a distinct, valid source previous price so the halt copy is
+		# observable and cannot pass while leaving price unchanged.
+		row.previous_price = 90.0 + float(row.index)
+		previous_prices_before[symbol] = float(row.previous_price)
+		history_tails_before[symbol] = float(halt.state.market.history[symbol].back())
 	_valid_before_effect(halt, "stock-halt")
 	_land_news(halt, "stock-halt")
 	_expect_last(halt, 27, "stock-halt")
@@ -576,9 +683,15 @@ func _test_stock_effects() -> void:
 		var row: Dictionary = halt.state.market.rows[symbol]
 		if int(row.suspension) == 15:
 			halted.append(symbol)
-			expect(float(row.previous_price) == float(row.price), "ID27 synchronizes halted stock previous/current price")
+			expect(float(row.previous_price) != float(prices_before[symbol]), "ID27 starts from distinct previous/current prices")
+			expect(float(row.price) == float(previous_prices_before[symbol]), "ID27 restores halted current price from previous price")
+			expect(float(halt.state.market.prices[symbol]) == float(row.price), "ID27 mirrors restored halted price into market prices")
 			expect(float(halt.state.market.history[symbol].back()) == float(row.price), "ID27 synchronizes halted stock history tail")
+		else:
+			expect(float(row.price) == float(prices_before[symbol]), "ID27 leaves non-selected stock price unchanged")
+			expect(float(halt.state.market.history[symbol].back()) == float(history_tails_before[symbol]), "ID27 leaves non-selected history unchanged")
 	expect(halted.size() == 1, "ID27 halts exactly one stock")
+	expect(int(halt.state.market.index) == _market_index(halt.state.market), "ID27 refreshes aggregate market index")
 
 	var clear_halt := _new_game(28)
 	clear_halt.state.market.rows["s01"].suspension = 5
@@ -601,8 +714,17 @@ func _test_company_effects() -> void:
 		var company: Dictionary = game.state.companies[0]
 		company["monthly_profit"] = 100000
 		company["cumulative_profit"] = 200000
-		var row: Dictionary = game.state.market.rows["s01"]
+		var linked_symbol := "s%02d" % (int(company.get("stock_index", -1)) + 1)
+		var row: Dictionary = game.state.market.rows[linked_symbol]
 		row["event"] = 0
+		row["previous_price"] = 90.0
+		var linked_price_before: float = float(row.price)
+		var linked_history_tail_before: float = float(game.state.market.history[linked_symbol].back())
+		var prices_before: Dictionary = {}
+		var history_tails_before: Dictionary = {}
+		for symbol in STOCK_SYMBOLS:
+			prices_before[symbol] = float(game.state.market.rows[symbol].price)
+			history_tails_before[symbol] = float(game.state.market.history[symbol].back())
 		var holdings_before: int = int(game.state.players[0].stocks.get("s01", 0))
 		_valid_before_effect(game, "company-%d" % int(event_id))
 		_land_news(game, "company-%d" % int(event_id))
@@ -611,15 +733,51 @@ func _test_company_effects() -> void:
 		expect(int(company.cumulative_profit) == 200000 + int(expected[event_id].profit), "ID%d mutates linked company cumulative profit" % int(event_id))
 		expect(int(row.event) == int(expected[event_id].event), "ID%d writes linked stock event status" % int(event_id))
 		expect(int(game.state.players[0].stocks.get("s01", 0)) == holdings_before, "ID%d does not confuse company stock_index with player holdings" % int(event_id))
+		var expected_rate: float = 10.0 if (int(expected[event_id].event) & 0xf0) != 0 else -10.0
+		var expected_price: float = OriginalStockMarket.next_price(float(row.previous_price), expected_rate)
+		expect(not is_equal_approx(float(row.price), linked_price_before), "ID%d refreshes the linked stock row price" % int(event_id))
+		expect(is_equal_approx(float(row.price), expected_price), "ID%d recalculates the linked stock row from its previous price" % int(event_id))
+		expect(is_equal_approx(float(game.state.market.prices[linked_symbol]), float(row.price)), "ID%d mirrors linked row price into market prices" % int(event_id))
+		expect(is_equal_approx(float(game.state.market.history[linked_symbol].back()), float(row.price)), "ID%d stores linked row price in history tail" % int(event_id))
+		expect(not is_equal_approx(float(game.state.market.history[linked_symbol].back()), linked_history_tail_before), "ID%d changes linked history sample" % int(event_id))
+		for symbol in STOCK_SYMBOLS:
+			if symbol == linked_symbol:
+				continue
+			expect(is_equal_approx(float(game.state.market.rows[symbol].price), float(prices_before[symbol])), "ID%d leaves non-linked stock row price unchanged" % int(event_id))
+			expect(is_equal_approx(float(game.state.market.prices[symbol]), float(prices_before[symbol])), "ID%d leaves non-linked market price unchanged" % int(event_id))
+			expect(is_equal_approx(float(game.state.market.history[symbol].back()), float(history_tails_before[symbol])), "ID%d leaves non-linked history unchanged" % int(event_id))
+		expect(int(game.state.market.index) == _market_index(game.state.market), "ID%d refreshes aggregate market index" % int(event_id))
 
 	var double_game := _new_game(35)
 	var double_company: Dictionary = double_game.state.companies[0]
 	double_company["monthly_profit"] = 20000
 	double_company["cumulative_profit"] = 50000
-	var double_row: Dictionary = double_game.state.market.rows["s01"]
+	var double_symbol := "s%02d" % (int(double_company.get("stock_index", -1)) + 1)
+	var double_row: Dictionary = double_game.state.market.rows[double_symbol]
 	double_row["event"] = 0
+	double_row["previous_price"] = 90.0
+	var double_price_before: float = float(double_row.price)
+	var double_history_tail_before: float = float(double_game.state.market.history[double_symbol].back())
+	var double_prices_before: Dictionary = {}
+	var double_history_tails_before: Dictionary = {}
+	for symbol in STOCK_SYMBOLS:
+		double_prices_before[symbol] = float(double_game.state.market.rows[symbol].price)
+		double_history_tails_before[symbol] = float(double_game.state.market.history[symbol].back())
 	_valid_before_effect(double_game, "company-double")
 	_land_news(double_game, "company-double")
 	_expect_last(double_game, 35, "company-double")
 	expect(int(double_company.monthly_profit) == 40000 and int(double_company.cumulative_profit) == 90000, "ID35 doubles monthly profit and adds the doubled amount to cumulative profit")
 	expect(int(double_row.event) == 0x20, "ID35 maps source monthly-profit bucket to linked stock event")
+	var double_expected_price: float = OriginalStockMarket.next_price(float(double_row.previous_price), 10.0)
+	expect(not is_equal_approx(float(double_row.price), double_price_before), "ID35 refreshes the linked stock row price")
+	expect(is_equal_approx(float(double_row.price), double_expected_price), "ID35 recalculates the linked stock row from its previous price")
+	expect(is_equal_approx(float(double_game.state.market.prices[double_symbol]), float(double_row.price)), "ID35 mirrors linked row price into market prices")
+	expect(is_equal_approx(float(double_game.state.market.history[double_symbol].back()), float(double_row.price)), "ID35 stores linked row price in history tail")
+	expect(not is_equal_approx(float(double_game.state.market.history[double_symbol].back()), double_history_tail_before), "ID35 changes linked history sample")
+	for symbol in STOCK_SYMBOLS:
+		if symbol == double_symbol:
+			continue
+		expect(is_equal_approx(float(double_game.state.market.rows[symbol].price), float(double_prices_before[symbol])), "ID35 leaves non-linked stock row price unchanged")
+		expect(is_equal_approx(float(double_game.state.market.prices[symbol]), float(double_prices_before[symbol])), "ID35 leaves non-linked market price unchanged")
+		expect(is_equal_approx(float(double_game.state.market.history[symbol].back()), float(double_history_tails_before[symbol])), "ID35 leaves non-linked history unchanged")
+	expect(int(double_game.state.market.index) == _market_index(double_game.state.market), "ID35 refreshes aggregate market index")

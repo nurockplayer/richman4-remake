@@ -2126,6 +2126,8 @@ func _set_action_options(player_id: int) -> void:
 					options.push_front("buy_vehicle")
 	var action_pending_remote: Variant = state.get("pending_remote_dice", {})
 	var action_remote_pending: bool = _is_inventory() and typeof(action_pending_remote) == TYPE_DICTIONARY and not action_pending_remote.is_empty()
+	if _is_inventory() and not hospitalized and not action_remote_pending and not _inventory_movement_blocked(player) and not EngineeringVehicle.is_active(player) and int(player.get("tools", {}).get("工程車", 0)) > 0:
+		options.push_front("use_tool")
 	if player.get("cards", []).size() > 0 and not action_remote_pending:
 		var can_use_card: bool = not hospitalized
 		if hospitalized:
@@ -4754,7 +4756,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var action_options_before: Array = state.get("action_options", []).duplicate(true)
 	_set_action_options(player_id)
 	var allowed_options: Array = state.get("action_options", [])
-	if not allowed_options.has(normalized) and not engineering_action_phase:
+	if not allowed_options.has(normalized):
 		state["action_options"] = action_options_before
 		return _error("目前位置不能執行此行動")
 	match normalized:

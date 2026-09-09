@@ -3259,7 +3259,8 @@ func _append_tool_inventory() -> void:
 		)
 		use.name = "UseTool_" + item_id
 		var implemented := _item_implemented("tool", item_id)
-		use.disabled = not implemented or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
+		var tool_phase_allowed := str(state.get("phase", "")) == "await_roll" or (item_id == "工程車" and str(state.get("phase", "")) == "await_action")
+		use.disabled = not implemented or not tool_phase_allowed or not _has_action_option(_as_array(state.get("action_options", [])), "use_tool")
 		if tile_option != null and tile_option.disabled:
 			use.disabled = true
 		if (item_id == "機車" and vehicle == "motorcycle") or (item_id == "汽車" and vehicle == "car") or (item_id == "工程車" and vehicle == "engineering"):

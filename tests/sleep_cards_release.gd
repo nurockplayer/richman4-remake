@@ -41,6 +41,14 @@ func check_release(field: String, days: int) -> void:
 	expect(Game.validate_save(game.to_dict()).get("ok", false), "detention plus sleep fixture validates")
 	var before_position: int = int(player.position)
 	var before_rng: String = str(game.state.rng_state_text)
+	if field == "winter_sleep_days" and days != 128:
+		# Common next-player admission refreshes stock supply with RNG. Compare
+		# that same admission, so this assertion isolates an unwanted sleep roll.
+		var handoff_control: Object = Game.from_dict(game.to_dict())
+		expect(handoff_control != null, "winter handoff control loads legally")
+		if handoff_control == null: return
+		handoff_control._advance_to_next_alive(0)
+		before_rng = str(handoff_control.to_dict().rng_state_text)
 	if not game.has_method("run_sleep_turn"):
 		expect(false, "sleep driver exists for detention release")
 		return
@@ -58,7 +66,7 @@ func check_release(field: String, days: int) -> void:
 		expect(int(game.state.current_player) == 1, "active sleep completes its restricted turn")
 		if field == "winter_sleep_days":
 			expect(int(player.position) == before_position, "released winter sleeper stays in place")
-			expect(str(game.state.rng_state_text) == before_rng, "winter skip consumes no RNG")
+			expect(str(game.state.rng_state_text) == before_rng, "winter skip adds no RNG beyond normal turn admission")
 		else:
 			expect(int(player.position) != before_position, "released dream sleeper takes forced one-step route")
 	expect(player.is_human and not player.is_ai, "release preserves human identity")

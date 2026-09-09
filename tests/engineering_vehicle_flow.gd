@@ -525,7 +525,7 @@ func _test_landing_only_ownership_and_god_order() -> void:
 	_set_successful_landing(enemy, 0, target)
 	var enemy_end: Dictionary = enemy.end_turn()
 	_expect(bool(enemy_end.get("ok", false)), "enemy property landing ends")
-	_expect_equal(int(enemy.state["board"][target].get("building_level", -1)), 1, "enemy built property loses one level on final landing")
+	_expect_equal(int(enemy.state["board"][target].get("building_level", -1)), 0, "enemy built property is fully demolished on final landing")
 	_expect_equal(int(enemy.state["board"][target].get("owner", -1)), 1, "enemy property ownership is preserved")
 	_expect(_latest_event(enemy, "engineering_demolition").get("tile_id", -1) == target, "enemy landing records engineering demolition")
 

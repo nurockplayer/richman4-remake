@@ -110,3 +110,4 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_save.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_guard.gd

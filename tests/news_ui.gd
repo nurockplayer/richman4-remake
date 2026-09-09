@@ -29,6 +29,8 @@ func run() -> void:
 		if id != 11: order.append(id)
 	game.state.news = {"order": order, "cursor": 0, "draw_count": 0, "last": {}}
 	check(Game.validate_save(game.to_dict()).get("ok", false), "news UI fixture validates")
+	check(ui._kind_label("news") == "新聞", "property card names news kind")
+	check(ui.board_view._kind_label("news") == "新聞", "board names news kind")
 	ui._refresh_from_state()
 	var initial_popup: Node = ui.find_child("NewsPopup", true, false)
 	check(initial_popup == null or not initial_popup.visible, "no news result popup before draw")

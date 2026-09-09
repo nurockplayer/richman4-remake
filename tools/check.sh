@@ -102,3 +102,10 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trap_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --quit-after 5
 python3 -m unittest discover -s tools -p 'test_*.py'
+
+# v13 building-card acceptance.
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_loader.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ui.gd

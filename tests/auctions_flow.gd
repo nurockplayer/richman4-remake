@@ -348,6 +348,15 @@ func _test_owner_participation_and_no_sale() -> void:
 		return
 	Fixture.set_owner(owner_game, _property_node(owner_game), 1)
 	Fixture.prepare(owner_game, 0, _property_node(owner_game))
+	var prison_node := -1
+	for node_id in range(owner_game.state["board"].size()):
+		if typeof(owner_game.state["board"][node_id]) == TYPE_DICTIONARY and owner_game.state["board"][node_id].get("kind", "") == "prison":
+			prison_node = node_id
+			break
+	if prison_node >= 0:
+		owner_game.state["players"][1]["position"] = prison_node
+		owner_game.state["players"][1]["previous_position"] = -1
+		owner_game.state["players"][1]["prison_days"] = 2
 	var owner_staged := Fixture.stage_card(owner_game, 0)
 	_expect(bool(owner_staged.get("ok", false)), "owner participation stages card")
 	var owner_started := _start_or_red(owner_game, "owner participation")
@@ -356,6 +365,9 @@ func _test_owner_participation_and_no_sale() -> void:
 		_expect(not owner_pending.is_empty(), "owner participation exposes pending")
 		if not owner_pending.is_empty():
 			_expect(owner_pending.get("participants", []).has(1), "current owner remains an eligible bidder")
+			_expect(owner_pending.get("participants", []).has(0), "detained current owner and caster rows remain present")
+			owner_game.state["players"][0]["winter_sleep_days"] = 2
+			_expect(bool(Fixture.validate(owner_game).get("ok", false)), "sleeping auction caster remains valid in pending record")
 			_drain_passes(owner_game, "owner-cleanup")
 
 	var no_sale: Object = Fixture.new_game(7831)

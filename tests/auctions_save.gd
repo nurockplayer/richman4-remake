@@ -22,6 +22,7 @@ var capability_reported := false
 func _initialize() -> void:
 	_test_clean_optional_state()
 	_test_capability()
+	_test_legacy_capability_rejection()
 	_test_pending_roundtrip_and_schema()
 	_test_malformed_records_fail_closed()
 	print("Original auction save checks: %d, failures: %d, behavior_reds: %d" % [checks, failures, behavior_reds])
@@ -79,6 +80,35 @@ func _test_capability() -> void:
 	if not capability_available and not capability_reported:
 		capability_reported = true
 		_behavior_red("missing Issue #78 save capability: " + ", ".join(missing))
+
+
+func _test_legacy_capability_rejection() -> void:
+	var legacy: Object = Game.new_game_on_board(7902, 4, Fixture.definition(), {
+		"original_facilities": true,
+		"start_date": {"year": 1998, "month": 1, "day": 1},
+	})
+	_expect(legacy != null, "v5 fixture starts for auction capability boundary")
+	if legacy == null:
+		return
+	Fixture.prepare(legacy, 0, 2)
+	var staged: Dictionary = Fixture.stage_card(legacy, 0)
+	_expect(bool(staged.get("ok", false)), "v5 fixture can hold the finite auction card")
+	_expect(not legacy.item_is_implemented("card", CARD_ID), "v5 auction capability is unavailable")
+	var before: String = legacy.to_json()
+	var attempted: Dictionary = legacy.choose_action("use_card", {"card_id": CARD_ID, "cancel": false})
+	_expect(not bool(attempted.get("ok", false)), "v5 public auction action is rejected")
+	_expect_json_equal(legacy.to_json(), before, "v5 public auction rejection is byte-atomic")
+
+	var modern: Object = _new_pending(7903)
+	if modern == null:
+		return
+	var modern_pending: Variant = modern.to_dict().get("pending_auction", null)
+	if typeof(modern_pending) != TYPE_DICTIONARY or modern_pending.is_empty():
+		return
+	var legacy_data: Dictionary = legacy.to_dict()
+	legacy_data["pending_auction"] = modern_pending.duplicate(true)
+	_expect(not bool(Game.validate_save(legacy_data).get("ok", false)), "v5 pending auction save is rejected")
+	_expect(Game.from_dict(legacy_data) == null, "v5 pending auction cannot be restored")
 
 
 func _validate_before_public(game: Object, label: String) -> bool:
@@ -307,6 +337,15 @@ func _test_malformed_records_fail_closed() -> void:
 				capacity["players"][caster_id]["deposit"] = MAX_CASH
 				capacity["bank"]["deposits"] = MAX_CASH
 				_invalid_record(capacity, "pending settlement capacity overflow")
+
+	var malformed_bank := clean.duplicate(true)
+	var malformed_participants: Array = pending.get("participants", [])
+	if malformed_participants.size() >= 2:
+		malformed_bank["pending_auction"]["current_bid"] = int(pending.get("opening_bid", 0)) + 100
+		malformed_bank["pending_auction"]["highest_bidder_id"] = int(malformed_participants[0])
+		malformed_bank["pending_auction"]["bidder_id"] = int(malformed_participants[1])
+		malformed_bank["bank"] = "invalid-bank"
+		_invalid_record(malformed_bank, "pending high bid with malformed bank")
 
 	var participants: Array = pending.get("participants", [])
 	if participants.size() >= 2:

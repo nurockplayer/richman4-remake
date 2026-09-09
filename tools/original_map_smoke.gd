@@ -1,5 +1,5 @@
 extends SceneTree
-## Local-only acceptance; reads owner-provided catalog, never uploads its data.
+## Local-only acceptance; reads an owner-provided catalog and performs no upload.
 const Maps = preload("res://game/content/original_maps.gd")
 const GameState = preload("res://game/core/game_state.gd")
 var failures := 0

@@ -3,7 +3,8 @@
 `tools/decode_original_images.py` 會從擁有者本機的《大富翁 4》安裝目錄
 讀取 MKF 封裝，解出其中可界定邊界的 `SPR` 與 `SMP` 圖片資源，並在本機
 輸出每個圖塊的 RGBA PNG。原版安裝檔與產生的圖片快取都留在 `.local/` 或
-其他本機目錄，不會加入 Git。
+其他本機目錄，不會加入 public code repo；private asset repo 保存的是原始
+來源，不保存這些衍生圖片。
 
 ## 使用方式
 

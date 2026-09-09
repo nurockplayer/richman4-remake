@@ -109,6 +109,37 @@ static func apply_card(market: Dictionary, stock_symbol: String, rising: bool) -
 	history[history.size()-1] = float(row.price)
 	market.index = _index_from_prices(market.prices.values())
 
+
+static func refresh_event_price(market: Dictionary, stock_symbol: String, rate: float) -> void:
+	# News handlers set a packed source event and immediately call the same
+	# price step used by the original stock helper.  Keep the history tail and
+	# aggregate index synchronized so a news landing is saveable before the next
+	# market tick.
+	if typeof(market) != TYPE_DICTIONARY or not market.get("rows", {}).has(stock_symbol):
+		return
+	var row: Dictionary = market.rows[stock_symbol]
+	row.momentum = source_float(clampf(rate, -10.0, 10.0))
+	row.price = next_price(float(row.previous_price), float(rate))
+	market.prices[stock_symbol] = float(row.price)
+	var history: Variant = market.get("history", {}).get(stock_symbol, [])
+	if typeof(history) == TYPE_ARRAY and not history.is_empty():
+		history[history.size() - 1] = float(row.price)
+	market.index = _index_from_prices(market.prices.values())
+
+
+static func refresh_previous_price(market: Dictionary, stock_symbol: String) -> void:
+	# The source halt handler copies the saved previous price to today's quote;
+	# it does not advance the ten-day suspension counter or append a new day.
+	if typeof(market) != TYPE_DICTIONARY or not market.get("rows", {}).has(stock_symbol):
+		return
+	var row: Dictionary = market.rows[stock_symbol]
+	row.price = snappedf(float(row.previous_price), 0.01)
+	market.prices[stock_symbol] = float(row.price)
+	var history: Variant = market.get("history", {}).get(stock_symbol, [])
+	if typeof(history) == TYPE_ARRAY and not history.is_empty():
+		history[history.size() - 1] = float(row.price)
+	market.index = _index_from_prices(market.prices.values())
+
 static func tick(market: Dictionary, company_prices: Dictionary, rng: RandomNumberGenerator) -> void:
 	if not bool(market.open):
 		return

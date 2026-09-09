@@ -30,6 +30,7 @@ const OriginalInventory = preload("res://game/core/inventory_rules.gd")
 const OriginalInventoryCatalogue = preload("res://game/content/original_inventory.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
+const NewsEvents = preload("res://game/core/news_events.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -153,6 +154,7 @@ const EVENT_CARDS = [
 ]
 
 var _settling_company_dividends := false
+var _resolving_news := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -724,6 +726,28 @@ func _status_active(player: Dictionary, kind: String = "") -> bool:
 	if kind == "prison":
 		return _is_statuses() and int(player.get("prison_days", 0)) > 0
 	return int(player.get("hospital_days", 0)) > 0 or (_is_statuses() and int(player.get("prison_days", 0)) > 0)
+
+
+func _loan_block_active(player: Dictionary) -> bool:
+	# The source counter uses 1..127 as the active refusal window.  128 is a
+	# retained release marker and therefore intentionally permits a new loan.
+	var marker: Variant = player.get("loan_block_days", 0)
+	return _valid_int(marker, 1, 127)
+
+
+func _admit_loan_block(player: Dictionary) -> void:
+	if player.is_empty() or not player.has("loan_block_days"):
+		return
+	var marker: Variant = player.get("loan_block_days", 0)
+	if not _valid_int(marker, 0, 128):
+		return
+	var current: int = int(marker)
+	if current == 1:
+		player["loan_block_days"] = 128
+	elif current == 128:
+		player["loan_block_days"] = 0
+	elif current > 1:
+		player["loan_block_days"] = current - 1
 
 
 func _pending_trap() -> Dictionary:
@@ -2108,7 +2132,7 @@ func _set_action_options(player_id: int) -> void:
 		options.push_front("choose_research")
 	if not hospitalized and tile.get("kind", "") == "bank":
 		state["bank_landing"] = bank_open
-		if bank_open:
+		if bank_open and not _loan_block_active(player):
 			options.push_front("take_loan")
 	if bool(state.get("bank_access", false)) and bank_open:
 		if int(player.get("cash", 0)) > 0:
@@ -4177,6 +4201,17 @@ func _apply_god_property_effect(player_id: int, tile: Dictionary, final_landing:
 	_record_event("god_property_effect", {"player_id": player_id, "god_id": god_id, "tile_id": int(tile.get("index", -1)), "effect": effect, "from_level": level, "to_level": next_level})
 
 
+func _resolve_news_landing(player_id: int) -> void:
+	if not _valid_player(player_id, true):
+		return
+	_resolving_news = true
+	NewsEvents.apply_landing(self, player_id)
+	_resolving_news = false
+	var player: Dictionary = _player(player_id)
+	if not bool(player.get("alive", false)) and int(state.get("current_player", -1)) == player_id and state.get("phase", "") != "game_over":
+		_advance_to_next_alive(player_id)
+
+
 func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, bank_passed_before_god: bool = false) -> void:
 	if tile.is_empty():
 		return
@@ -4205,6 +4240,11 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 		"stock":
 			if final_landing:
 				_record_event("stock_landed", {"player_id": player_id, "tile": tile_index})
+		"news":
+			if final_landing:
+				_resolve_news_landing(player_id)
+			else:
+				_record_event("news_passed", {"player_id": player_id, "tile": tile_index})
 		"event":
 			if final_landing:
 				_draw_event_card(player_id)
@@ -4656,7 +4696,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# A landing or route charge advances immediately so a non-final bankruptcy
 	# cannot leave a dead player as the current actor. Loan-debt bankruptcy from
 	# end_turn is advanced by that caller after its final bookkeeping instead.
-	if was_current_movement and not _settling_company_dividends and state.get("phase", "") != "game_over":
+	if was_current_movement and not _settling_company_dividends and not _resolving_news and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
 
 
@@ -5236,6 +5276,8 @@ func _take_loan(player_id: int, amount: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if not bool(state.get("bank_landing", false)):
 		return _error("只有落在銀行時才能申請貸款")
+	if _loan_block_active(player):
+		return _error("新聞效果期間暫停申請貸款")
 	if amount <= 0 or amount > 10000:
 		return _error("貸款金額必須介於 1 到 10000")
 	if not _bank_can_pay(amount):
@@ -5836,6 +5878,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	if not (_is_setup() and wraps):
 		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
+	_admit_loan_block(_player(next_id))
 	_engineering_admit(next_id)
 	if _is_research():
 		# The action guard belongs to the newly admitted turn. Production is
@@ -6949,9 +6992,27 @@ static func _validate_facility_price_sources(source: Variant, board: Variant) ->
 			errors.append("facility has no retained source prices")
 			continue
 		var expected: Dictionary = prices_by_id[int(source_id)]
-		for field in ["land_price", "upgrade_cost"]:
-			if not _valid_int(tile.get(field, null), int(expected[field]), int(expected[field])):
-				errors.append("facility source price mismatch: " + field)
+		var land_price_value: Variant = tile.get("land_price", null)
+		var land_price_matches_source: bool = _valid_int(land_price_value, int(expected.land_price), int(expected.land_price))
+		if not land_price_matches_source:
+			# News price effects are the one runtime mutation allowed to diverge
+			# from immutable source pricing.  Require the explicit marker and a
+			# source price that proves the current quote is one bounded 30% step;
+			# a direct land-price edit without that provenance remains invalid.
+			var override_source: Variant = tile.get("news_price_source", null)
+			var override_marked: bool = tile.get("news_price_override", false) == true
+			var override_valid: bool = override_marked and _valid_int(override_source, 0, 1000000)
+			if override_valid:
+				var source_price: int = int(override_source)
+				var raised_price: int = NewsEvents.adjusted_land_price(source_price, true)
+				var lowered_price: int = NewsEvents.adjusted_land_price(source_price, false)
+				override_valid = _valid_int(land_price_value, 0, 1000000) and int(land_price_value) in [raised_price, lowered_price]
+			if not override_valid:
+				errors.append("facility source price mismatch: land_price")
+		if not _valid_int(tile.get("cost", null), land_price_value if _valid_int(land_price_value, 0, 1000000) else 0, land_price_value if _valid_int(land_price_value, 0, 1000000) else 0):
+			errors.append("facility source price mismatch: cost")
+		if not _valid_int(tile.get("upgrade_cost", null), int(expected.upgrade_cost), int(expected.upgrade_cost)):
+			errors.append("facility source price mismatch: upgrade_cost")
 		var actual_fees: Variant = tile.get("fee_by_level", null)
 		if typeof(actual_fees) != TYPE_ARRAY or actual_fees.size() != 6:
 			errors.append("facility source fee table mismatch")
@@ -7054,7 +7115,7 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		var kind: Variant = tile.get("kind", null)
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
-		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event"]
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news"]
 		if facility_mode:
 			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
@@ -7370,6 +7431,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
+	if data.has("news"):
+		var news_validation: Dictionary = NewsEvents.validate_state(data.get("news", null))
+		if not bool(news_validation.get("ok", false)):
+			for news_error in news_validation.get("errors", []):
+				errors.append(str(news_error))
 	if data.has("stationary_turn") and typeof(data.get("stationary_turn")) != TYPE_BOOL:
 		errors.append("invalid stationary turn")
 
@@ -7546,6 +7612,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
+	if data.has("news") and typeof(data.get("news", null)) == TYPE_DICTIONARY:
+		var persisted_news: Dictionary = data.get("news", {})
+		var persisted_last: Variant = persisted_news.get("last", {})
+		if typeof(persisted_last) == TYPE_DICTIONARY and not persisted_last.is_empty() and not _valid_int(persisted_last.get("player_id", null), 0, max(0, player_count - 1)):
+			errors.append("news last player is outside save")
 	if setup_save:
 		if not _valid_int(data.get("initial_fund", null)) or not SETUP_INITIAL_FUNDS.has(int(data.get("initial_fund", 0))):
 			errors.append("invalid initial_fund")
@@ -7786,7 +7857,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("board index mismatch %d" % index)
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
-				allowed_board_kinds.append_array(["points", "card", "unsupported"])
+				allowed_board_kinds.append_array(["points", "card", "unsupported", "news"])
 			if facility_save:
 				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
@@ -8189,6 +8260,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("player %d bomb_steps invalid" % index)
 				elif hazards_save and not bool(player.get("alive", false)) and int(player.get("bomb_steps", 0)) > 0:
 					errors.append("dead player cannot carry bomb")
+			if player.has("loan_block_days") and not _valid_int(player.get("loan_block_days", null), 0, MAX_STATUS_ADMISSION_DAYS):
+				errors.append("player %d loan_block_days invalid" % index)
 			if companies_save and not _valid_int(player.get("insurance_status"), 0, 128):
 				errors.append("player %d insurance_status invalid" % index)
 			if gods_save:
@@ -8723,11 +8796,13 @@ static func _canonicalize_json_numbers(value: Variant) -> Variant:
 	return value
 
 static func from_dict(data: Dictionary) -> Richman4GameState:
-	var validation: Dictionary = validate_save(data)
+	var candidate: Dictionary = data.duplicate(true)
+	_migrate_news_source_kind(candidate)
+	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
 	var game = new()
-	game.state = data.duplicate(true)
+	game.state = candidate
 	if int(game.state.get("version", SAVE_VERSION)) >= GRAPH_SAVE_VERSION:
 		game.state = _canonicalize_json_numbers(game.state)
 	if game._is_companies():
@@ -8745,6 +8820,21 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 	else:
 		game.state["action_options"] = []
 	return game
+
+
+static func _migrate_news_source_kind(data: Dictionary) -> void:
+	# Pre-news graph saves classified ordinary type-0/event-2 roads as
+	# unsupported.  This one structural migration enables current semantics
+	# while retaining every other saved field, including RNG and event history.
+	var board: Variant = data.get("board", null)
+	if typeof(board) != TYPE_ARRAY:
+		return
+	for tile_value in board:
+		if typeof(tile_value) != TYPE_DICTIONARY:
+			continue
+		var tile: Dictionary = tile_value
+		if int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 2 and str(tile.get("kind", "")) == "unsupported":
+			tile["kind"] = "news"
 
 
 func save_to_path(path: String) -> bool:

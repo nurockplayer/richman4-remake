@@ -236,7 +236,7 @@ func _test_graph_source_classification_and_points() -> void:
 	rest["board"][0]["event_code"] = 0
 	rest["board"][0]["kind"] = "rest"
 	_expect(bool(GameState.validate_board_definition(rest).get("ok", false)), "event zero source remains an inert rest tile")
-	for invalid_kind in ["tax", "event", "stock", "start"]:
+	for invalid_kind in ["tax", "event", "stock", "start", "news"]:
 		var active_rest: Dictionary = rest.duplicate(true)
 		active_rest["board"][0]["kind"] = invalid_kind
 		_expect(not bool(GameState.validate_board_definition(active_rest).get("ok", false)), "event zero cannot opt into %s" % invalid_kind)
@@ -251,8 +251,13 @@ func _test_graph_source_classification_and_points() -> void:
 	var normalized_event_two: Dictionary = Maps.normalize_map(raw_event_two)
 	_expect(bool(normalized_event_two.get("ok", false)), "event two source normalizes")
 	if bool(normalized_event_two.get("ok", false)):
-		_expect_equal(normalized_event_two["definition"]["board"][1]["kind"], "unsupported", "event two source is explicitly unsupported")
-		_expect_equal(normalized_event_two["definition"]["board"][1]["name"], "新聞（待還原）", "event two keeps its source event name")
+		_expect_equal(normalized_event_two["definition"]["board"][1]["kind"], "news", "event two source enables news landing")
+		_expect_equal(normalized_event_two["definition"]["board"][1]["name"], "新聞", "event two keeps its supported source event name")
+	_expect_equal(Maps.classify_source_node(0, 2).kind, "news", "ordinary source news road classifies as news")
+	_expect_equal(Maps.classify_source_node(2001, 2).kind, "property", "housing retains priority over news event")
+	_expect_equal(Maps.classify_source_node(4001, 2, true).kind, "facility", "facility retains priority over news event")
+	_expect_equal(Maps.classify_source_node(6001, 2, true).kind, "unsupported", "company type does not become a generic news road")
+	_expect_equal(Maps.classify_source_node(0, 3).kind, "unsupported", "fate remains outside news scope")
 
 	for source_points in [{"event_code": 10, "points": 50}, {"event_code": 11, "points": 30}, {"event_code": 12, "points": 10}]:
 		var mapped: Dictionary = _definition.duplicate(true)

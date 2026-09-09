@@ -122,7 +122,7 @@ func _test_v11_round_trip_and_continuation() -> void:
 	_expect(game != null, "v11 round-trip fixture starts")
 	if game == null:
 		return
-	_set_property(game, 2, 0, 2, true)
+	_set_property(game, 2, 0, 1, true)
 	_set_property(game, 3, 1, 4, false)
 	var data: Dictionary = game.to_dict()
 	_expect_equal(int(data.get("version", -1)), REMODEL_SAVE_VERSION, "v11 save version is eleven")
@@ -147,7 +147,7 @@ func _test_v11_round_trip_and_continuation() -> void:
 		_expect_equal(restored.to_json(), game.to_json(), "v11 JSON continuation remains deterministic")
 		_expect_equal(int(game.state["board"][2].get("building_level", -1)), 4, "continued 換屋 swaps source level")
 		_expect_equal(bool(game.state["board"][2].get("is_chain_store", false)), false, "continued 換屋 swaps source chain flag")
-		_expect_equal(int(game.state["board"][3].get("building_level", -1)), 2, "continued 換屋 swaps target level")
+		_expect_equal(int(game.state["board"][3].get("building_level", -1)), 1, "continued 換屋 swaps target level")
 		_expect_equal(bool(game.state["board"][3].get("is_chain_store", true)), true, "continued 換屋 swaps target chain flag")
 
 
@@ -215,3 +215,9 @@ func _test_strict_v11_markers() -> void:
 	zero_chain["board"][2]["building_level"] = 0
 	_expect(not bool(Game.validate_save(zero_chain).get("ok", false)), "v11 rejects a zero-level chain store")
 	_expect(Game.from_dict(zero_chain) == null, "v11 rejects zero-level chain JSON")
+	var high_chain: Dictionary = valid.duplicate(true)
+	high_chain["board"][2]["is_chain_store"] = true
+	high_chain["board"][2]["building_level"] = 2
+	high_chain["board"][2]["rent"] = high_chain["board"][2]["rent_by_level"][2]
+	_expect(not bool(Game.validate_save(high_chain).get("ok", false)), "v11 rejects chain stores above level one")
+	_expect(Game.from_dict(high_chain) == null, "v11 rejects high-level chain JSON")

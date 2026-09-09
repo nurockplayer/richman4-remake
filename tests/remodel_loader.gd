@@ -12,6 +12,7 @@ var failures: int = 0
 func _initialize() -> void:
 	_test_legacy_source_stays_disabled()
 	_test_v11_remodel_source_contract()
+	_test_source_chain_capability()
 	print("Original remodel loader checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -80,3 +81,14 @@ func _test_v11_remodel_source_contract() -> void:
 
 func _expect_equal(actual: Variant, expected: Variant, message: String) -> void:
 	_expect(actual == expected, "%s (actual=%s expected=%s)" % [message, str(actual), str(expected)])
+
+
+func _test_source_chain_capability() -> void:
+	for mutation in ["missing", "chain"]:
+		var raw: Dictionary = _remodel_raw()
+		if mutation == "missing": raw.lands[0].erase("is_chain_store")
+		else: raw.lands[0]["is_chain_store"] = 1
+		var loaded: Dictionary = Maps.normalize_map(raw, true)
+		_expect(bool(loaded.get("ok", false)), "non-v11 source remains loadable: " + mutation)
+		if loaded.get("ok", false):
+			_expect(not bool(loaded.definition.get("supports_original_remodel", false)), "unknown or active source chain flag does not advertise v11: " + mutation)

@@ -375,7 +375,7 @@ func _test_rent_rules() -> void:
 	game.state["price_index"] = 3
 	_set_property_state(game, 2, 0, 2, false)
 	_set_property_state(game, 3, 0, 1, true)
-	_expect_equal(game._calculate_rent(game.state["board"][2], 0), 600, "normal rent excludes same-owner chain store")
+	_expect_equal(game._calculate_rent(game.state["board"][2], 0), 1800, "normal rent excludes same-owner chain store and applies price index once")
 	_expect_equal(game._calculate_rent(game.state["board"][3], 0), 6000, "chain rent is one store times 2000 and price index")
 	_set_property_state(game, 2, 0, 1, true)
 	_expect_equal(game._calculate_rent(game.state["board"][2], 0), 12000, "chain rent counts every same-owner chain store on the map")
@@ -384,7 +384,7 @@ func _test_rent_rules() -> void:
 	_set_property_state(game, 3, -1, 1, true)
 	_expect_equal(game._calculate_rent(game.state["board"][2], -1), 0, "unowned chain store does not collect rent")
 
-	# A one-edge branch makes public roll land on the chain store deterministically,
+	# A one-edge branch and the public remote-dice action fix a one-step landing,
 	# exercising the actual rent charge path without relying on RNG selection.
 	var charged: Object = _new_v11_game(5402)
 	_expect(charged != null, "public rent landing fixture starts")
@@ -404,7 +404,11 @@ func _test_rent_rules() -> void:
 	charged.state["god_objects"] = []
 	charged.state["last_roll"] = []
 	charged.state["last_total"] = 0
+	var granted: Dictionary = Inventory.grant_tool(charged.state["inventory_supply"], charged.state["players"][1]["tools"], "遙控骰子", 1)
+	_expect(bool(granted.get("ok", false)), "rent fixture grants remote dice")
 	charged._set_action_options(1)
+	var remote: Dictionary = charged.choose_action("use_tool", {"tool_id": "遙控骰子", "value": 1})
+	_expect(bool(remote.get("ok", false)), "rent fixture schedules a deterministic one-step roll")
 	var debtor_cash_before := int(charged.state["players"][1]["cash"])
 	var owner_cash_before := int(charged.state["players"][0]["cash"])
 	var roll_result: Dictionary = charged.roll(1)

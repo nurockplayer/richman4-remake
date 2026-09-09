@@ -16,6 +16,7 @@ const NewsPanel = preload("res://game/ui/news_panel.gd")
 const MovementPresentation = preload("res://game/ui/movement_presentation.gd")
 const FatePanel = preload("res://game/ui/fate_panel.gd")
 const TheftPicker = preload("res://game/ui/theft_picker.gd")
+const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -1789,13 +1790,13 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _presentation_busy and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
-	if method != "run_ai_turn" and not _is_human_turn() and not is_trap_response:
+	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var before := _read_snapshot().duplicate(true)
@@ -2077,7 +2078,7 @@ func _update_property_card(tile: Dictionary) -> void:
 func _update_actions(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var game_over := phase == "game_over"
-	var human_turn := not _presentation_busy and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var human_turn := not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
@@ -2085,6 +2086,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
 		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")
+	if SleepPresentation.automatic(player):
+		roll_button.text = "醒來" if int(SleepPresentation.status(player).count) == 128 else "自動休息"
 	roll_button.disabled = not (human_turn and phase == "await_roll") or reaction_pending
 	var can_buy_company := _has_action_option(action_options, "buy_company")
 	var can_buy_property := _has_action_option(action_options, "buy")
@@ -2123,6 +2126,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "本局已結束"
 	elif reaction_pending:
 		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
+	elif SleepPresentation.automatic(player):
+		action_hint_label.text = SleepPresentation.hint(player)
 	elif not human_turn:
 		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
 	elif phase == "await_route":
@@ -2212,7 +2217,7 @@ func _update_trap_response_popup() -> void:
 		trap_popup.hide()
 		return
 	var pending := _pending_trap_for_ui()
-	trap_prompt_label.text = "%s 對你使用陷害卡。可將入獄處罰轉給另一位玩家；拒絕時保留嫁禍卡。" % _player_name(int(pending.get("caster_id", -1)))
+	trap_prompt_label.text = SleepPresentation.defense_prompt(_player_name(int(pending.get("caster_id", -1))), str(state.get("pending_trap_card", "陷害")))
 	var prior_target := trap_target_option.get_selected_id() if trap_target_option.item_count > 0 else -1
 	trap_target_option.clear()
 	var targets: Array = _as_array(game_state.call("trap_response_targets")) if game_state != null and game_state.has_method("trap_response_targets") else []
@@ -2240,7 +2245,7 @@ func _maybe_schedule_ai_turn() -> void:
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
-	if bool(player.get("is_human", true)) or bool(player.get("bankrupt", false)):
+	if (bool(player.get("is_human", true)) and not SleepPresentation.automatic(player)) or bool(player.get("bankrupt", false)):
 		return
 	_ai_pending = true
 	var timer := get_tree().create_timer(0.82)
@@ -2257,10 +2262,14 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty():
 		return
 	var player := _current_player()
-	if bool(player.get("is_human", true)):
+	if bool(player.get("is_human", true)) and not SleepPresentation.automatic(player):
 		return
-	var result := _invoke_game("run_ai_turn")
-	_append_local_log("%s 等待嫁禍卡回應。" % str(player.get("name", "AI")) if bool(result.get("awaiting_response", false)) else "%s 完成了自動回合。" % str(player.get("name", "AI")))
+	var sleeping := SleepPresentation.automatic(player)
+	var result := _invoke_game("run_sleep_turn" if sleeping else "run_ai_turn")
+	if sleeping:
+		_append_local_log("%s：%s" % [str(player.get("name", "玩家")), _result_text(result, "自動推進回合。")])
+	else:
+		_append_local_log("%s 等待嫁禍卡回應。" % str(player.get("name", "AI")) if bool(result.get("awaiting_response", false)) else "%s 完成了自動回合。" % str(player.get("name", "AI")))
 	_handle_result(result)
 
 func _update_cards_popup() -> void:
@@ -2300,20 +2309,21 @@ func _update_cards_popup() -> void:
 				var visible: Array = board_view.visible_node_indices() if board_view != null else []
 				theft_picker.configure(state, choices, visible)
 			var target_option: OptionButton = null
-			if ["停留", "烏龜", "轉向", "均貧", "陷害"].has(card_id):
+			if ["停留", "烏龜", "轉向", "均貧", "陷害", "夢遊"].has(card_id):
 				target_option = OptionButton.new()
 				target_option.name = "CardTarget_" + card_id
 				target_option.custom_minimum_size = Vector2(120.0, 34.0)
 				target_option.add_theme_font_size_override("font_size", 11)
 				var target_players: Array = state.get("players", [])
-				var trap_targets: Array = _as_array(game_state.call("trap_target_players", int(state.get("current_player", -1)))) if card_id == "陷害" and game_state != null and game_state.has_method("trap_target_players") else []
-				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id == "陷害" and board_view != null and board_view.has_method("visible_node_indices") else []
+				var target_method := "dream_target_players" if card_id == "夢遊" else "trap_target_players"
+				var trap_targets: Array = _as_array(game_state.call(target_method, int(state.get("current_player", -1)))) if card_id in ["陷害", "夢遊"] and game_state != null and game_state.has_method(target_method) else []
+				var visible_targets: Array = _as_array(board_view.call("visible_node_indices")) if card_id in ["陷害", "夢遊"] and board_view != null and board_view.has_method("visible_node_indices") else []
 				for target_index in range(target_players.size()):
 					var target_player: Dictionary = target_players[target_index] if target_players[target_index] is Dictionary else {}
-					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id != "陷害" or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
+					if bool(target_player.get("alive", false)) and (card_id != "均貧" or target_index != int(state.get("current_player", -1))) and (card_id not in ["陷害", "夢遊"] or (trap_targets.has(target_index) and visible_targets.has(int(target_player.get("position", -1))))):
 						target_option.add_item(str(target_player.get("name", "玩家 %d" % (target_index + 1))), target_index)
-				if card_id == "陷害" and target_option.item_count == 0:
-					target_option.add_item("畫面內沒有可用對手", -1)
+				if card_id in ["陷害", "夢遊"] and target_option.item_count == 0:
+					target_option.add_item("畫面內沒有可用目標", -1)
 					target_option.disabled = true
 					target_option.tooltip_text = "關閉背包後可平移或縮放地圖，再選擇目標。"
 				row.add_child(target_option)
@@ -3231,9 +3241,11 @@ func _player_rest_status(player: Dictionary) -> Dictionary:
 		return {"kind":"hospital", "count":int(player.hospital_days)}
 	if _has_original_statuses() and int(player.get("prison_days", 0)) > 0:
 		return {"kind":"prison", "count":int(player.prison_days)}
-	return {}
+	return SleepPresentation.status(player) if _has_original_statuses() else {}
 
 func _rest_status_label(rest_status: Dictionary) -> String:
+	if rest_status.get("kind", "") in ["winter", "dream"]:
+		return SleepPresentation.label(rest_status)
 	var title := "住院" if rest_status.get("kind", "") == "hospital" else "服刑"
 	var count := int(rest_status.get("count", 0))
 	if _has_original_statuses():

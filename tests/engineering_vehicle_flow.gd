@@ -89,6 +89,8 @@ func _stage_engineering(game: Object, player_id: int, label: String = "engineeri
 	if not _stage_tool(game, player_id, ENGINEERING_TOOL, label + " stages tool"):
 		return false
 	_prepare_turn(game, player_id)
+	var staged_validation: Dictionary = Game.validate_save(game.to_dict())
+	_expect(bool(staged_validation.get("ok", false)), label + " staged fixture is save-valid: %s" % str(staged_validation.get("errors", [])))
 	var before_supply: Dictionary = game.state["inventory_supply"]["tools"].duplicate(true)
 	var result: Dictionary = game.choose_action("use_tool", {"tool_id": ENGINEERING_TOOL})
 	_expect(bool(result.get("ok", false)), label + " uses 工程車 through use_tool")
@@ -99,6 +101,8 @@ func _stage_engineering(game: Object, player_id: int, label: String = "engineeri
 	_expect_equal(str(player.get("vehicle", "")), ENGINEERING_VEHICLE, label + " selects engineering vehicle")
 	_expect_equal(int(player.get("dice_count", -1)), 1, label + " fixes one die")
 	_expect_equal(int(player.get("engineering_vehicle", {}).get("remaining_admissions", -1)), MAX_ENGINEERING_ADMISSIONS, label + " starts seven admissions")
+	var active_validation: Dictionary = Game.validate_save(game.to_dict())
+	_expect(bool(active_validation.get("ok", false)), label + " active state is save-valid: %s" % str(active_validation.get("errors", [])))
 	return true
 
 
@@ -132,15 +136,20 @@ func _activate_or_seed(game: Object, player_id: int, previous_vehicle: String = 
 	if not ordinary_tool.is_empty():
 		staged_tools[ordinary_tool] = int(staged_tools.get(ordinary_tool, 0)) + 1
 	_seed_active_engineering(game, player_id, previous_vehicle, previous_dice)
+	_validate_predecessor_projection(game, player_id, "engineering fallback")
 
 
 func _activate_staged_or_seed(game: Object, player_id: int, previous_vehicle: String = "walking", previous_dice: int = 1) -> void:
 	# Used after a cancellation check: the original staged research tool must
 	# be consumed once, rather than being granted a second time by the harness.
 	_prepare_turn(game, player_id)
+	var staged_validation: Dictionary = Game.validate_save(game.to_dict())
+	_expect(bool(staged_validation.get("ok", false)), "staged 工程車 fixture is save-valid: %s" % str(staged_validation.get("errors", [])))
 	var result: Dictionary = game.choose_action("use_tool", {"tool_id": ENGINEERING_TOOL})
 	_expect(bool(result.get("ok", false)), "staged 工程車 activates after cancellation")
 	if bool(result.get("ok", false)):
+		var active_validation: Dictionary = Game.validate_save(game.to_dict())
+		_expect(bool(active_validation.get("ok", false)), "post-cancellation engineering state is save-valid: %s" % str(active_validation.get("errors", [])))
 		return
 	var tools: Dictionary = game.state["players"][player_id].get("tools", {})
 	var quantity: int = int(tools.get(ENGINEERING_TOOL, 0))
@@ -149,6 +158,23 @@ func _activate_staged_or_seed(game: Object, player_id: int, previous_vehicle: St
 	else:
 		tools[ENGINEERING_TOOL] = quantity - 1
 	_seed_active_engineering(game, player_id, previous_vehicle, previous_dice)
+	_validate_predecessor_projection(game, player_id, "post-cancellation engineering fallback")
+
+
+func _validate_predecessor_projection(game: Object, player_id: int, label: String) -> void:
+	var projection: Dictionary = game.to_dict()
+	var players: Array = projection.get("players", []).duplicate(true)
+	if player_id < 0 or player_id >= players.size() or typeof(players[player_id]) != TYPE_DICTIONARY:
+		_expect(false, label + " has a valid player projection")
+		return
+	var player: Dictionary = players[player_id]
+	player.erase("engineering_vehicle")
+	player["vehicle"] = "walking"
+	player["dice_count"] = 1
+	players[player_id] = player
+	projection["players"] = players
+	var validation: Dictionary = Game.validate_save(projection)
+	_expect(bool(validation.get("ok", false)), label + " predecessor projection is save-valid: %s" % str(validation.get("errors", [])))
 
 
 func _end_non_landing_turn(game: Object, player_id: int, label: String) -> Dictionary:
@@ -228,6 +254,7 @@ func _set_property(game: Object, tile_id: int, owner_id: int, level: int, chain_
 	if tile.get("rent_by_level", []).is_empty() and tile.get("base_rent", 0) == 0:
 		tile["base_rent"] = 100
 		tile["rent"] = 100
+	game.call("_update_tile_rent", tile)
 	var canonical: int = int(tile.get("index", tile_id))
 	for player_value in game.state.get("players", []):
 		if typeof(player_value) != TYPE_DICTIONARY:
@@ -474,11 +501,13 @@ func _test_hazard_death_and_inventory_reset() -> void:
 		return
 	_activate_or_seed(bankrupt_game, 0)
 	var bankrupt_player: Dictionary = bankrupt_game.state["players"][0]
-	bankrupt_game.call("_declare_bankruptcy", 0, -1, 1, "engineering_test")
+	var bankruptcy_debt: int = int(bankrupt_player.get("cash", 0)) + int(bankrupt_player.get("deposit", 0)) + 1
+	bankrupt_game.call("_charge_amount", 0, bankruptcy_debt, -1, "engineering_test", false)
 	_expect(not bool(bankrupt_player.get("alive", true)), "bankruptcy marks the active player dead")
 	_expect(not bankrupt_player.has("engineering_vehicle"), "bankruptcy clears engineering timer")
 	_expect_equal(str(bankrupt_player.get("vehicle", "")), "walking", "bankruptcy fails closed to walking")
 	_expect_equal(int(bankrupt_player.get("dice_count", -1)), 1, "bankruptcy fails closed to one die")
+	_validate_predecessor_projection(bankrupt_game, 0, "bankruptcy fixture")
 
 
 func _test_landing_only_ownership_and_god_order() -> void:
@@ -561,6 +590,8 @@ func _test_landing_only_ownership_and_god_order() -> void:
 	_set_property(god_game, god_target, 1, 2)
 	god_game.state["god_objects"] = [{"id": 10, "node": god_target, "owner": 0, "days": 7}]
 	god_game.state["players"][0]["god_id"] = 10
+	god_game.state["players"][0]["position"] = god_target
+	god_game.state["players"][0]["previous_position"] = -1
 	_activate_or_seed(god_game, 0)
 	_set_successful_landing(god_game, 0, god_target)
 	god_game.end_turn()

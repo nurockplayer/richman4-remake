@@ -7906,7 +7906,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		errors.append("winner set before game over")
 
 	if companies_save:
-		errors.append_array(OriginalStockMarket.validate(data.get("market"), data.get("players"), data.get("companies")))
+		errors.append_array(OriginalStockMarket.validate(data.get("market"), data.get("players"), data.get("companies"), not research_save))
 		errors.append_array(_validate_companies(data.get("companies"), data.get("players"), data.get("board")))
 		var pending_company: Variant = data.get("company_service_pending")
 		if not _valid_int(pending_company,0,1999):

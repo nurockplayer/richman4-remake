@@ -41,6 +41,16 @@ static func symbols() -> Array:
 		result.append(symbol(index))
 	return result
 
+static func _price_total_cents(prices: Array) -> int:
+	var cents := 0
+	for price in prices:
+		cents += roundi(float(price) * 100.0)
+	return cents
+
+static func _index_from_prices(prices: Array) -> int:
+	# Prices are cent-quantized; integer accumulation survives JSON roundtrips.
+	return floori(float(_price_total_cents(prices)) / 10.0)
+
 static func quote(price: float, quantity: int) -> int:
 	return int(price * quantity)
 
@@ -70,15 +80,13 @@ static func reset_turn_supply(market: Dictionary, rng: RandomNumberGenerator) ->
 
 static func create(rows: Array) -> Dictionary:
 	var market := {"prices": {}, "open": true, "trends": {}, "rows": {}, "history": {}, "history_index": 0, "closed_days": 0, "index": 0}
-	var total := 0.0
 	for source in rows:
 		var stock_symbol := symbol(int(source.index))
 		var row: Dictionary = source.duplicate(true)
 		market.rows[stock_symbol] = row
 		market.prices[stock_symbol] = float(row.price)
 		market.history[stock_symbol] = [float(row.price)]
-		total += float(row.price)
-	market.index = int(total * 10.0)
+	market.index = _index_from_prices(market.prices.values())
 	normalize_numbers(market)
 	return market
 
@@ -99,15 +107,12 @@ static func apply_card(market: Dictionary, stock_symbol: String, rising: bool) -
 	market.prices[stock_symbol] = float(row.price)
 	var history: Array = market.history[stock_symbol]
 	history[history.size()-1] = float(row.price)
-	var total := 0.0
-	for price in market.prices.values(): total += float(price)
-	market.index = int(total*10.0)
+	market.index = _index_from_prices(market.prices.values())
 
 static func tick(market: Dictionary, company_prices: Dictionary, rng: RandomNumberGenerator) -> void:
 	if not bool(market.open):
 		return
 	var global_shock := float(rng.randi_range(0, 32767) - 16384) / 4097.0
-	var total := 0.0
 	for stock_symbol in symbols():
 		var row: Dictionary = market.rows[stock_symbol]
 		var previous := float(row.price)
@@ -128,9 +133,8 @@ static func tick(market: Dictionary, company_prices: Dictionary, rng: RandomNumb
 		history.append(float(row.price))
 		if history.size() > HISTORY_LIMIT:
 			history.pop_front()
-		total += float(row.price)
 	market.history_index = (int(market.history_index) + 1) % HISTORY_LIMIT
-	market.index = int(total * 10.0)
+	market.index = _index_from_prices(market.prices.values())
 
 static func _integer(value: Variant, low: int, high: int) -> bool:
 	return typeof(value) in [TYPE_INT,TYPE_FLOAT] and is_finite(float(value)) and floor(float(value))==float(value) and float(value)>=low and float(value)<=high
@@ -138,7 +142,7 @@ static func _integer(value: Variant, low: int, high: int) -> bool:
 static func _number(value: Variant, low: float, high: float) -> bool:
 	return typeof(value) in [TYPE_INT,TYPE_FLOAT] and is_finite(float(value)) and float(value)>=low and float(value)<=high
 
-static func validate(market: Variant, players: Variant, companies: Variant) -> Array:
+static func validate(market: Variant, players: Variant, companies: Variant, allow_legacy_index := false) -> Array:
 	var errors: Array = []
 	if typeof(market)!=TYPE_DICTIONARY:
 		return ["invalid company market"]
@@ -167,7 +171,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 		var linked_row: Variant = market.rows.get(symbol(int(company.stock_index)))
 		if typeof(linked_row) != TYPE_DICTIONARY or not _integer(linked_row.get("company_id"), int(company.id), int(company.id)):
 			errors.append("company reverse stock link mismatch")
-	var total := 0.0
+	var valid_prices: Array = []
 	for stock_index in range(COUNT):
 		var stock_symbol := symbol(stock_index)
 		var row: Variant = market.rows.get(stock_symbol)
@@ -189,7 +193,7 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 			errors.append("invalid company stock supply")
 		if not _number(row.get("price"),1.0,9999.0) or not _number(market.prices.get(stock_symbol),1.0,9999.0) or float(market.prices[stock_symbol])!=float(row.price):
 			errors.append("company stock price mismatch")
-		if _number(row.get("price"),1.0,9999.0): total+=float(row.price)
+		if _number(row.get("price"),1.0,9999.0): valid_prices.append(float(row.price))
 		var history: Variant = market.history.get(stock_symbol)
 		if typeof(history)!=TYPE_ARRAY or history.is_empty() or history.size()>HISTORY_LIMIT:
 			errors.append("invalid company stock history")
@@ -223,6 +227,11 @@ static func validate(market: Variant, players: Variant, companies: Variant) -> A
 					errors.append("bankrupt player retains company stocks")
 		if supply_valid and int(row.market_supply)+treasury+holdings!=TOTAL_SHARES:
 			errors.append("company stock conservation mismatch %s" % stock_symbol)
-	if _integer(market.get("index"),0,COUNT*99990) and int(market.index)!=int(total*10.0):
-		errors.append("company market total mismatch")
+	if _integer(market.get("index"),0,COUNT*99990):
+		var expected_index := _index_from_prices(valid_prices)
+		# v7-v11 could truncate one ULP below an exact tenth-unit boundary.
+		# Retain that persisted value on load; all new mutations use exact cents.
+		var legacy_index := allow_legacy_index and _price_total_cents(valid_prices) % 10 == 0 and int(market.index) == expected_index - 1
+		if int(market.index) != expected_index and not legacy_index:
+			errors.append("company market total mismatch")
 	return errors

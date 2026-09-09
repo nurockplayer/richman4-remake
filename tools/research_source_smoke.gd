@@ -18,6 +18,7 @@ func _initialize() -> void:
 	var map_count:=0
 	for definition in catalog.maps:
 		var id:=str(definition.id)
+		if args.size() > 1 and id != args[1]: continue
 		var seed_value:=6 if id=="Game:1" else 42727
 		var game:=Game.new_game_on_board(seed_value,4,definition,{"original_inventory":true,"original_facilities":true,"original_gods":true,"original_companies":true,"original_statuses":true,"original_hazards":true,"original_property_cards":true,"original_remodel":true,"original_research":true,"day_limit":30,"start_date":{"year":1998,"month":1,"day":1}})
 		if game==null:
@@ -71,10 +72,14 @@ func _initialize() -> void:
 				fail(id+" JSON continuation differs at turn "+str(turns));break
 			restored=Game.from_dict(JSON.parse_string(game.to_json()))
 			if restored==null:
+				var parsed = JSON.parse_string(game.to_json())
+				print("RELOAD VALIDATION: ", Game.validate_save(parsed))
+				var file := FileAccess.open("res://.local/research-reload-failure.json", FileAccess.WRITE)
+				file.store_string(game.to_json())
 				fail(id+" turn snapshot cannot reload");break
 		if game.state.phase!="game_over": fail(id+" did not finish 30-day match")
 		if products < 1: fail(id + " did not produce its scheduled research tool")
 		print("Research source ",id," version=",game.state.version," turns=",turns," products=",products," phase=",game.state.phase)
-	if map_count!=12: fail("Expected twelve research-capable source maps")
+	if args.size() == 1 and map_count!=12: fail("Expected twelve research-capable source maps")
 	print("Research source acceptance: ",map_count," maps, ",failures," failures")
 	quit(1 if failures else 0)

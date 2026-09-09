@@ -76,6 +76,9 @@ const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
+const GOD_CARD_IDS = ["送神符", "請神符"]
+const DISMISS_GOD_IDS = [5, 6, 7, 8, 10]
+const AI_SUMMON_GOD_IDS = [1, 2, 3, 4, 12]
 const PROPERTY_CARD_IDS = ["換地", "換屋"]
 const REMODEL_CARD_ID = "改建"
 const STATUS_CARD_IDS = ["陷害", "免罪", "嫁禍", "復仇"]
@@ -2913,6 +2916,82 @@ func inventory_target_tiles(item_id: String) -> Array:
 	return targets
 
 
+func god_card_target(player_id: int, visible_tile_ids: Variant = null) -> Dictionary:
+	if not _is_inventory() or not _is_gods() or not _is_graph():
+		return {}
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return {}
+	var board: Variant = state.get("board", null)
+	if typeof(board) != TYPE_ARRAY or board.is_empty():
+		return {}
+	var position: Variant = player.get("position", null)
+	if not _valid_int(position, 0, board.size() - 1):
+		return {}
+	var origin_value: Variant = board[int(position)]
+	if typeof(origin_value) != TYPE_DICTIONARY:
+		return {}
+	var origin: Dictionary = origin_value
+	if not _valid_int(origin.get("x", null), -1000000, 1000000) or not _valid_int(origin.get("y", null), -1000000, 1000000):
+		return {}
+
+	var visible_nodes: Dictionary = {}
+	if visible_tile_ids != null:
+		if typeof(visible_tile_ids) != TYPE_ARRAY:
+			return {}
+		for visible_value in visible_tile_ids:
+			if not _valid_int(visible_value, 0, board.size() - 1):
+				return {}
+			visible_nodes[int(visible_value)] = true
+
+	var objects: Variant = state.get("god_objects", null)
+	if typeof(objects) != TYPE_ARRAY:
+		return {}
+	var selected: Dictionary = {}
+	var selected_distance: float = 0.0
+	var selected_id: int = 0
+	for actor_value in objects:
+		if typeof(actor_value) != TYPE_DICTIONARY:
+			continue
+		var actor: Dictionary = actor_value
+		var god_id_value: Variant = actor.get("id", null)
+		if not _valid_int(god_id_value, 1, 15) or not OriginalGods.valid_id(god_id_value):
+			continue
+		var god_id: int = int(god_id_value)
+		if not OriginalGods.is_spawnable(god_id) or not OriginalGods.is_attachable(god_id):
+			continue
+		var owner_value: Variant = actor.get("owner", null)
+		if not _valid_int(owner_value, -1, -1):
+			continue
+		var node_value: Variant = actor.get("node", null)
+		if not _valid_int(node_value, 0, board.size() - 1):
+			continue
+		var node: int = int(node_value)
+		if visible_tile_ids != null and not visible_nodes.has(node):
+			continue
+		var node_tile_value: Variant = board[node]
+		if typeof(node_tile_value) != TYPE_DICTIONARY:
+			continue
+		var node_tile: Dictionary = node_tile_value
+		if not _valid_int(node_tile.get("x", null), -1000000, 1000000) or not _valid_int(node_tile.get("y", null), -1000000, 1000000):
+			continue
+		var days_value: Variant = actor.get("days", null)
+		if not _valid_int(days_value, 0, 13):
+			continue
+		var dx: float = float(int(node_tile.get("x")) - int(origin.get("x")))
+		var dy: float = float(int(node_tile.get("y")) - int(origin.get("y")))
+		var distance_squared: float = dx * dx + dy * dy
+		if distance_squared >= 100000000.0:
+			continue
+		var is_better: bool = selected.is_empty() or distance_squared < selected_distance or (distance_squared == selected_distance and god_id < selected_id)
+		if not is_better:
+			continue
+		selected = {"id": god_id, "node": node, "owner": -1, "days": int(days_value)}
+		selected_distance = distance_squared
+		selected_id = god_id
+	return selected
+
+
 func _is_graph() -> bool:
 	return state.get("board_mode", "") == GRAPH_BOARD_MODE
 
@@ -2922,6 +3001,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	if normalized_kind == "card":
 		if BUILDING_CARD_IDS.has(item_id):
 			return _is_building_cards()
+		if GOD_CARD_IDS.has(item_id):
+			return _is_inventory() and _is_gods() and _is_graph()
 		if item_id == REMODEL_CARD_ID:
 			return _is_remodel()
 		if PROPERTY_CARD_IDS.has(item_id):
@@ -4509,7 +4590,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法行動")
-	if normalized == "use_card" and BUILDING_CARD_IDS.has(str(params.get("card_id", ""))):
+	if normalized == "use_card" and (BUILDING_CARD_IDS.has(str(params.get("card_id", ""))) or GOD_CARD_IDS.has(str(params.get("card_id", "")))):
 		var building_pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(building_pending_remote) == TYPE_DICTIONARY and not building_pending_remote.is_empty():
 			return _error("遙控骰子已經排程")
@@ -4547,8 +4628,8 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _use_tool(player_id, params)
 		"use_card":
 			var card_id: String = str(params.get("card_id", ""))
-			var card_result: Dictionary = _use_card(player_id, card_id, int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)), params.get("facility_type", null))
-			if (PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			var card_result: Dictionary = _use_card(player_id, card_id, int(params.get("target_id", player_id)), str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), bool(params.get("cancel", false)), params.get("facility_type", null), params.get("visible_tile_ids", null))
+			if (PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5168,7 +5249,91 @@ func _inventory_demolition_card(player_id: int, tile_id: Variant) -> Dictionary:
 	return _result(true, "已使用拆除卡", {"card_id": "拆除", "tile_id": target_id, "effect": effect})
 
 
-func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "", tile_id: Variant = -1, cancel: bool = false, facility_type: Variant = null) -> Dictionary:
+func _use_god_card(player_id: int, card_id: String, visible_tile_ids: Variant = null, cancel: bool = false) -> Dictionary:
+	if not _is_inventory() or not _is_gods() or not _is_graph() or not GOD_CARD_IDS.has(card_id):
+		return _error("神明卡只適用於現有原版神明圖形地圖")
+	if cancel:
+		return _error("已取消神明卡")
+	if state.get("phase", "") not in ["await_roll", "await_action"]:
+		return _error("神明卡只能在擲骰前或行動階段使用")
+	var pending_remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
+		return _error("遙控骰子已經排程")
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("目前玩家無法行動")
+	if _status_active(player):
+		return _error("目前狀態無法使用神明卡")
+	var cards: Variant = player.get("cards", null)
+	if typeof(cards) != TYPE_ARRAY or not cards.has(card_id):
+		return _error("沒有這張卡片")
+
+	if card_id == "送神符":
+		var current_god_id: int = _player_god_id(player_id)
+		var dismissed_god_id: int = current_god_id if DISMISS_GOD_IDS.has(current_god_id) else 0
+		var god_actor: Dictionary = {}
+		if dismissed_god_id > 0:
+			god_actor = _god_object(dismissed_god_id)
+			if god_actor.is_empty() or int(god_actor.get("owner", -1)) != player_id:
+				return _error("目前玩家的神明狀態無效")
+		var bomb_steps_value: Variant = player.get("bomb_steps", 0)
+		var bomb_steps: int = int(bomb_steps_value) if _valid_int(bomb_steps_value, 0, MAX_BOMB_STEPS) else -1
+		var bomb_cleared: bool = _is_hazards() and bomb_steps > 0
+		if dismissed_god_id <= 0 and not bomb_cleared:
+			return _error("目前沒有可清除的神明或攜帶炸彈")
+		var consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
+		if not bool(consume_result.get("ok", false)):
+			return _error(str(consume_result.get("error", "卡片無法使用")))
+		if dismissed_god_id > 0:
+			_detach_god(dismissed_god_id, "dismissed", true)
+		if bomb_cleared:
+			player["bomb_steps"] = 0
+			_hazard_return_tool_to_supply("定時炸彈")
+		var effect: String = "dismiss_god_and_clear_carried_bomb" if dismissed_god_id > 0 and bomb_cleared else "dismiss_god" if dismissed_god_id > 0 else "clear_carried_bomb"
+		_record_event("card_used", {
+			"player_id": player_id,
+			"card_id": card_id,
+			"god_id": dismissed_god_id,
+			"bomb_cleared": bomb_cleared,
+			"bomb_remaining": int(player.get("bomb_steps", 0)),
+			"effect": effect,
+		})
+		_set_action_options(player_id)
+		return _result(true, "已使用送神符", {"card_id": card_id, "god_id": dismissed_god_id, "bomb_cleared": bomb_cleared, "bomb_remaining": int(player.get("bomb_steps", 0)), "effect": effect})
+
+	var target: Dictionary = god_card_target(player_id, visible_tile_ids)
+	if target.is_empty():
+		return _error("目前沒有可請來的神明")
+	var target_god_id: int = int(target.get("id", 0))
+	var target_actor: Dictionary = _god_object(target_god_id)
+	if target_actor.is_empty() or int(target_actor.get("owner", -1)) >= 0:
+		return _error("請神目標已不可用")
+	var summon_phase: String = str(state.get("phase", ""))
+	var summon_consume_result: Dictionary = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], card_id)
+	if not bool(summon_consume_result.get("ok", false)):
+		return _error(str(summon_consume_result.get("error", "卡片無法使用")))
+	if not _attach_god(player_id, target_god_id):
+		return _error("請神目標無法附身")
+	var summon_node: int = int(target.get("node", target_actor.get("node", -1)))
+	var summon_event: Dictionary = {
+		"player_id": player_id,
+		"card_id": card_id,
+		"god_id": target_god_id,
+		"target_node": summon_node,
+		"effect": "summon_god",
+	}
+	var caster_alive: bool = bool(_player(player_id).get("alive", false))
+	if not caster_alive and summon_phase == "await_action" and state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		# Bankruptcy during an action-phase summon has not been handed off by the
+		# charge path. Movement-phase summons already advance inside bankruptcy.
+		_advance_to_next_alive(player_id)
+	_record_event("card_used", summon_event)
+	if caster_alive:
+		_set_action_options(player_id)
+	return _result(true, "已使用請神符", {"card_id": card_id, "god_id": target_god_id, "target_node": summon_node, "effect": "summon_god"})
+
+
+func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: String = "", tile_id: Variant = -1, cancel: bool = false, facility_type: Variant = null, visible_tile_ids: Variant = null) -> Dictionary:
 	if _is_inventory():
 		var pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(pending_remote) == TYPE_DICTIONARY and not pending_remote.is_empty():
@@ -5185,6 +5350,8 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		if not _is_building_cards():
 			return _error("建物卡效果尚未還原")
 		return _use_building_card(player_id, card_id, tile_id, cancel, facility_type)
+	if GOD_CARD_IDS.has(card_id):
+		return _use_god_card(player_id, card_id, visible_tile_ids, cancel)
 	if card_id == "漲價" or card_id == "查封":
 		if not _is_inventory() or not _is_facilities():
 			return _error("設施卡片只適用於原版設施地圖")
@@ -5821,6 +5988,10 @@ func run_ai_turn() -> Dictionary:
 		if state.get("phase", "") == "await_roll":
 			if _is_inventory():
 				_ai_roll_action(player_id)
+			# Immediate card effects can end the match or hand off this turn.
+			# Let the loop dispatch the resulting state before attempting a roll.
+			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
+				continue
 			if _trap_pending():
 				continue
 			var roll_result: Dictionary = roll()
@@ -5866,6 +6037,8 @@ func _ai_action(player_id: int) -> void:
 		if selected>=0:
 			choose_action("company_upgrade",{"tile_id":selected,"facility_type":1})
 			return
+	if _ai_god_card_action(player_id):
+		return
 	if _ai_remodel_action(player_id):
 		return
 	if _ai_property_card_action(player_id):
@@ -5940,6 +6113,8 @@ func _ai_action(player_id: int) -> void:
 		if _is_inventory():
 			for card_value in player["cards"]:
 				var card_id: String = str(card_value)
+				if GOD_CARD_IDS.has(card_id):
+					continue
 				if not item_is_implemented("card", card_id):
 					continue
 				var inventory_card_params: Dictionary = {"card_id": card_id}
@@ -6113,6 +6288,39 @@ func _ai_building_card_target(player_id: int, card_id: String) -> Dictionary:
 		return int(a.get("tile_id", -1)) < int(b.get("tile_id", -1))
 	)
 	return candidates[0]
+
+
+func _ai_god_card_action(player_id: int) -> bool:
+	if not _is_inventory() or not _is_gods() or not _is_graph():
+		return false
+	var player: Dictionary = _player(player_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return false
+	var cards: Variant = player.get("cards", null)
+	if typeof(cards) != TYPE_ARRAY:
+		return false
+
+	var current_god_id: int = _player_god_id(player_id)
+	if cards.has("送神符"):
+		var should_dismiss: bool = DISMISS_GOD_IDS.has(current_god_id)
+		if current_god_id == 0 and _is_hazards():
+			var bomb_steps: Variant = player.get("bomb_steps", 0)
+			should_dismiss = _valid_int(bomb_steps, 1, 12)
+		if should_dismiss:
+			var dismiss_result: Dictionary = choose_action("use_card", {"card_id": "送神符"})
+			if bool(dismiss_result.get("ok", false)):
+				return true
+
+	if cards.has("請神符") and not AI_SUMMON_GOD_IDS.has(current_god_id):
+		# Select the nearest eligible actor before applying the AI's beneficial-god
+		# policy.  This preserves the source evaluator's nearest-object decision:
+		# a nearest neutral god blocks the card even when a farther good god exists.
+		var target: Dictionary = god_card_target(player_id)
+		if not target.is_empty() and AI_SUMMON_GOD_IDS.has(int(target.get("id", 0))):
+			var summon_result: Dictionary = choose_action("use_card", {"card_id": "請神符"})
+			if bool(summon_result.get("ok", false)):
+				return true
+	return false
 
 
 func _inventory_ai_worker_target(player_id: int) -> int:
@@ -6409,6 +6617,8 @@ func _ai_roll_action(player_id: int) -> void:
 	if _ai_remodel_action(player_id):
 		return
 	if _ai_property_card_action(player_id):
+		return
+	if _ai_god_card_action(player_id):
 		return
 	var tools: Dictionary = player.get("tools", {})
 	var active_vehicle: String = str(player.get("vehicle", "walking"))

@@ -111,3 +111,13 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_loader
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_guard.gd
+
+# God cards reuse the current save schema.
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_loader.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_distance.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_bankruptcy.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ai_terminal.gd

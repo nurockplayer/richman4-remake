@@ -2705,7 +2705,7 @@ func _inventory_target_error(player_id: int, item_id: String, tile_id: Variant) 
 		var status_owner: int = int(status_facility.get("owner", -1))
 		var status_level: int = int(status_facility.get("building_level", 0))
 		var status_type: int = int(status_facility.get("facility_type", -1))
-		if status_owner < 0 or status_level <= 0 or not _facility_type_valid(status_type) or status_type == FACILITY_LAB_TYPE:
+		if status_owner < 0 or status_level <= 0 or not _facility_type_valid(status_type) or (status_type == FACILITY_LAB_TYPE and not _is_research()):
 			return "目標設施尚未提供服務"
 		if item_id == "漲價" and status_owner != player_id:
 			return "漲價卡只能指定自己的設施"
@@ -5000,7 +5000,10 @@ func _use_card(player_id: int, card_id: String, target_id: int = -1, symbol: Str
 		var status_facility: Dictionary = _facility_record(int(tile_id))
 		var status_source_id: int = int(status_facility.get("source_object_id", -1))
 		var next_status: int = FACILITY_RAISED_BASE_STATE if card_id == "漲價" else FACILITY_SEALED_BASE_STATE
-		_update_facility_records(status_source_id, {"facility_state": next_status})
+		var status_changes: Dictionary = {"facility_state": next_status}
+		if _is_research() and card_id == "查封" and int(status_facility.get("facility_type", -1)) == FACILITY_LAB_TYPE:
+			status_changes["research_turns"] = 0
+		_update_facility_records(status_source_id, status_changes)
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "tile_id": int(tile_id), "facility_id": _facility_canonical_index(int(tile_id)), "source_object_id": status_source_id, "facility_state": next_status, "effect": "facility_raised" if card_id == "漲價" else "facility_sealed"})
 		_set_action_options(player_id)
 		return _result(true, "已使用%s卡" % card_id, {"card_id": card_id, "tile_id": int(tile_id), "facility_state": next_status})

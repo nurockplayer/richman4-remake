@@ -2126,7 +2126,7 @@ func _set_action_options(player_id: int) -> void:
 					options.push_front("buy_vehicle")
 	var action_pending_remote: Variant = state.get("pending_remote_dice", {})
 	var action_remote_pending: bool = _is_inventory() and typeof(action_pending_remote) == TYPE_DICTIONARY and not action_pending_remote.is_empty()
-	if _is_inventory() and not hospitalized and not action_remote_pending and not _inventory_movement_blocked(player) and not EngineeringVehicle.is_active(player) and int(player.get("tools", {}).get("工程車", 0)) > 0:
+	if _is_inventory() and not hospitalized and not _stationary_turn() and not action_remote_pending and not _inventory_movement_blocked(player) and not EngineeringVehicle.is_active(player) and int(player.get("tools", {}).get("工程車", 0)) > 0:
 		options.push_front("use_tool")
 	if player.get("cards", []).size() > 0 and not action_remote_pending:
 		var can_use_card: bool = not hospitalized
@@ -3001,6 +3001,11 @@ func _is_graph() -> bool:
 	return state.get("board_mode", "") == GRAPH_BOARD_MODE
 
 
+func _stationary_turn() -> bool:
+	var value: Variant = state.get("stationary_turn", false)
+	return typeof(value) == TYPE_BOOL and bool(value)
+
+
 func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	var normalized_kind := item_kind.to_lower().strip_edges()
 	if normalized_kind == "card":
@@ -3144,6 +3149,8 @@ func _inventory_vehicle_tool_id(vehicle: String) -> String:
 func _engineering_activation(player_id: int) -> Dictionary:
 	if not _is_inventory():
 		return _error("工程車只適用於道具地圖")
+	if _stationary_turn():
+		return _error("停留回合無法使用工程車")
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法行動")
@@ -3208,6 +3215,9 @@ func _engineering_admit(player_id: int) -> void:
 	var restored_dice: int = int(restored.get("dice_count", 1))
 	if available and not previous_tool_id.is_empty():
 		_hazard_consume_tool_without_supply(player, previous_tool_id)
+	var vehicles: Dictionary = player.get("vehicles", {}).duplicate(true)
+	vehicles[restored_vehicle] = true
+	player["vehicles"] = vehicles
 	player["vehicle"] = restored_vehicle
 	player["dice_count"] = restored_dice
 	player.erase("engineering_vehicle")
@@ -3219,6 +3229,8 @@ func _engineering_landing_target(player_id: int, allow_unowned: bool = false) ->
 		return {}
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
+		return {}
+	if _stationary_turn():
 		return {}
 	if typeof(state.get("last_roll", [])) != TYPE_ARRAY or state.get("last_roll", []).is_empty():
 		return {}
@@ -3240,14 +3252,21 @@ func _engineering_ai_action(player_id: int) -> bool:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty():
 		return false
-	if not _engineering_landing_target(player_id).is_empty() and int(player.get("tools", {}).get("工程車", 0)) > 0:
+	var target: Dictionary = _engineering_landing_target(player_id)
+	if target.is_empty():
+		return false
+	var current_god_id: int = _player_god_id(player_id)
+	var target_level: int = int(target.get("building_level", 0))
+	if current_god_id == 12 or (current_god_id == 10 and target_level <= 1):
+		return false
+	if int(player.get("tools", {}).get("工程車", 0)) > 0:
 		var result: Dictionary = _engineering_activation(player_id)
 		return bool(result.get("ok", false))
 	return false
 
 
 func _engineering_demolition(player_id: int) -> void:
-	if not _is_inventory() or not EngineeringVehicle.is_active(_player(player_id)):
+	if not _is_inventory() or _stationary_turn() or not EngineeringVehicle.is_active(_player(player_id)):
 		return
 	var target: Dictionary = _engineering_landing_target(player_id, true)
 	if target.is_empty():
@@ -3785,6 +3804,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 		return _error("骰子數量超出交通工具限制")
 	var dice: Array = []
 	var total: int = 0
+	var stationary_turn: bool = int(player.get("stay_next", 0)) > 0
 	if not pending_remote.is_empty():
 		var remote_value: Variant = pending_remote.get("value", null)
 		if not _valid_int(remote_value, 1, 6):
@@ -3800,6 +3820,10 @@ func roll(dice_count: int = -1) -> Dictionary:
 			var face: int = _rng.randi_range(1, 6)
 			dice.append(face)
 			total += face
+	if stationary_turn and _is_inventory() and _is_graph():
+		state["stationary_turn"] = true
+	else:
+		state.erase("stationary_turn")
 	state["last_roll"] = dice
 	state["last_total"] = total
 	if _is_facilities():
@@ -3810,7 +3834,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 	state["property_action_used"] = false
 	var graph_should_move: bool = false
 	var dog_collision: bool = false
-	if int(player.get("stay_next", 0)) > 0:
+	if stationary_turn:
 		player["stay_next"] = int(player.get("stay_next", 0)) - 1
 		if _is_research():
 			# A positive roll without an edge traversal is not a new research visit.
@@ -5744,6 +5768,7 @@ func end_turn() -> Dictionary:
 
 func _advance_to_next_alive(previous_id: int) -> void:
 	_check_game_over()
+	state.erase("stationary_turn")
 	if state.get("phase", "") == "game_over":
 		return
 	var players: Array = _players()
@@ -7345,6 +7370,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	for key in required_top:
 		if not data.has(key):
 			errors.append("missing %s" % key)
+	if data.has("stationary_turn") and typeof(data.get("stationary_turn")) != TYPE_BOOL:
+		errors.append("invalid stationary turn")
 
 	var expected_save_version: int = BUILDING_CARD_SAVE_VERSION if building_cards_save else RESEARCH_SAVE_VERSION if research_save else REMODEL_SAVE_VERSION if remodel_save else PROPERTY_CARD_SAVE_VERSION if property_cards_save else HAZARD_SAVE_VERSION if hazards_save else STATUS_SAVE_VERSION if status_save else COMPANY_SAVE_VERSION if companies_save else GODS_SAVE_VERSION if gods_save else FACILITY_SAVE_VERSION if facility_save else INVENTORY_SAVE_VERSION if inventory_save else SETUP_SAVE_VERSION if setup_save else GRAPH_SAVE_VERSION if graph_save else SAVE_VERSION
 	if not _valid_int(data.get("version", null), expected_save_version, expected_save_version):
@@ -8193,9 +8220,13 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("player %d dice count exceeds vehicle" % index)
 			if not vehicle_valid:
 				errors.append("player %d vehicle invalid" % index)
-			var engineering_validation: Dictionary = EngineeringVehicle.validate_player(player)
-			if not bool(engineering_validation.get("ok", false)):
-				errors.append("player %d engineering vehicle invalid: %s" % [index, str(engineering_validation.get("error", ""))])
+			var engineering_present: bool = player.has("engineering_vehicle") or vehicle_value == EngineeringVehicle.VEHICLE_ID
+			if engineering_present and (not inventory_save or not graph_save):
+				errors.append("player %d engineering vehicle requires inventory graph save" % index)
+			elif engineering_present:
+				var engineering_validation: Dictionary = EngineeringVehicle.validate_player(player)
+				if not bool(engineering_validation.get("ok", false)):
+					errors.append("player %d engineering vehicle invalid: %s" % [index, str(engineering_validation.get("error", ""))])
 			var properties: Variant = player.get("properties", null)
 			if typeof(properties) != TYPE_ARRAY:
 				errors.append("player %d properties invalid" % index)

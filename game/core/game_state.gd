@@ -3852,6 +3852,8 @@ func set_vehicle(vehicle: String, dice_count: int = -1) -> Dictionary:
 
 
 func roll(dice_count: int = -1) -> Dictionary:
+	if not _pending_finance().is_empty():
+		return _error("請先回應付款選擇")
 	if _sleep_active(_current_player()) and not _running_sleep_turn:
 		return _error("睡眠期間由自動回合移動")
 	if _trap_pending():

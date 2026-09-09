@@ -20,7 +20,14 @@ static func is_missile(tool_id: String) -> bool:
 
 
 static func supports(game: Object) -> bool:
-	return game != null and game.has_method("_is_inventory") and game.has_method("_is_graph") and game._is_inventory() and game._is_graph()
+	if game == null or not game.has_method("_is_inventory") or not game.has_method("_is_graph"):
+		return false
+	if not game.has_method("_is_statuses") or not game.has_method("_status_node_index"):
+		return false
+	if not game._is_inventory() or not game._is_graph() or not game._is_statuses():
+		return false
+	var hospital_index: Variant = game._status_node_index("hospital")
+	return typeof(hospital_index) == TYPE_INT and int(hospital_index) >= 0
 
 
 static func half_extent(tool_id: String) -> int:

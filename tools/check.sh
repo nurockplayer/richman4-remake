@@ -172,3 +172,5 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/financial_tax.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/financial_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/financial_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/financial_focus.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/financial_boundaries.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/sleep_fee_copy.gd

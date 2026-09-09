@@ -3009,7 +3009,7 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "%s免除費用 %s" % [OriginalGods.name_for(int(event.get("god_id", 0))), _format_money(int(event.get("amount", 0)))]
 		"property_fee_waived":
 			var fee_name := "設施費" if event.get("kind", "") == "facility" else "租金"
-			var owner_status := "住院" if event.get("reason", "") == "hospital" else "入獄" if event.get("reason", "") == "prison" else "死神附身"
+			var owner_status: String = {"hospital": "住院", "prison": "入獄", "winter": "冬眠", "dream": "夢遊"}.get(str(event.get("reason", "")), "死神附身")
 			return "地主%s，本次免收%s" % [owner_status, fee_name]
 		"god_fortune_construction":
 			return "%s額外加蓋%s至第 %d 級" % [OriginalGods.name_for(int(event.get("god_id", 0))), _tile_name(int(event.get("tile_id", -1))), int(event.get("to_level", 0))]

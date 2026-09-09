@@ -41,5 +41,30 @@ func _initialize() -> void:
 		corrupt.market.index += 10
 		expect(not Game.validate_save(corrupt).get("ok", false), "wrong total index remains rejected")
 		expect(Game.from_dict(corrupt) == null, "wrong total index cannot load")
+	for options in [Fixture.v11_game_options(), Fixture.new_game_options()]:
+		var game: Object = Game.new_game_on_board(106, 4, Fixture.definition(), options)
+		expect(game != null, "legacy index fixture starts")
+		if game == null: continue
+		for symbol in Market.symbols():
+			game.state.market.rows[symbol].price = 1.1
+			game.state.market.prices[symbol] = 1.1
+			game.state.market.history[symbol][-1] = 1.1
+		game.state.market.index = 131
+		var legacy: Dictionary = JSON.parse_string(game.to_json())
+		var is_legacy: bool = game.state.version == 11
+		expect(Game.validate_save(legacy).get("ok", false) == is_legacy, "only legacy versions accept historical one-lower tenth-boundary index")
+		var restored: Object = Game.from_dict(legacy)
+		expect((restored != null) == is_legacy, "legacy index load is explicitly version-gated")
+		if restored != null:
+			expect(restored.state.market.index == 131 and restored.to_json() == game.to_json(), "loading preserves the historical persisted index")
+		game.state.market.index = 132
+		expect(Game.from_dict(JSON.parse_string(game.to_json())) != null, "canonical cent index loads in both versions")
+		var created: Dictionary = Market.create(game.state.market.rows.values())
+		expect(created.index == 132, "new markets use exact cent index at former float underflow boundary")
+		for row in created.rows.values(): row.suspension = 1
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 106
+		Market.tick(created, {}, rng)
+		expect(created.index == 132, "market tick retains exact cent index for unchanged prices")
 	print("Company JSON index checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

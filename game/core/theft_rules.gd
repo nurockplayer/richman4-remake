@@ -170,9 +170,11 @@ static func resolve(
 			received = true
 
 	# Card eviction can remove the action card itself. Consume the first
-	# remaining occurrence only when it survived the receive step.
+	# remaining occurrence only when that action occurrence survived the receive
+	# step; a received 搶奪 card or a duplicate must not be consumed twice.
 	var robbery_consumed: bool = false
-	if staged_actor_cards.has(ROBBERY_CARD_ID):
+	var action_card_evicted: bool = evicted_card_id == ROBBERY_CARD_ID
+	if not action_card_evicted and staged_actor_cards.has(ROBBERY_CARD_ID):
 		var consume_action_card: Dictionary = Inventory.consume_card(staged_supply, staged_actor_cards, ROBBERY_CARD_ID)
 		if bool(consume_action_card.get("ok", false)):
 			robbery_consumed = true

@@ -173,6 +173,11 @@ func _test_v9_shape_rejection() -> void:
 		return
 	var good: Dictionary = game.to_dict()
 	expect(bool(Game.validate_save(good).get("ok", false)), "malformation baseline is valid")
+	for invalid_board in [[], {}, null]:
+		var invalid_board_hazard: Dictionary = good.duplicate(true)
+		invalid_board_hazard.board = invalid_board
+		invalid_board_hazard.ground_hazards = {"0": {"kind": "mine", "placer_id": 0}}
+		reject(invalid_board_hazard, "missing board cannot be indexed by a ground hazard")
 	var missing_marker: Dictionary = good.duplicate(true)
 	missing_marker.erase("original_hazards")
 	reject(missing_marker, "missing original_hazards")

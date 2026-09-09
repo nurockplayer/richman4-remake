@@ -6588,7 +6588,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for hazard_key in ground_hazards_value.keys():
 				var hazard_index_valid: bool = typeof(hazard_key) == TYPE_STRING and str(hazard_key).is_valid_int()
 				var hazard_index: int = int(hazard_key) if hazard_index_valid else -1
-				if not hazard_index_valid or str(hazard_index) != str(hazard_key) or not _valid_int(hazard_index, 0, max(0, hazard_board_size - 1)):
+				if not hazard_index_valid or str(hazard_index) != str(hazard_key) or not _valid_int(hazard_index, 0, hazard_board_size - 1):
 					errors.append("invalid ground hazard index")
 					continue
 				var hazard_object_value: Variant = ground_hazards_value[hazard_key]

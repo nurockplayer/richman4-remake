@@ -34,6 +34,7 @@ const EngineeringVehicle = preload("res://game/core/engineering_vehicle.gd")
 const NewsEvents = preload("res://game/core/news_events.gd")
 const FateEvents = preload("res://game/core/fate_events.gd")
 const SleepRules = preload("res://game/core/sleep_rules.gd")
+const FinancialRules = preload("res://game/core/financial_cards_rules.gd")
 const BOARD_SIZE = 40
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 4
@@ -79,7 +80,7 @@ const SETUP_CHARACTER_NAMES = [
 const SETUP_CHARACTER_COUNT = 12
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
-const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪"]
+const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
 const GOD_CARD_IDS = ["送神符", "請神符"]
 const DISMISS_GOD_IDS = [5, 6, 7, 8, 10]
@@ -787,6 +788,19 @@ func _pending_trap_card() -> String:
 	return str(value) if typeof(value) == TYPE_STRING and str(value) == SleepRules.DREAM_CARD else ""
 
 
+func _pending_finance() -> Dictionary:
+	var value: Variant = state.get("pending_finance", {})
+	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func financial_response() -> Dictionary:
+	return FinancialRules.response(self)
+
+
+func tax_target_players(caster_id: int) -> Array:
+	return FinancialRules.tax_target_players(self, caster_id)
+
+
 func _trap_pending() -> bool:
 	return not _pending_trap().is_empty()
 
@@ -1138,6 +1152,9 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 	for player in _players():
 		player["stocks"] = {}
 		player["insurance_status"] = 0
+		# Keep the semantic duration name available while the source marker
+		# remains the persisted authority.
+		player["insurance_days"] = 0
 		for stock_symbol in get_stock_symbols():
 			player.stocks[stock_symbol] = 0
 	OriginalStockMarket.reset_turn_supply(state.market, _rng)
@@ -1458,6 +1475,7 @@ func _tick_company_insurance() -> void:
 	for player in _players():
 		var status := int(player.get("insurance_status", 0))
 		player.insurance_status = 0 if status == 128 else 128 if status == 1 else maxi(0, status - 1)
+		player["insurance_days"] = int(player.get("insurance_status", 0))
 
 
 func _roll_company_insurance_days() -> int:
@@ -1470,6 +1488,7 @@ func _roll_company_insurance_days() -> int:
 func _grant_company_insurance(player_id: int, company: Dictionary, days: int) -> void:
 	var player := _player(player_id)
 	player.insurance_status = (int(player.get("insurance_status", 0)) + days) & 0x7f
+	player["insurance_days"] = int(player.get("insurance_status", 0))
 	_record_event("company_insurance_granted", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"days":days,"insurance_status":int(player.insurance_status)})
 
 
@@ -2033,6 +2052,10 @@ func _sync_state() -> void:
 		return
 	state["rng_state"] = int(_rng.state)
 	state["rng_state_text"] = str(_rng.state)
+	if _is_companies():
+		for player in _players():
+			if typeof(player) == TYPE_DICTIONARY and player.has("insurance_status"):
+				player["insurance_days"] = int(player.get("insurance_status", 0))
 	var day: int = int(state.get("day", 1))
 	if _is_setup():
 		var elapsed: int = max(0, day - 1)
@@ -2142,6 +2165,9 @@ func _set_action_options(player_id: int) -> void:
 	var player: Dictionary = _player(player_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["action_options"] = options
+		return
+	if not _pending_finance().is_empty():
+		state["action_options"] = ["respond_finance"] if phase in ["await_roll", "await_action"] else []
 		return
 	if _trap_pending():
 		state["action_options"] = ["respond_trap"]
@@ -3120,6 +3146,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 	if normalized_kind == "card":
 		if SleepRules.is_sleep_card(item_id):
 			return _is_inventory() and _is_statuses()
+		if FinancialRules.is_financial_card(item_id):
+			return _is_inventory()
 		if BUILDING_CARD_IDS.has(item_id):
 			return _is_building_cards()
 		if GOD_CARD_IDS.has(item_id):
@@ -4403,7 +4431,7 @@ func _facility_fee(tile: Dictionary) -> Dictionary:
 	return {"ok": true, "reason": "", "fee": fee, "base_fee": base_fee, "resolved_roll": resolved_roll}
 
 
-func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_object_id: int) -> void:
+func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_object_id: int, free_allowed: bool = true) -> void:
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
@@ -4415,7 +4443,7 @@ func _charge_facility(debtor_id: int, creditor_id: int, amount: int, source_obje
 		debtor["rent_shield"] = int(debtor.get("rent_shield", 0)) - 1
 		_record_event("facility_blocked", {"player_id": debtor_id, "creditor_id": creditor_id, "source_object_id": source_object_id, "amount": amount})
 		return
-	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false)
+	_charge_amount(debtor_id, adjusted_amount, creditor_id, "facility", false, free_allowed)
 
 
 func _god_property_fee_waiver_reason(owner_id: int) -> String:
@@ -4517,7 +4545,7 @@ func _resolve_facility_visit(player_id: int, visited_tile: Dictionary) -> void:
 		_record_event("facility_service", payload)
 		return
 	_record_event("facility_service", payload)
-	_charge_facility(player_id, owner_id, int(payload["fee"]), source_object_id)
+	_charge_facility(player_id, owner_id, int(payload["fee"]), source_object_id, facility_type != 1)
 
 
 func _move_player(player_id: int, steps: int) -> void:
@@ -4684,7 +4712,7 @@ func _god_adjust_charge_amount(debtor_id: int, amount: int, reason: String) -> i
 	return adjusted_amount
 
 
-func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true) -> void:
+func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: String, apply_god_modifier: bool = true, allow_financial: bool = true) -> void:
 	if amount <= 0:
 		return
 	var debtor: Dictionary = _player(debtor_id)
@@ -4696,6 +4724,23 @@ func _charge_amount(debtor_id: int, amount: int, creditor_id: int, reason: Strin
 		if amount <= 0:
 			_record_event("god_charge_waived", {"player_id": debtor_id, "god_id": _player_god_id(debtor_id), "reason": reason, "amount": original_amount})
 			return
+	if allow_financial and ["rent", "facility", "company"].has(reason):
+		var source_node: int = int(debtor.get("position", -1))
+		var offer: Dictionary = FinancialRules.maybe_offer_free(self, debtor_id, creditor_id, amount, source_node, reason, true)
+		if bool(offer.get("offered", false)):
+			if offer.has("error"):
+				_record_event("financial_response_error", {"kind": reason, "player_id": debtor_id, "error": str(offer.get("error", ""))})
+				return
+			if bool(offer.get("waived", false)):
+				_record_event("financial_payment_waived", {"kind": reason, "player_id": debtor_id, "creditor_id": creditor_id, "amount": amount})
+				return
+			if bool(offer.get("awaiting_response", false)):
+				return
+	# A player creditor is part of the same bounded save representation as the
+	# debtor. Refuse an overflowing credit before withdrawing any funds.
+	if creditor_id >= 0 and _valid_player(creditor_id, true) and int(_player(creditor_id).get("cash", 0)) > FinancialRules.MAX_CASH - amount:
+		_record_event("payment_rejected", {"player_id": debtor_id, "creditor_id": creditor_id, "amount": amount, "reason": reason, "error": "cash_cap"})
+		return
 	# The manual's bankruptcy trigger is based on cash plus deposit. Deposits
 	# are withdrawn to meet a charge; properties and shares go to auction only
 	# after the player is declared bankrupt, never as a hidden rescue sale.
@@ -4884,6 +4929,10 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if normalized == "respond_finance":
+		return FinancialRules.respond(self, params)
+	if not _pending_finance().is_empty():
+		return _error("請先回應金融付款")
 	if normalized == "respond_trap":
 		return _respond_trap(params)
 	if _trap_pending():
@@ -4957,9 +5006,9 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			var selected_item_kind: Variant = null
 			var selected_item_id: Variant = null
 			var selected_cancel: Variant = false
-			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id):
-				# Keep the raw values for the theft boundary so malformed target,
-				# item, and cancel fields are rejected instead of being coerced.
+			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or card_id == "查稅":
+				# Keep raw values for theft, sleep, and finance boundaries so malformed
+				# target and cancel fields are rejected instead of coerced.
 				selected_target = params.get("target_id", null)
 				selected_item_kind = params.get("item_kind", null)
 				selected_item_id = params.get("item_id", null)
@@ -4968,7 +5017,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 				selected_target = int(params.get("target_id", player_id))
 				selected_cancel = bool(params.get("cancel", false))
 			var card_result: Dictionary = _use_card(player_id, card_id, selected_target, str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), selected_cancel, params.get("facility_type", null), params.get("visible_tile_ids", null), selected_item_kind, selected_item_id)
-			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or card_id == "查稅" or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5729,6 +5778,8 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 			return _error("遙控骰子已經排程")
 	if SleepRules.is_sleep_card(card_id):
 		return SleepRules.use_card(self, player_id, card_id, target_id, cancel)
+	if card_id == "查稅":
+		return FinancialRules.use_card(self, player_id, card_id, target_id, cancel)
 	if card_id == "搶奪":
 		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)
 	# All non-theft callers provide the legacy integer target and boolean
@@ -5941,6 +5992,8 @@ func _grant_card(player_id: int, card_id: String) -> Dictionary:
 
 
 func end_turn() -> Dictionary:
+	if not _pending_finance().is_empty():
+		return _error("請先回應金融付款")
 	if _trap_pending():
 		return _error("請先回應陷害卡")
 	if not _require_phase("await_action"):
@@ -6362,6 +6415,8 @@ func run_ai_turn() -> Dictionary:
 			return _error("目前玩家無法行動")
 	if not bool(player.get("is_ai", false)):
 		return _error("目前玩家不是 AI")
+	if not _pending_finance().is_empty():
+		return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 	if _trap_pending():
 		# A human defender must answer outside the AI turn loop.  The caster's
 		# phase and current-player identity remain unchanged while waiting.
@@ -6375,6 +6430,8 @@ func run_ai_turn() -> Dictionary:
 	var safety: int = 0
 	var route_safety: int = 0
 	while state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == player_id:
+		if not _pending_finance().is_empty():
+			return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 		if _trap_pending():
 			var pending: Dictionary = _pending_trap()
 			var pending_target: Dictionary = _player(int(pending.get("target_id", -1)))
@@ -6414,6 +6471,8 @@ func run_ai_turn() -> Dictionary:
 			_ai_action(player_id)
 		else:
 			break
+	if not _pending_finance().is_empty():
+		return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "await_action" and int(state.get("current_player", -1)) == player_id:
 		var end_result: Dictionary = end_turn()
 		if not bool(end_result.get("ok", false)):
@@ -6595,6 +6654,13 @@ func _ai_action(player_id: int) -> void:
 					if dream_target < 0:
 						continue
 					inventory_card_params["target_id"] = dream_target
+				elif card_id == "查稅":
+					var tax_targets: Array = tax_target_players(player_id)
+					if tax_targets.is_empty():
+						continue
+					inventory_card_params["target_id"] = int(tax_targets[0])
+				elif card_id == "免費":
+					continue
 				if card_id == "陷害":
 					var trap_target: int = _ai_trap_target(player_id)
 					if trap_target < 0:
@@ -7962,6 +8028,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						errors.append("pending remote dice conflicts with movement modifier")
 	var action_options: Variant = data.get("action_options", null)
 	var known_actions: Array = ["buy", "upgrade", "deposit", "withdraw", "take_loan", "buy_vehicle", "buy_stock", "sell_stock", "use_card", "end_turn"]
+	known_actions.append("respond_finance")
 	if status_save:
 		known_actions.append("respond_trap")
 	if facility_save:
@@ -7991,20 +8058,24 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			if inventory_save and phase_name == "await_roll" and saved_current_movement_blocked and option == "use_tool":
 				errors.append("movement modifier has unavailable tool action")
 		var pending_trap_for_options: bool = status_save and typeof(data.get("pending_trap", {})) == TYPE_DICTIONARY and not data.get("pending_trap", {}).is_empty()
-		if phase_name == "await_action" and not pending_trap_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
+		var pending_finance_for_options: bool = typeof(data.get("pending_finance", {})) == TYPE_DICTIONARY and not data.get("pending_finance", {}).is_empty()
+		if phase_name == "await_action" and not pending_trap_for_options and not pending_finance_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
 			errors.append("await_action missing end_turn")
 		if pending_trap_for_options:
 			if action_options != ["respond_trap"]:
 				errors.append("pending trap action options mismatch")
-		elif phase_name in ["await_roll", "await_route"]:
+		elif not pending_finance_for_options and phase_name in ["await_roll", "await_route"]:
 			var non_action_phase_options: Array = ["buy_stock", "sell_stock"]
 			if inventory_save and phase_name == "await_roll":
 				non_action_phase_options.append_array(["use_card", "use_tool"])
 			for option in action_options:
 				if not non_action_phase_options.has(option):
 					errors.append("await_roll has non-stock action")
-		elif phase_name != "await_action" and not action_options.is_empty():
+		elif not pending_finance_for_options and phase_name != "await_action" and not action_options.is_empty():
 			errors.append("non-action phase has action options")
+
+	var pending_finance_errors: Array = FinancialRules.validate_pending(data, player_count, board, phase_name, action_options, inventory_save, status_save, companies_save)
+	errors.append_array(pending_finance_errors)
 
 	var bank: Variant = data.get("bank", null)
 	if typeof(bank) != TYPE_DICTIONARY:

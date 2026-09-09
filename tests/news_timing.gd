@@ -1,5 +1,5 @@
 extends SceneTree
-const Panel = preload("res://game/ui/news_panel.gd")
+const NewsResult = preload("res://game/ui/news_panel.gd")
 var checks := 0
 var failures := 0
 
@@ -16,7 +16,7 @@ func _initialize() -> void:
 	call_deferred("run")
 
 func run() -> void:
-	var panel = Panel.new()
+	var panel = NewsResult.new()
 	root.add_child(panel)
 	check(panel.get("display_seconds") == 2.4, "news defaults to a 2.4 second presentation")
 	if panel.get("display_seconds") != null: panel.set("display_seconds", 0.08)
@@ -43,7 +43,9 @@ func run() -> void:
 	panel.sync_snapshot({})
 	panel.sync_snapshot(snapshot(1))
 	check(panel.visible, "fresh match can present draw one again")
-	panel.get_node("MarginContainer/VBoxContainer/CloseNews").pressed.emit()
+	var close: Button = panel.find_child("CloseNews", true, false)
+	check(close != null, "manual close action exists")
+	if close != null: close.pressed.emit()
 	check(not panel.visible, "manual early close remains available")
 	await create_timer(0.14).timeout
 	check(not panel.visible, "cancelled timers never reopen a result")

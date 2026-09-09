@@ -74,6 +74,8 @@ func run() -> void:
 	expect(ui._event_detail("mine_triggered",{"node":0,"hospital_days":3}).contains("地雷"),"mine event has a player-facing explanation")
 	expect(ui._event_detail("bomb_picked_up",{"remaining":38}).contains("38 步"),"pickup explains its initial movement countdown")
 	expect(ui._event_detail("bomb_exploded",{"hospital_days":5,"damage":{"damaged":true,"to_level":1}}).contains("建築降至 1 級"),"explosion explains property damage")
+	for malformed_damage in ["invalid",[],null]:
+		expect(ui._event_detail("bomb_exploded",{"damage":malformed_damage}).contains("定時炸彈爆炸"),"malformed damage history retains basic explosion text")
 	expect(ui._event_detail("machine_doll_cleared",{"steps":9,"removed_hazards":[{"node":0}],"removed_roadblocks":[],"removed_gods":[]}).contains("清除 1 個物件"),"machine result explains its cleanup count")
 	ui.board_view.set_preview_definition(definition)
 	expect(ui.board_view.ground_hazards_data.is_empty(),"map preview cannot retain live hazard markers")

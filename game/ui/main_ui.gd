@@ -2793,7 +2793,8 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			var detail := "定時炸彈爆炸 · 住院 %d 天" % int(event.get("hospital_days", 5))
 			if str(event.get("vehicle", "walking")) in ["motorcycle", "car"]:
 				detail += " · 載具損毀，改為步行"
-			var damage: Dictionary = event.get("damage", {})
+			var damage_value: Variant = event.get("damage", {})
+			var damage: Dictionary = damage_value if damage_value is Dictionary else {}
 			if bool(damage.get("damaged", false)):
 				detail += " · 建築降至 %d 級" % int(damage.get("to_level", 0))
 			return detail

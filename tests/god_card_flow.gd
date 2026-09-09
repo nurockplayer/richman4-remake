@@ -376,11 +376,11 @@ func _test_dismiss_preserves_good_gods_and_no_effect() -> void:
 		_set_owned_god(game, 0, god_id, 1)
 		var player0: Dictionary = game.state["players"][0]
 		_set_carried_bomb(game, 0, 5)
-		var card_supply_before: int = _card_supply(game, DISMISS_CARD)
 		var bomb_supply_before: int = _tool_supply(game, "定時炸彈")
 		_expect_v13_snapshot_valid(game, "送神符 good god %d" % god_id)
 		if not _stage_card(game, 0, DISMISS_CARD):
 			continue
+		var card_supply_before: int = _card_supply(game, DISMISS_CARD)
 		var result: Dictionary = _use_card(game, DISMISS_CARD)
 		_expect(bool(result.get("ok", false)), "送神符 clears a carried bomb while preserving good god %d" % god_id)
 		_expect_equal(int(player0.get("god_id", -1)), god_id, "送神符 preserves good god %d" % god_id)

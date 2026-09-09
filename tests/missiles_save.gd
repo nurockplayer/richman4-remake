@@ -71,9 +71,9 @@ func _prepare_action(game: Object, player_id: int, position: int, phase: String 
 	game._set_action_options(player_id)
 
 
-func _stage_missile(game: Object, player_id: int = 0) -> bool:
-	var result: Dictionary = Inventory.grant_tool(game.state["inventory_supply"], game.state["players"][player_id]["tools"], MISSILE, 1)
-	_expect(bool(result.get("ok", false)), "save fixture stages a finite missile")
+func _stage_tool(game: Object, tool_id: String, player_id: int = 0) -> bool:
+	var result: Dictionary = Inventory.grant_tool(game.state["inventory_supply"], game.state["players"][player_id]["tools"], tool_id, 1)
+	_expect(bool(result.get("ok", false)), "save fixture stages " + tool_id)
 	return bool(result.get("ok", false))
 
 
@@ -108,12 +108,12 @@ func _test_clean_v13_json_round_trip() -> void:
 	_expect(bool(validation.get("ok", false)), "restored clean v13 save validates: " + str(validation.get("errors", [])))
 
 
-func _assert_rejected_atomic(game: Object, params: Dictionary, label: String) -> void:
+func _assert_rejected_atomic(game: Object, tool_id: String, params: Dictionary, label: String) -> void:
 	var before_json: String = game.to_json()
 	var before_rng: String = str(game.state.get("rng_state_text", ""))
 	var before_event: Dictionary = game.state.get("last_event", {}).duplicate(true)
-	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(MISSILE, -1))
-	var before_held: int = int(game.state["players"][0]["tools"].get(MISSILE, 0))
+	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(tool_id, -1))
+	var before_held: int = int(game.state["players"][0]["tools"].get(tool_id, 0))
 	var result: Dictionary = _public_use(game, params, label)
 	_mark_red(result, label)
 	_expect(not bool(result.get("ok", false)), label + " is rejected")
@@ -121,34 +121,48 @@ func _assert_rejected_atomic(game: Object, params: Dictionary, label: String) ->
 	_expect_equal(game.to_json(), before_json, label + " preserves exact JSON")
 	_expect_equal(str(game.state.get("rng_state_text", "")), before_rng, label + " preserves RNG continuation")
 	_expect_equal(game.state.get("last_event", {}), before_event, label + " does not append an event")
-	_expect_equal(int(game.state["inventory_supply"]["tools"].get(MISSILE, -1)), before_supply, label + " preserves finite missile supply")
-	_expect_equal(int(game.state["players"][0]["tools"].get(MISSILE, 0)), before_held, label + " preserves the held missile")
+	_expect_equal(int(game.state["inventory_supply"]["tools"].get(tool_id, -1)), before_supply, label + " preserves tool supply")
+	_expect_equal(int(game.state["players"][0]["tools"].get(tool_id, 0)), before_held, label + " preserves the held tool")
+
+
+func _assert_cancelled_atomic(game: Object, tool_id: String, label: String) -> void:
+	var before_json: String = game.to_json()
+	var before_rng: String = str(game.state.get("rng_state_text", ""))
+	var before_event: Dictionary = game.state.get("last_event", {}).duplicate(true)
+	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(tool_id, -1))
+	var before_held: int = int(game.state["players"][0]["tools"].get(tool_id, 0))
+	var result: Dictionary = _public_use(game, {"tool_id": tool_id, "cancel": true}, label)
+	_mark_red(result, label)
+	_expect(bool(result.get("ok", false)), label + " succeeds at save boundary")
+	_expect_equal(game.to_json(), before_json, label + " preserves exact JSON")
+	_expect_equal(str(game.state.get("rng_state_text", "")), before_rng, label + " preserves RNG continuation")
+	_expect_equal(game.state.get("last_event", {}), before_event, label + " does not append an event")
+	_expect_equal(int(game.state["inventory_supply"]["tools"].get(tool_id, -1)), before_supply, label + " preserves tool supply")
+	_expect_equal(int(game.state["players"][0]["tools"].get(tool_id, 0)), before_held, label + " preserves the held tool")
 
 
 func _test_cancel_and_invalid_save_atomicity() -> void:
-	var cancelled: Object = _new_game(8151, 4)
-	if cancelled != null and _stage_missile(cancelled):
-		_prepare_action(cancelled, 0, CENTRE)
-		var before_json: String = cancelled.to_json()
-		var before_event: Dictionary = cancelled.state.get("last_event", {}).duplicate(true)
-		var result: Dictionary = _public_use(cancelled, {"tool_id": MISSILE, "cancel": true}, "missile save cancellation")
-		_mark_red(result, "missile save cancellation")
-		_expect(bool(result.get("ok", false)), "missile cancellation succeeds at save boundary")
-		_expect_equal(cancelled.to_json(), before_json, "missile cancellation preserves exact JSON")
-		_expect_equal(cancelled.state.get("last_event", {}), before_event, "missile cancellation preserves last event")
+	var tools: Array = [MISSILE, NUCLEAR]
+	for tool_offset in range(tools.size()):
+		var tool_id: String = str(tools[tool_offset])
+		var tool_name: String = "missile" if tool_id == MISSILE else "nuclear missile"
+		var cancelled: Object = _new_game(8151 + tool_offset * 100, 4)
+		if cancelled != null and _stage_tool(cancelled, tool_id):
+			_prepare_action(cancelled, 0, CENTRE)
+			_assert_cancelled_atomic(cancelled, tool_id, tool_name + " save cancellation")
 
-	var cases: Array = [
-		{"label": "missile save missing tile", "params": {"tool_id": MISSILE}},
-		{"label": "missile save off-map tile", "params": {"tool_id": MISSILE, "tile_id": 10}},
-		{"label": "missile save malformed cancel", "params": {"tool_id": MISSILE, "tile_id": ORDINARY_HOUSE, "cancel": "yes"}},
-	]
-	for offset in range(cases.size()):
-		var game: Object = _new_game(8152 + offset, 4)
-		if game == null or not _stage_missile(game):
-			continue
-		_prepare_action(game, 0, CENTRE)
-		var case_value: Dictionary = cases[offset]
-		_assert_rejected_atomic(game, case_value["params"], str(case_value["label"]))
+		var cases: Array = [
+			{"label": tool_name + " save missing tile", "params": {"tool_id": tool_id}},
+			{"label": tool_name + " save off-map tile", "params": {"tool_id": tool_id, "tile_id": 10}},
+			{"label": tool_name + " save malformed cancel", "params": {"tool_id": tool_id, "tile_id": ORDINARY_HOUSE, "cancel": "yes"}},
+		]
+		for offset in range(cases.size()):
+			var game: Object = _new_game(8152 + tool_offset * 100 + offset, 4)
+			if game == null or not _stage_tool(game, tool_id):
+				continue
+			_prepare_action(game, 0, CENTRE)
+			var case_value: Dictionary = cases[offset]
+			_assert_rejected_atomic(game, tool_id, case_value["params"], str(case_value["label"]))
 
 
 func _configure_missile_world(game: Object) -> void:
@@ -169,7 +183,7 @@ func _test_missile_success_json_replay() -> void:
 		return
 	_configure_missile_world(game)
 	var supply_before: int = int(game.state["inventory_supply"]["tools"].get(MISSILE, -1))
-	if not _stage_missile(game):
+	if not _stage_tool(game, MISSILE):
 		return
 	_prepare_action(game, 0, CENTRE)
 	var result: Dictionary = _public_use(game, {"tool_id": MISSILE, "tile_id": CENTRE}, "missile save replay")

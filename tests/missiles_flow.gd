@@ -231,7 +231,7 @@ func _test_missile_damage_and_boundaries() -> void:
 	var result: Dictionary = _public_use(game, {"tool_id": MISSILE, "tile_id": CENTRE}, "missile valid target")
 	if not _expect_success(result, "missile valid target"):
 		return
-	_expect_equal(int(game.state["inventory_supply"]["tools"][MISSILE]), missile_supply_before + 1, "missile success recycles exactly one finite supply unit")
+	_expect_equal(int(game.state["inventory_supply"]["tools"][MISSILE]), missile_supply_before, "missile success restores the pre-staging finite supply")
 	_expect_equal(int(game.state["players"][0]["tools"].get(MISSILE, 0)), 0, "missile success removes the held tool")
 	_expect_equal(int(game.state["players"][0].get("hospital_days", -1)), 3, "missile includes the caster in hospital admission")
 	_expect_equal(int(game.state["players"][1].get("hospital_days", -1)), 3, "missile admits the ordinary-house player")
@@ -422,23 +422,39 @@ func _test_nuclear_research_damage_and_non_global_boundary() -> void:
 	_expect(bool(validation.get("ok", false)), "nuclear damage leaves a valid save: " + str(validation.get("errors", [])))
 
 
-func _prepare_staged_missile(seed_value: int) -> Object:
+func _prepare_staged_tool(seed_value: int, tool_id: String) -> Object:
 	var game: Object = _new_game(seed_value, 4)
 	if game == null:
 		return null
 	_prepare_action(game, 0, CENTRE)
-	if not _stage_tool(game, 0, MISSILE):
+	if not _stage_tool(game, 0, tool_id):
 		return null
 	_prepare_action(game, 0, CENTRE)
 	return game
 
 
-func _assert_rejected_atomic(game: Object, params: Dictionary, label: String) -> void:
+func _assert_cancelled_atomic(game: Object, tool_id: String, label: String) -> void:
 	var before_json: String = game.to_json()
 	var before_rng: String = str(game.state.get("rng_state_text", ""))
 	var before_event: Dictionary = game.state.get("last_event", {}).duplicate(true)
-	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(MISSILE, -1))
-	var before_held: int = int(game.state["players"][0]["tools"].get(MISSILE, 0))
+	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(tool_id, -1))
+	var before_held: int = int(game.state["players"][0]["tools"].get(tool_id, 0))
+	var result: Dictionary = _public_use(game, {"tool_id": tool_id, "cancel": true}, label)
+	_mark_qualified_red(result, label)
+	_expect(bool(result.get("ok", false)), label + " succeeds")
+	_expect_equal(game.to_json(), before_json, label + " leaves the entire game unchanged")
+	_expect_equal(str(game.state.get("rng_state_text", "")), before_rng, label + " does not consume RNG")
+	_expect_equal(game.state.get("last_event", {}), before_event, label + " does not append an event")
+	_expect_equal(int(game.state["inventory_supply"]["tools"].get(tool_id, -1)), before_supply, label + " preserves tool supply")
+	_expect_equal(int(game.state["players"][0]["tools"].get(tool_id, 0)), before_held, label + " preserves held tool")
+
+
+func _assert_rejected_atomic(game: Object, tool_id: String, params: Dictionary, label: String) -> void:
+	var before_json: String = game.to_json()
+	var before_rng: String = str(game.state.get("rng_state_text", ""))
+	var before_event: Dictionary = game.state.get("last_event", {}).duplicate(true)
+	var before_supply: int = int(game.state["inventory_supply"]["tools"].get(tool_id, -1))
+	var before_held: int = int(game.state["players"][0]["tools"].get(tool_id, 0))
 	var result: Dictionary = _public_use(game, params, label)
 	_mark_qualified_red(result, label)
 	_expect(not bool(result.get("ok", false)), label + " is rejected")
@@ -446,43 +462,35 @@ func _assert_rejected_atomic(game: Object, params: Dictionary, label: String) ->
 	_expect_equal(game.to_json(), before_json, label + " leaves the entire game unchanged")
 	_expect_equal(str(game.state.get("rng_state_text", "")), before_rng, label + " does not consume RNG")
 	_expect_equal(game.state.get("last_event", {}), before_event, label + " does not append an event")
-	_expect_equal(int(game.state["inventory_supply"]["tools"].get(MISSILE, -1)), before_supply, label + " does not recycle or consume the missile")
-	_expect_equal(int(game.state["players"][0]["tools"].get(MISSILE, 0)), before_held, label + " keeps the held missile")
+	_expect_equal(int(game.state["inventory_supply"]["tools"].get(tool_id, -1)), before_supply, label + " does not recycle or consume the tool")
+	_expect_equal(int(game.state["players"][0]["tools"].get(tool_id, 0)), before_held, label + " keeps the held tool")
 
 
 func _test_cancel_invalid_and_type_atomicity() -> void:
-	var cancelled: Object = _prepare_staged_missile(8130)
-	if cancelled != null:
-		var before_json: String = cancelled.to_json()
-		var before_rng: String = str(cancelled.state.get("rng_state_text", ""))
-		var before_event: Dictionary = cancelled.state.get("last_event", {}).duplicate(true)
-		var before_supply: int = int(cancelled.state["inventory_supply"]["tools"].get(MISSILE, -1))
-		var before_held: int = int(cancelled.state["players"][0]["tools"].get(MISSILE, 0))
-		var result: Dictionary = _public_use(cancelled, {"tool_id": MISSILE, "cancel": true}, "missile cancellation")
-		_mark_qualified_red(result, "missile cancellation")
-		_expect(bool(result.get("ok", false)), "missile cancellation succeeds")
-		_expect_equal(cancelled.to_json(), before_json, "missile cancellation leaves the entire game unchanged")
-		_expect_equal(str(cancelled.state.get("rng_state_text", "")), before_rng, "missile cancellation does not consume RNG")
-		_expect_equal(cancelled.state.get("last_event", {}), before_event, "missile cancellation does not append an event")
-		_expect_equal(int(cancelled.state["inventory_supply"]["tools"].get(MISSILE, -1)), before_supply, "missile cancellation preserves finite supply")
-		_expect_equal(int(cancelled.state["players"][0]["tools"].get(MISSILE, 0)), before_held, "missile cancellation preserves held tool")
+	var tools: Array = [MISSILE, NUCLEAR]
+	for tool_offset in range(tools.size()):
+		var tool_id: String = str(tools[tool_offset])
+		var tool_name: String = "missile" if tool_id == MISSILE else "nuclear missile"
+		var cancelled: Object = _prepare_staged_tool(8130 + tool_offset * 100, tool_id)
+		if cancelled != null:
+			_assert_cancelled_atomic(cancelled, tool_id, tool_name + " cancellation")
 
-	var cases: Array = [
-		{"label": "missile missing tile", "params": {"tool_id": MISSILE}},
-		{"label": "missile negative tile", "params": {"tool_id": MISSILE, "tile_id": -1}},
-		{"label": "missile off-map tile", "params": {"tool_id": MISSILE, "tile_id": 10}},
-		{"label": "missile fractional tile", "params": {"tool_id": MISSILE, "tile_id": 1.5}},
-		{"label": "missile string tile", "params": {"tool_id": MISSILE, "tile_id": "1"}},
-		{"label": "missile boolean tile", "params": {"tool_id": MISSILE, "tile_id": true}},
-		{"label": "missile malformed cancel", "params": {"tool_id": MISSILE, "tile_id": ORDINARY_HOUSE, "cancel": "yes"}},
-		{"label": "missile malformed tool id", "params": {"tool_id": 7, "tile_id": ORDINARY_HOUSE}},
-	]
-	for offset in range(cases.size()):
-		var game: Object = _prepare_staged_missile(8131 + offset)
-		if game == null:
-			continue
-		var case_value: Dictionary = cases[offset]
-		_assert_rejected_atomic(game, case_value["params"], str(case_value["label"]))
+		var cases: Array = [
+			{"label": tool_name + " missing tile", "params": {"tool_id": tool_id}},
+			{"label": tool_name + " negative tile", "params": {"tool_id": tool_id, "tile_id": -1}},
+			{"label": tool_name + " off-map tile", "params": {"tool_id": tool_id, "tile_id": 10}},
+			{"label": tool_name + " fractional tile", "params": {"tool_id": tool_id, "tile_id": 1.5}},
+			{"label": tool_name + " string tile", "params": {"tool_id": tool_id, "tile_id": "1"}},
+			{"label": tool_name + " boolean tile", "params": {"tool_id": tool_id, "tile_id": true}},
+			{"label": tool_name + " malformed cancel", "params": {"tool_id": tool_id, "tile_id": ORDINARY_HOUSE, "cancel": "yes"}},
+			{"label": tool_name + " malformed tool id", "params": {"tool_id": 7, "tile_id": ORDINARY_HOUSE}},
+		]
+		for offset in range(cases.size()):
+			var game: Object = _prepare_staged_tool(8131 + tool_offset * 100 + offset, tool_id)
+			if game == null:
+				continue
+			var case_value: Dictionary = cases[offset]
+			_assert_rejected_atomic(game, tool_id, case_value["params"], str(case_value["label"]))
 
 
 func _ai_game(seed_value: int) -> Object:
@@ -544,7 +552,12 @@ func _test_ai_missile_determinism() -> void:
 		print("QUALIFIED RED: AI missile turn produced no missile event")
 	else:
 		_expect_equal(int(first_event.get("player_id", -1)), 1, "AI missile event identifies the AI caster")
-		_expect_equal(int(first_event.get("tile_id", -1)), ORDINARY_HOUSE, "AI chooses the first useful other-player target")
+		# Node 2 at x=100 includes the caster at x=0 on the inclusive edge.
+		# Node 8 at x=101 includes the opponent at node 2 but excludes the caster,
+		# so the AI should prefer this useful target when it can avoid self-damage.
+		_expect_equal(int(first_event.get("tile_id", -1)), 8, "AI chooses the useful target square that avoids the caster")
+		_expect_equal(int(first.state["players"][0].get("hospital_days", -1)), 3, "AI missile square includes the other player at node 2")
+		_expect_equal(int(first.state["players"][1].get("hospital_days", -1)), 0, "AI missile square excludes the caster at node 1")
 	if second_event.is_empty():
 		qualified_red += 1
 	else:

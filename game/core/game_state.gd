@@ -5015,7 +5015,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			var selected_item_kind: Variant = null
 			var selected_item_id: Variant = null
 			var selected_cancel: Variant = false
-			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or card_id == "查稅":
+			if card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id):
 				# Keep raw values for theft, sleep, and finance boundaries so malformed
 				# target and cancel fields are rejected instead of coerced.
 				selected_target = params.get("target_id", null)
@@ -5026,7 +5026,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 				selected_target = int(params.get("target_id", player_id))
 				selected_cancel = bool(params.get("cancel", false))
 			var card_result: Dictionary = _use_card(player_id, card_id, selected_target, str(params.get("symbol", "")).to_lower(), params.get("tile_id", -1), selected_cancel, params.get("facility_type", null), params.get("visible_tile_ids", null), selected_item_kind, selected_item_id)
-			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or card_id == "查稅" or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
+			if (card_id == "搶奪" or SleepRules.is_sleep_card(card_id) or FinancialRules.is_financial_card(card_id) or PROPERTY_CARD_IDS.has(card_id) or card_id == REMODEL_CARD_ID or BUILDING_CARD_IDS.has(card_id) or GOD_CARD_IDS.has(card_id)) and not bool(card_result.get("ok", false)):
 				# Refreshing the action list above is needed after staging a card,
 				# but a rejected exchange is required to be byte-for-byte atomic.
 				state["action_options"] = action_options_before
@@ -5787,7 +5787,7 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 			return _error("遙控骰子已經排程")
 	if SleepRules.is_sleep_card(card_id):
 		return SleepRules.use_card(self, player_id, card_id, target_id, cancel)
-	if card_id == "查稅":
+	if FinancialRules.is_financial_card(card_id):
 		return FinancialRules.use_card(self, player_id, card_id, target_id, cancel)
 	if card_id == "搶奪":
 		return _use_theft_card(player_id, target_id, theft_item_kind, theft_item_id, cancel)

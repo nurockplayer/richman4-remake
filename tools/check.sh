@@ -112,6 +112,13 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/building_card_type_guard.gd
 
+# Original 同盟 card runtime, save, finance, UI and focused boundary checks.
+run_checked "$GODOT_BIN" --headless --path . --script tests/alliances_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/alliances_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/alliances_financial.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/alliances_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/alliances_boundary.gd
+
 # Original 搶奪 card transfer, save continuation and picker integration.
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/theft_save.gd

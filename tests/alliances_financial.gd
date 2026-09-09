@@ -174,6 +174,9 @@ func prepare_public_roll(game: Object, player_id: int, target_id: int) -> bool:
 	var player: Dictionary = game.state["players"][player_id]
 	player["position"] = source_id
 	player["previous_position"] = -1
+	for actor_value in game.state.get("god_objects", []):
+		if typeof(actor_value) == TYPE_DICTIONARY and int(actor_value.get("owner", -1)) == player_id:
+			actor_value["node"] = source_id
 	player["vehicle"] = "walking"
 	player["dice_count"] = 1
 	player["turtle_days"] = 1
@@ -192,11 +195,13 @@ func prepare_public_roll(game: Object, player_id: int, target_id: int) -> bool:
 	game.state["property_action_used"] = false
 	game.state["research_action_used"] = false
 	game._set_action_options(player_id)
+	legal(game, "actual public roll boundary")
 	var rolled: Dictionary = game.roll()
 	expect(bool(rolled.get("ok", false)), "public roll reaches one-step alliance financial route")
 	if not bool(rolled.get("ok", false)):
 		return false
 	if game.state.get("phase", "") == "await_route":
+		legal(game, "actual public choose_route boundary")
 		var routed: Dictionary = game.choose_route(target_id)
 		expect(bool(routed.get("ok", false)), "public choose_route reaches alliance financial destination")
 		return bool(routed.get("ok", false))
@@ -313,6 +318,7 @@ func _test_combined_rent_decline_splits_actual_insolvent_payment_and_replays() -
 	expect_equal(card_count(game, 2, FREE_CARD), 1, "declining combined 免費 preserves the defense card")
 	expect_equal(card_supply(game, FREE_CARD), supply_before, "declining combined 免費 leaves finite supply unchanged")
 	if restored != null:
+		legal(restored, "reloaded insolvent pending rent before decline")
 		var replay: Dictionary = restored.choose_action("respond_finance", {"cancel": true})
 		expect(bool(replay.get("ok", false)), "reloaded insolvent pending rent declines publicly")
 		expect_equal(restored.to_json(), game.to_json(), "declined combined rent has exact JSON replay")
@@ -350,6 +356,7 @@ func _test_god_modified_combined_rent_offers_free_once() -> void:
 	if pending.is_empty():
 		return
 	var free_before: int = card_supply(game, FREE_CARD)
+	legal(game, "god-modified combined rent pending before 免費 acceptance")
 	var response: Dictionary = game.choose_action("respond_finance", {"cancel": false})
 	expect(bool(response.get("ok", false)), "god-modified combined 免費 acceptance succeeds")
 	expect(financial_response(game).is_empty(), "god-modified combined 免費 clears pending")
@@ -410,6 +417,7 @@ func _test_human_allied_payer_still_waits_for_free_response() -> void:
 	var blocked_roll: Dictionary = game.roll()
 	expect(not bool(blocked_roll.get("ok", false)), "waiting allied response blocks another public roll")
 	expect_equal(game.to_json(), frozen, "blocked allied roll is atomic")
+	legal(game, "allied human rent pending before 免費 acceptance")
 	var accepted: Dictionary = game.choose_action("respond_finance", {"cancel": false})
 	expect(bool(accepted.get("ok", false)), "allied human payer can accept 免費")
 	expect(financial_response(game).is_empty(), "allied human response clears pending")

@@ -124,7 +124,7 @@ picker.overwrite_confirmation_requested.connect(_on_overwrite_requested)
 
 上述訊號都帶有 `slot_id`、該列 preview 的 `fingerprint` 與 preview 深拷貝。
 load 只允許 `valid` 列被選取；`empty`、`corrupt`、`invalid`、`unreadable` 會
-保留明確狀態並停用讀取。save 的既有列會先開啟 panel 內的來源風格覆寫確認，
+保留明確狀態並停用讀取。save 的既有列會先開啟 panel 內的保護資料的覆寫確認（刻意偏離原作直接寫入），
 確認或返回都不會自行改變 previews。Data resource `2` 的肖像只在 preview
 提供已映射的 `portrait_chunk`、`player_character_ids` 或 player
 `character_id` 時透過 `OriginalVisuals.ui()` 取得，不以陣列位置猜測圖示順序。
@@ -156,3 +156,5 @@ being reconciled under #129 before final interaction acceptance.
 ## Review repair evidence
 
 Row0 now says「原有存檔」above the date; the read API accepts the selected fingerprint and returns stale without a snapshot on replacement. Both focused suites run in check.sh. Tests-only1c0cc50 supplied the first regressions, but its two-argument call against the old one-argument API produced invocation errors, so that storage RED is not accepted as behavioral proof. Test-only3a2136b preserves every assertion and detects the available signature solely to replay the actual old public read API. Replayed unchanged against78a5888, valid A is replaced by valid B and the old API really returns B:163 checks/8 failures, without script or invocation errors. The identical test passes163/0 on the repaired implementation. Panel121/3 and runner two missing-call assertions are independently reproduced on78a5888; panel121/0 and runner PASS follow the repair. This is a retrospective evidence correction after implementation, not a claim that the initial API-error run was valid acceptance RED. Ordinary MainUI adoption and screen/native/package gates remain pending.
+
+#129 移除先前誤植的頁尾，改由列本身左鍵按下啟用、右鍵放開取消；來源與安全偏離的裁決及測試證據見 `docs/source-save-menu.md`。

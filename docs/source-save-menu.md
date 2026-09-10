@@ -78,3 +78,24 @@ presentation 重查，以及選單期間的 AI callback 阻擋。
 storage248／panel121、save shapes126、simulation454 全部通過。新測試已列入
 `tools/check.sh`。這些 signal／headless evidence 不等於實體輸入；來源 Loading
 實際呈現、一般原生互動與打包 gate 仍待核對，S34 維持 UNACCEPTED。
+
+
+## 來源檔位互動修正
+
+原版 `rich4_ui_save_load.asm` 的 LOAD／SAVE handler 以 WM_MOUSEMOVE 選取列，
+WM_LBUTTONDOWN／WM_LBUTTONDBLCLK 直接啟用，WM_RBUTTONUP 取消；沒有頁尾的
+確認／取消按鈕。此次移除誤植頁尾及其17項幾何 assertions，保留其餘154項原有
+panel assertions，新增34項兩版滑鼠事件 assertions。按下有效列直接讀取；空白
+SAVE 列直接寫入，已有內容則進入 #129 明訂的覆寫確認。無效 LOAD 列可呈現 hover，
+但不得啟用或誤讀上一列。GUI 事件依原有 modal 遮擋分派，隱藏面板不攔截輸入。
+
+原作 save helper 直接以 `wb` 寫入，沒有覆寫提示。本重製版的覆寫確認與既有
+legacy continue／cancel 是已接受的資料安全偏離，不列入來源 runtime 還原證據。
+Escape 是平台操作 fallback。所有候選 fingerprint、原有檔案唯讀與 RNG 保證不變。
+
+`44ad281` tests-only RED188／20 已重現直接啟用與右鍵取消缺漏；當時合成 viewport
+尚未通知滑鼠進入、覆寫取消缺少右鍵按下配對，因此它不能單獨證明 hover／該取消
+分支。`4ab21df` 修正這兩個測試 transport 前置條件，原有 assertions 不變；將同一
+測試回放到未修復 panel 後仍為188／20，再於修復版取得188／0。此回放是測試證據
+補正，不冒稱初版 transport 已完整。MainUI 的42項測試也改走960×720 SubViewport
+內實際滑鼠事件，保留每項原有狀態、寫入、取消、舊存檔與 AI assertions。

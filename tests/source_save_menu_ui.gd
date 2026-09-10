@@ -40,8 +40,13 @@ func run() -> void:
 	temp_root = "/tmp/richman4-source-save-menu-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	check(DirAccess.make_dir_recursive_absolute(temp_root) == OK, "isolated test root exists")
 	var store := Storage.new(temp_root.path_join("slots"), temp_root.path_join("default.json"))
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(960, 720)
+	viewport.handle_input_locally = true
+	root.add_child(viewport)
+	viewport.notify_mouse_entered()
 	var ui := TestUI.new()
-	root.add_child(ui)
+	viewport.add_child(ui)
 	await settle()
 	ui.set_process(false)
 	var shell: Control = ui.source_shell
@@ -61,7 +66,7 @@ func run() -> void:
 	check(menu.get("picker").get_mode() == "load", "title LOAD uses six-row load picker")
 	check(ui._source_modal_open(), "picker blocks game input and AI scheduling")
 	check(ui.game_state.to_json() == before, "opening picker preserves current state and RNG")
-	menu.get("picker").cancel_button.pressed.emit()
+	_secondary_cancel(viewport, menu)
 	check(not menu.visible and shell.is_title_visible(), "title cancel returns to title intent")
 	check(ui.game_state.to_json() == before, "title cancel preserves current game")
 
@@ -72,8 +77,7 @@ func run() -> void:
 	var before_b: String = ui.game_state.to_json()
 	shell.load_requested.emit()
 	check(menu.visible and not shell.is_title_visible(), "HUD LOAD opens chooser over current game")
-	menu.get("picker").row_buttons[1].pressed.emit()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 1)
 	check(menu.is_busy(), "load confirmation enters guarded work state")
 	await settle()
 	check(not menu.visible, "successful load closes source picker")
@@ -83,20 +87,20 @@ func run() -> void:
 
 	# A changed valid file cannot be loaded under an earlier selection.
 	shell.load_requested.emit()
-	menu.get("picker").row_buttons[1].pressed.emit()
+	menu.get("picker").select_slot(1)
 	var replacement: Object = Game.new_game_on_board(12933, 4, ui._selected_map_definition, ui._default_setup_options(4, ui._selected_map_definition))
 	check(replacement != null, "replacement uses the real factory to preserve setup seed invariants")
 	var changed: Dictionary = replacement.to_dict() if replacement != null else {}
 	check(store.write(1, changed).get("ok", false), "external valid replacement is written")
 	var unchanged: String = ui.game_state.to_json()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 1)
 	await settle()
 	check(menu.visible and not menu.is_busy(), "stale selection remains in chooser")
 	check(menu.get("message_label").visible and not menu.get("message_label").text.is_empty(), "stale selection shows an error")
 	check(ui.game_state.to_json() == unchanged, "stale valid replacement is never adopted")
 	menu.cancel()
 
-	# SAVE has source overwrite confirmation and preserves the default adapter.
+	# SAVE has the mandated owner-data overwrite confirmation and preserves the default adapter.
 	var default_file := FileAccess.open(store.default_path(), FileAccess.WRITE)
 	default_file.store_string(Game.new_game(12944, 2).to_json())
 	default_file.close()
@@ -104,12 +108,11 @@ func run() -> void:
 	shell.save_requested.emit()
 	check(menu.visible and menu.get("picker").get_mode() == "save", "HUD SAVE opens five writable rows")
 	check(ui.direct_save_calls == 0, "HUD SAVE does not overwrite default path")
-	menu.get("picker").row_buttons[1].pressed.emit()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 1)
 	check(menu.get("picker").overwrite_overlay.visible, "occupied save row asks for overwrite")
 	menu.get("picker").overwrite_cancel_button.pressed.emit()
 	check(menu.visible and store.read(1).snapshot.seed == 12933, "overwrite cancellation preserves destination")
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 1)
 	menu.get("picker").overwrite_confirm_button.pressed.emit()
 	await settle()
 	check(not menu.visible, "successful save returns to board")
@@ -122,15 +125,13 @@ func run() -> void:
 	# Supported legacy choice stays explicit and uses the validated candidate.
 	shell.show_title()
 	shell.title_load_button.pressed.emit()
-	menu.get("picker").row_buttons[0].pressed.emit()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 0)
 	await settle()
 	check(ui._legacy_save_modal_open(), "row0 legacy load presents existing compatibility decision")
 	check(ui.game_state.to_json() == unchanged, "legacy candidate is not adopted before consent")
 	ui._cancel_legacy_save_load()
 	check(menu.visible and not menu.is_busy() and shell.is_title_visible(), "legacy cancellation resumes title chooser")
-	menu.get("picker").row_buttons[0].pressed.emit()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 0)
 	await settle()
 	var original_candidate_seed := 12944
 	default_file = FileAccess.open(store.default_path(), FileAccess.WRITE)
@@ -146,17 +147,15 @@ func run() -> void:
 	check(not menu.visible, "movement presentation blocks opening picker")
 	ui._presentation_busy = false
 	shell.load_requested.emit()
-	menu.get("picker").row_buttons[1].pressed.emit()
+	_press_row(viewport, menu, 1)
 	var prior: String = ui.game_state.to_json()
-	menu.get("picker").confirm_button.pressed.emit()
 	ui._presentation_busy = true
 	await settle()
 	check(ui.game_state.to_json() == prior and menu.visible, "presentation activated before read prevents adoption")
 	ui._presentation_busy = false
 	menu.cancel()
 	shell.load_requested.emit()
-	menu.get("picker").row_buttons[1].pressed.emit()
-	menu.get("picker").confirm_button.pressed.emit()
+	_press_row(viewport, menu, 1)
 	menu.cancel()
 	await settle()
 	check(not menu.visible and ui.game_state.to_json() == prior, "cancel invalidates deferred read")
@@ -168,13 +167,12 @@ func run() -> void:
 	if menu.visible:
 		ui._on_ai_timer_timeout(ui._presentation_generation)
 		check(ui.game_state.to_json() == ai_before, "queued AI timer cannot advance while the save chooser is open")
-		menu.get("picker").row_buttons[2].pressed.emit()
-		menu.get("picker").confirm_button.pressed.emit()
+		_press_row(viewport, menu, 2)
 		var saved_ai: Object = Game.from_dict(store.read(2).snapshot)
 		check(saved_ai != null and saved_ai.to_json() == ai_before, "AI save preserves the exact core snapshot")
 		check(ui.game_state.to_json() == ai_before, "AI save never advances state or RNG")
 
-	ui.queue_free()
+	viewport.queue_free()
 	await settle()
 	finish()
 
@@ -188,3 +186,32 @@ func finish() -> void:
 	DirAccess.remove_absolute(temp_root)
 	print("Source save menu UI checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
+
+
+func _press_row(viewport: SubViewport, menu: Control, slot: int) -> void:
+	var picker: Control = menu.get("picker")
+	var row: Rect2 = picker.get_row_rect(slot)
+	var point: Vector2 = picker.reference_canvas.get_global_transform_with_canvas() * row.get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	motion.global_position = point
+	viewport.push_input(motion, true)
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.position = point
+		event.global_position = point
+		event.pressed = pressed
+		viewport.push_input(event, true)
+
+
+func _secondary_cancel(viewport: SubViewport, menu: Control) -> void:
+	var picker: Control = menu.get("picker")
+	var point: Vector2 = picker.reference_canvas.get_global_transform_with_canvas() * Vector2(20, 20)
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_RIGHT
+		event.position = point
+		event.global_position = point
+		event.pressed = pressed
+		viewport.push_input(event, true)

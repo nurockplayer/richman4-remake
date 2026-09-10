@@ -86,9 +86,6 @@ var source_fallback: ColorRect
 var source_heading: Label
 var source_frame: Dictionary = {}
 var rows_root: Control
-var action_bar: Control
-var confirm_button: Button
-var cancel_button: Button
 var overwrite_overlay: Control
 var overwrite_message: Label
 var overwrite_confirm_button: Button
@@ -325,9 +322,11 @@ func select_row(slot_id: int) -> bool:
 ## Confirm the current selection.  An occupied save row first opens a custom
 ## source-styled confirmation overlay; no native Godot white dialog is used.
 func confirm_selection() -> bool:
-	if not has_selection():
+	if not has_selection() or _overwrite_open:
 		return false
 	var preview := get_selected_preview()
+	if mode == MODE_LOAD and str(preview.get("status", STATUS_ERROR)) != STATUS_VALID:
+		return false
 	var fingerprint := str(preview.get("fingerprint", ""))
 	if mode == MODE_SAVE and _occupied(preview):
 		_show_overwrite()
@@ -387,6 +386,46 @@ func reject_overwrite() -> void:
 	cancel_overwrite()
 
 
+# Source WM_MOUSEMOVE selects a row; the row's primary press activates it.
+# GUI dispatch keeps covered/hidden pickers from intercepting another modal.
+func _on_source_pointer_input(event: InputEvent, origin: Control) -> void:
+	if not is_visible_in_tree():
+		return
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
+			cancel_selection()
+			accept_event()
+		return
+	if not event is InputEventMouseMotion or _overwrite_open:
+		return
+	var point: Vector2 = reference_canvas.get_global_transform_with_canvas().affine_inverse() * (origin.get_global_transform_with_canvas() * event.position)
+	var hovered := -1
+	for slot_id in row_rects:
+		var rect: Rect2 = row_rects[slot_id]
+		if point.x > rect.position.x and point.x < rect.end.x and point.y > rect.position.y and point.y < rect.end.y:
+			hovered = int(slot_id)
+			break
+	if hovered == _selected_slot:
+		return
+	_selected_slot = hovered
+	_update_selection_visuals()
+	if hovered >= 0:
+		var preview := get_selected_preview()
+		slot_selected.emit(hovered, str(preview.get("fingerprint", "")), preview)
+
+
+func _activate_slot(slot_id: int) -> void:
+	if is_visible_in_tree() and not _overwrite_open and select_slot(slot_id):
+		confirm_selection()
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	# Escape is a platform accessibility fallback; the source proves right-up.
+	if is_visible_in_tree() and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		cancel_selection()
+		get_viewport().set_input_as_handled()
+
+
 func _build() -> void:
 	if _built:
 		return
@@ -400,6 +439,7 @@ func _build() -> void:
 	reference_canvas.size = REFERENCE_SIZE
 	reference_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(reference_canvas)
+	reference_canvas.gui_input.connect(_on_source_pointer_input.bind(reference_canvas))
 	source_art = Control.new()
 	source_art.name = "SourceSaveArt"
 	source_art.position = Vector2.ZERO
@@ -412,27 +452,8 @@ func _build() -> void:
 	rows_root.size = REFERENCE_SIZE
 	rows_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	reference_canvas.add_child(rows_root)
-	_build_action_bar()
 	_build_overwrite_overlay()
 	_render()
-
-
-func _build_action_bar() -> void:
-	action_bar = Control.new()
-	action_bar.name = "SourceSaveActions"
-	action_bar.size = Vector2(640.0, 28.0)
-	action_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	reference_canvas.add_child(action_bar)
-	confirm_button = _source_button("確認", "ConfirmSelection")
-	confirm_button.position = Vector2(222.0, 2.0)
-	confirm_button.size = Vector2(94.0, 24.0)
-	confirm_button.pressed.connect(confirm_selection)
-	action_bar.add_child(confirm_button)
-	cancel_button = _source_button("取消", "CancelSelection")
-	cancel_button.position = Vector2(324.0, 2.0)
-	cancel_button.size = Vector2(94.0, 24.0)
-	cancel_button.pressed.connect(cancel_selection)
-	action_bar.add_child(cancel_button)
 
 
 func _build_overwrite_overlay() -> void:
@@ -440,6 +461,7 @@ func _build_overwrite_overlay() -> void:
 	overwrite_overlay.name = "SourceOverwriteConfirmation"
 	overwrite_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overwrite_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overwrite_overlay.gui_input.connect(_on_source_pointer_input.bind(overwrite_overlay))
 	overwrite_overlay.z_index = 100
 	reference_canvas.add_child(overwrite_overlay)
 	var shade := ColorRect.new()
@@ -503,29 +525,12 @@ func _render() -> void:
 		_create_row(slot_id, preview, rect)
 	# The art is intentionally not a parent of the buttons.  Rows therefore
 	# remain clickable even when the source texture has transparent pixels.
-	action_bar.position = Vector2(0.0, 458.0 if mode == MODE_LOAD else 436.0)
-	action_bar.size = Vector2(640.0, 22.0 if mode == MODE_LOAD else 44.0)
-	_layout_action_buttons()
 	if source_art != null:
 		source_art.position = Vector2.ZERO
 		source_art.size = REFERENCE_SIZE
 	if overwrite_overlay != null:
 		overwrite_overlay.visible = _overwrite_open
 	_update_selection_visuals()
-
-
-func _layout_action_buttons() -> void:
-	if confirm_button == null or cancel_button == null:
-		return
-	# Godot's default Button minimum height is taller than the 24px source
-	# control.  Scale the source buttons to their intended visual rect so the
-	# load footer remains inside the 640x480 reference canvas.
-	var button_y := -2.0 if mode == MODE_LOAD else 2.0
-	for button in [confirm_button, cancel_button]:
-		button.position.y = button_y
-		button.size = Vector2(94.0, 24.0)
-		button.pivot_offset = Vector2.ZERO
-		button.scale = Vector2(1.0, 24.0 / maxf(button.size.y, 1.0))
 
 
 func _render_source_art() -> void:
@@ -617,7 +622,9 @@ func _create_row(slot_id: int, preview: Dictionary, rect: Rect2) -> void:
 	row_button.add_theme_stylebox_override("pressed", _style(Color(0.92, 0.83, 0.34, 0.46), SOURCE_GOLD, 0, 1))
 	row_button.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), SOURCE_GOLD, 0, 1))
 	row_button.add_theme_stylebox_override("disabled", StyleBoxEmpty.new())
-	row_button.pressed.connect(select_slot.bind(slot_id))
+	row_button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
+	row_button.pressed.connect(_activate_slot.bind(slot_id))
+	row_button.gui_input.connect(_on_source_pointer_input.bind(row_button))
 	var is_valid := str(preview.get("status", STATUS_ERROR)) == STATUS_VALID
 	row_button.disabled = mode == MODE_LOAD and not is_valid
 	row_button.tooltip_text = _row_tooltip(slot_id, preview)
@@ -819,9 +826,6 @@ func _emit_confirmed() -> void:
 
 
 func _update_selection_visuals() -> void:
-	if confirm_button == null:
-		return
-	confirm_button.disabled = not has_selection()
 	for slot_value in row_buttons.keys():
 		var slot_id := int(slot_value)
 		var button: Button = row_buttons[slot_id]

@@ -394,7 +394,16 @@ func _on_source_sale_requested() -> void:
 	_on_stocks_pressed()
 
 func _on_source_stocks_requested() -> void:
-	_on_stocks_pressed()
+	if source_stock_panel == null:
+		_on_stocks_pressed()
+		return
+	if not _is_human_turn():
+		return
+	stocks_popup.hide()
+	if source_stock_panel.has_method("open_for"):
+		source_stock_panel.call("open_for", state, _active_map_definition)
+	else:
+		source_stock_panel.show()
 
 func _on_source_roll_requested() -> void:
 	_on_roll_pressed()
@@ -2403,6 +2412,7 @@ func _handle_result(result: Dictionary) -> void:
 			board_view.route_options = []
 			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
+			_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			board_view.play_movement(moves)
 			return
 	if result.is_empty():
@@ -2498,6 +2508,14 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])))
+	if source_shell.has_method("set_toolbar_enabled"):
+		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
+		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy)
+		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
+		source_shell.call("set_toolbar_enabled", "cards", not cards_button.disabled)
+		source_shell.call("set_toolbar_enabled", "tools", not cards_button.disabled)
+		source_shell.call("set_toolbar_enabled", "sale", not stocks_button.disabled)
+		source_shell.call("set_toolbar_enabled", "ai", not _presentation_busy and not _legacy_save_modal_open())
 
 func _update_load_gate() -> void:
 	if load_button != null:

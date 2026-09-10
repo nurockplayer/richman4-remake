@@ -8,6 +8,7 @@ class_name RichmanGameShell
 
 const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
+const GameCalendar = preload("res://game/core/game_calendar.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
 const TOOLBAR_WIDTH := 440.0
 const BOARD_RECT := Rect2(0.0, 40.0, 440.0, 440.0)
@@ -61,10 +62,14 @@ var roll_button: Button
 var buy_button: Button
 var upgrade_button: Button
 var end_turn_button: Button
+var action_strip: Control
 var action_hint_label: Label
 var calendar_toggle_button: Button
 var portrait: TextureRect
 var player_name_label: Label
+var cash_caption: Label
+var deposit_caption: Label
+var wealth_caption: Label
 var cash_label: Label
 var deposit_label: Label
 var wealth_label: Label
@@ -86,6 +91,9 @@ var _source_title_texture: Texture2D
 var _source_panel_texture: Texture2D
 var _source_hud_texture: Texture2D
 var _source_calendar_texture: Texture2D
+var _title_art: TextureRect
+var _hud_art: TextureRect
+var _calendar_art: TextureRect
 
 
 func _ready() -> void:
@@ -132,14 +140,14 @@ func _build_title_screen() -> void:
 	reference_canvas.add_child(title_screen)
 	_source_title_texture = _source_texture(_visuals.ui(_source_edition, "Data", 1, 0))
 	if _source_title_texture != null:
-		var title_art := TextureRect.new()
-		title_art.name = "SourceTitleArt"
-		title_art.texture = _source_title_texture
-		title_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		title_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		title_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		title_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(title_art)
+		_title_art = TextureRect.new()
+		_title_art.name = "SourceTitleArt"
+		_title_art.texture = _source_title_texture
+		_title_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_title_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_title_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_title_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		title_screen.add_child(_title_art)
 	else:
 		var background := ColorRect.new()
 		background.color = Color("#0d2630")
@@ -162,19 +170,25 @@ func _build_title_screen() -> void:
 		subtitle.size = Vector2(640.0, 28.0)
 		subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title_screen.add_child(subtitle)
-	var menu := VBoxContainer.new()
+	var menu := Control.new()
 	menu.name = "TitleMenu"
-	menu.position = Vector2(248.0, 300.0)
-	menu.size = Vector2(144.0, 132.0)
-	menu.add_theme_constant_override("separation", 8)
+	menu.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _source_title_texture != null:
+		menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	else:
+		menu.position = Vector2(248.0, 300.0)
+		menu.size = Vector2(144.0, 132.0)
 	title_screen.add_child(menu)
 	title_start_button = _title_button("START", "開始新局")
+	_configure_title_hit_area(title_start_button, "start", Rect2(129.0, 322.0, 118.0, 112.0))
 	title_start_button.pressed.connect(func() -> void: start_requested.emit())
 	menu.add_child(title_start_button)
 	title_load_button = _title_button("LOAD", "讀取存檔")
+	_configure_title_hit_area(title_load_button, "load", Rect2(269.0, 322.0, 118.0, 112.0))
 	title_load_button.pressed.connect(func() -> void: load_requested.emit())
 	menu.add_child(title_load_button)
 	title_option_button = _title_button("OPTION", "選項")
+	_configure_title_hit_area(title_option_button, "option", Rect2(408.0, 322.0, 118.0, 112.0))
 	title_option_button.pressed.connect(func() -> void: option_requested.emit())
 	menu.add_child(title_option_button)
 
@@ -224,6 +238,11 @@ func _build_toolbar() -> void:
 		button.position = Vector2(float(index) * 40.0, 0.0)
 		button.size = Vector2(40.0, 40.0)
 		button.set_meta("source_chunk", int(entry[2]))
+		var icon := _source_texture(_visuals.ui(_source_edition, "Panel", 1, int(entry[2])))
+		if icon != null:
+			button.icon = icon
+			button.text = ""
+			button.set_meta("source_icon", icon)
 		button.pressed.connect(_emit_toolbar.bind(key))
 		toolbar.add_child(button)
 		toolbar_buttons[key] = button
@@ -246,21 +265,24 @@ func _build_hud() -> void:
 	hud_panel.size = HUD_RECT.size
 	hud_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	game_screen.add_child(hud_panel)
+	var panel := ColorRect.new()
+	panel.name = "SourceHudFallback"
+	panel.color = PANEL
+	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_panel.add_child(panel)
+	_hud_art = TextureRect.new()
+	_hud_art.name = "SourceHudArt"
+	_hud_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_hud_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	_hud_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hud_art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_hud_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_panel.add_child(_hud_art)
 	_source_hud_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 0, 0))
-	if _source_hud_texture != null:
-		var art := TextureRect.new()
-		art.texture = _source_hud_texture
-		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-		art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hud_panel.add_child(art)
-	else:
-		var panel := ColorRect.new()
-		panel.color = PANEL
-		panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hud_panel.add_child(panel)
+	_hud_art.texture = _source_hud_texture
+	_hud_art.visible = _source_hud_texture != null
+	if _source_hud_texture == null:
 		var border := ColorRect.new()
 		border.color = PANEL_BORDER
 		border.position = Vector2(0.0, 0.0)
@@ -276,55 +298,75 @@ func _build_hud() -> void:
 	portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_panel.add_child(portrait)
 	player_name_label = _hud_label("玩家", 15, Vector2(80.0, 8.0), Vector2(88.0, 24.0), TEXT_MAIN)
-	cash_label = _hud_label("現金  $0", 11, Vector2(80.0, 40.0), Vector2(90.0, 18.0), TEXT_GOLD)
-	deposit_label = _hud_label("存款  $0", 10, Vector2(80.0, 58.0), Vector2(90.0, 18.0), TEXT_MUTED)
-	wealth_label = _hud_label("總資產  $0", 10, Vector2(8.0, 80.0), Vector2(162.0, 18.0), TEXT_GOLD)
-	property_label = _hud_label("地產 0 筆 · $0", 10, Vector2(8.0, 105.0), Vector2(162.0, 38.0), TEXT_MAIN)
+	cash_caption = _hud_label("現金", 10, Vector2(28.0, 80.0), Vector2(140.0, 18.0), TEXT_MUTED)
+	cash_label = _hud_label("$0", 16, Vector2(28.0, 96.0), Vector2(140.0, 30.0), TEXT_GOLD)
+	deposit_caption = _hud_label("存款", 10, Vector2(28.0, 143.0), Vector2(140.0, 18.0), TEXT_MUTED)
+	deposit_label = _hud_label("$0", 16, Vector2(28.0, 159.0), Vector2(140.0, 30.0), TEXT_GOLD)
+	wealth_caption = _hud_label("總資產", 10, Vector2(28.0, 206.0), Vector2(140.0, 18.0), TEXT_MUTED)
+	wealth_label = _hud_label("$0", 16, Vector2(28.0, 222.0), Vector2(140.0, 30.0), TEXT_GOLD)
+	property_label = _hud_label("地產\n0 筆 · $0", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
 	property_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stock_label = _hud_label("股票 0 股", 10, Vector2(8.0, 105.0), Vector2(162.0, 38.0), TEXT_MAIN)
+	stock_label = _hud_label("股票\n0 股", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
 	stock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stock_label.hide()
-	other_label = _hud_label("點券 0 · 卡片 0\n道具與狀態未記錄", 10, Vector2(8.0, 105.0), Vector2(162.0, 48.0), TEXT_MAIN)
+	other_label = _hud_label("其他\n點券 0 · 卡片 0\n道具 0 種", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
 	other_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	other_label.hide()
 	var tab_names := {"cash": "資", "property": "產", "stock": "股", "other": "他"}
 	for index in range(tab_names.size()):
 		var key := str(tab_names.keys()[index])
 		var tab := _tab_button(str(tab_names[key]), key)
-		tab.position = Vector2(176.0, 72.0 + float(index) * 43.0)
+		tab.position = Vector2(176.0, float(index) * 42.0)
 		tab.size = Vector2(24.0, 40.0)
 		tab.pressed.connect(_select_tab.bind(key))
 		hud_panel.add_child(tab)
 		tab_buttons[key] = tab
+	action_strip = Control.new()
+	action_strip.name = "SourceActionStrip"
+	action_strip.position = Vector2(8.0, 398.0)
+	action_strip.size = Vector2(424.0, 76.0)
+	action_strip.mouse_filter = Control.MOUSE_FILTER_STOP
+	action_strip.hide()
+	game_screen.add_child(action_strip)
+	var action_background := ColorRect.new()
+	action_background.name = "ActionBackground"
+	action_background.color = Color(0.04, 0.12, 0.16, 0.88)
+	action_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	action_strip.add_child(action_background)
 	roll_button = _action_button("擲骰", "roll")
-	roll_button.position = Vector2(8.0, 184.0)
-	roll_button.size = Vector2(78.0, 29.0)
+	roll_button.position = Vector2(8.0, 7.0)
+	roll_button.size = Vector2(94.0, 29.0)
 	roll_button.pressed.connect(func() -> void: roll_requested.emit())
-	hud_panel.add_child(roll_button)
+	action_strip.add_child(roll_button)
 	buy_button = _action_button("購買", "buy")
-	buy_button.position = Vector2(91.0, 184.0)
-	buy_button.size = Vector2(78.0, 29.0)
+	buy_button.position = Vector2(108.0, 7.0)
+	buy_button.size = Vector2(120.0, 29.0)
 	buy_button.pressed.connect(func() -> void: buy_requested.emit())
-	hud_panel.add_child(buy_button)
+	action_strip.add_child(buy_button)
 	upgrade_button = _action_button("升級", "upgrade")
-	upgrade_button.position = Vector2(8.0, 216.0)
-	upgrade_button.size = Vector2(78.0, 29.0)
+	upgrade_button.position = Vector2(234.0, 7.0)
+	upgrade_button.size = Vector2(86.0, 29.0)
 	upgrade_button.pressed.connect(func() -> void: upgrade_requested.emit())
-	hud_panel.add_child(upgrade_button)
+	action_strip.add_child(upgrade_button)
 	end_turn_button = _action_button("結束", "end_turn")
-	end_turn_button.position = Vector2(91.0, 216.0)
-	end_turn_button.size = Vector2(78.0, 29.0)
+	end_turn_button.position = Vector2(326.0, 7.0)
+	end_turn_button.size = Vector2(90.0, 29.0)
 	end_turn_button.pressed.connect(func() -> void: end_turn_requested.emit())
-	hud_panel.add_child(end_turn_button)
-	action_hint_label = _hud_label("等待棋局", 9, Vector2(8.0, 248.0), Vector2(162.0, 24.0), TEXT_MUTED)
+	action_strip.add_child(end_turn_button)
+	action_hint_label = _label("等待棋局", 10, TEXT_MUTED)
+	action_hint_label.name = "SourceActionHint"
+	action_hint_label.position = Vector2(8.0, 41.0)
+	action_hint_label.size = Vector2(408.0, 26.0)
 	action_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	action_strip.add_child(action_hint_label)
 	route_buttons = HBoxContainer.new()
 	route_buttons.name = "SourceRouteChoices"
-	route_buttons.position = Vector2(0.0, 160.0)
-	route_buttons.size = Vector2(168.0, 24.0)
+	route_buttons.position = Vector2(8.0, 7.0)
+	route_buttons.size = Vector2(408.0, 29.0)
 	route_buttons.add_theme_constant_override("separation", 3)
 	route_buttons.hide()
-	hud_panel.add_child(route_buttons)
+	action_strip.add_child(route_buttons)
 
 
 func _build_calendar_and_minimap() -> void:
@@ -335,10 +377,19 @@ func _build_calendar_and_minimap() -> void:
 	calendar_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	game_screen.add_child(calendar_panel)
 	var panel := ColorRect.new()
+	panel.name = "SourceCalendarFallback"
 	panel.color = Color("#d8e6d3")
 	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	calendar_panel.add_child(panel)
+	_calendar_art = TextureRect.new()
+	_calendar_art.name = "SourceCalendarArt"
+	_calendar_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_calendar_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	_calendar_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_calendar_art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_calendar_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	calendar_panel.add_child(_calendar_art)
 	date_label = _label("日期未記錄", 18, Color("#193047"))
 	date_label.position = Vector2(12.0, 11.0)
 	date_label.size = Vector2(176.0, 28.0)
@@ -459,6 +510,10 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	upgrade_button.disabled = upgrade_disabled
 	end_turn_button.disabled = end_disabled
 	action_hint_label.text = hint
+	roll_button.visible = not roll_disabled
+	buy_button.visible = not buy_disabled
+	upgrade_button.visible = not upgrade_disabled
+	end_turn_button.visible = not end_disabled
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()
@@ -469,6 +524,7 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
 	route_buttons.visible = not routes.is_empty()
+	action_strip.visible = not roll_disabled or not buy_disabled or not upgrade_disabled or not end_disabled or not routes.is_empty()
 
 
 func set_toolbar_enabled(key: String, enabled: bool) -> void:
@@ -484,11 +540,11 @@ func _render_hud() -> void:
 	var player: Dictionary = players[current_index] if current_index >= 0 and current_index < players.size() and players[current_index] is Dictionary else {}
 	var character_id := int(player.get("character_id", current_index))
 	player_name_label.text = str(player.get("name", "玩家"))
-	cash_label.text = "現金  %s" % _money(int(player.get("cash", 0)))
-	deposit_label.text = "存款  %s" % _money(int(player.get("deposit", 0)))
-	wealth_label.text = "總資產  %s" % (_money(_player_wealth) if _player_wealth >= 0 else "未知")
+	cash_label.text = _money(int(player.get("cash", 0)))
+	deposit_label.text = _money(int(player.get("deposit", 0)))
+	wealth_label.text = _money(_player_wealth) if _player_wealth >= 0 else "未知"
 	var properties: Array = player.get("properties", [])
-	property_label.text = "地產 %d 筆\n估值 %s" % [properties.size(), _money(int(player.get("property_values", 0)))]
+	property_label.text = "地產\n%d 筆\n估值 %s" % [properties.size(), _money(int(player.get("property_values", 0)))]
 	var holdings: Dictionary = player.get("stocks", {})
 	var total_shares := 0
 	var stock_lines: Array[String] = []
@@ -497,16 +553,23 @@ func _render_hud() -> void:
 		if amount <= 0:
 			continue
 		total_shares += amount
-		stock_lines.append("%s × %d" % [str(symbol).to_upper(), amount])
-	stock_label.text = "股票 %d 股\n%s" % [total_shares, "、".join(stock_lines)]
+		stock_lines.append("%s × %d" % [_stock_display_name(str(symbol)), amount])
+	stock_label.text = "股票\n%d 股\n%s" % [total_shares, "、".join(stock_lines)]
 	if stock_lines.is_empty():
-		stock_label.text = "股票 0 股"
+		stock_label.text = "股票\n0 股"
 	var tools: Dictionary = player.get("tools", {})
-	other_label.text = "點券 %d · 卡片 %d\n道具 %d 種" % [int(player.get("points", 0)), (player.get("cards", []) as Array).size(), tools.size()]
+	other_label.text = "其他\n點券 %d · 卡片 %d\n道具 %d 種" % [int(player.get("points", 0)), (player.get("cards", []) as Array).size(), tools.size()]
 	if not _source_edition.is_empty():
 		var frame := _visuals.ui(_source_edition, "Data", 2, clampi(character_id, 0, 11))
 		portrait.texture = _source_texture(frame)
 	portrait.visible = portrait.texture != null
+	_set_hud_art(active_tab)
+	cash_caption.visible = active_tab == "cash"
+	deposit_caption.visible = active_tab == "cash"
+	wealth_caption.visible = active_tab == "cash"
+	cash_label.visible = active_tab == "cash"
+	deposit_label.visible = active_tab == "cash"
+	wealth_label.visible = active_tab == "cash"
 	if active_tab == "cash":
 		property_label.hide()
 		stock_label.hide()
@@ -532,11 +595,59 @@ func _render_calendar() -> void:
 	if date_label == null:
 		return
 	var raw_date: Variant = snapshot.get("date", snapshot.get("start_date", null))
-	if raw_date is Dictionary and raw_date.has("year") and raw_date.has("month") and raw_date.has("day"):
-		date_label.text = "%04d / %02d / %02d" % [int(raw_date.year), int(raw_date.month), int(raw_date.day)]
+	if raw_date is Dictionary and GameCalendar.is_valid(raw_date):
+		var weekday := int(snapshot.get("weekday", GameCalendar.weekday(raw_date)))
+		date_label.text = "%04d / %02d / %02d 週%s" % [int(raw_date.year), int(raw_date.month), int(raw_date.day), _weekday_text(weekday)]
 	else:
 		date_label.text = "日期未記錄"
 	calendar_mode_label.text = "日曆" if calendar_mode == "day" else "地圖"
+	_set_calendar_art(raw_date)
+
+
+func _set_hud_art(tab_id: String) -> void:
+	if _hud_art == null:
+		return
+	var chunk: int = int({"cash": 0, "property": 1, "stock": 2, "other": 3}.get(tab_id, 0))
+	_source_hud_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 0, chunk))
+	_hud_art.texture = _source_hud_texture
+	_hud_art.visible = _source_hud_texture != null
+
+
+func _set_calendar_art(raw_date: Variant) -> void:
+	if _calendar_art == null:
+		return
+	_source_calendar_texture = null
+	if raw_date is Dictionary and GameCalendar.is_valid(raw_date):
+		var month := int(raw_date.get("month", 1))
+		var season := 0 if month in [3, 4, 5] else 1 if month in [6, 7, 8] else 2 if month in [9, 10, 11] else 3
+		_source_calendar_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 2, 4 + season))
+	_calendar_art.texture = _source_calendar_texture
+	_calendar_art.visible = _source_calendar_texture != null
+
+
+func _stock_display_name(symbol: String) -> String:
+	var normalized := symbol.to_lower().strip_edges()
+	var market: Variant = snapshot.get("market", {})
+	if market is Dictionary:
+		var rows: Variant = market.get("rows", {})
+		if rows is Dictionary:
+			var row: Variant = rows.get(normalized, rows.get(StringName(normalized), {}))
+			if row is Dictionary:
+				var market_name: Variant = row.get("display_name", row.get("name", ""))
+				if market_name is String and not str(market_name).is_empty():
+					return str(market_name)
+	var stock_rows: Variant = map_definition.get("stock_rows", [])
+	if stock_rows is Array and normalized.begins_with("s") and normalized.substr(1).is_valid_int():
+		var index := int(normalized.substr(1)) - 1
+		if index >= 0 and index < stock_rows.size() and stock_rows[index] is Dictionary:
+			var definition_name: Variant = stock_rows[index].get("display_name", stock_rows[index].get("name", ""))
+			if definition_name is String and not str(definition_name).is_empty():
+				return str(definition_name)
+	return normalized.to_upper()
+
+
+func _weekday_text(weekday: int) -> String:
+	return ["未知", "一", "二", "三", "四", "五", "六", "日"][weekday] if weekday >= 1 and weekday <= 7 else "未知"
 
 
 func _source_texture(frame: Dictionary) -> Texture2D:
@@ -580,6 +691,30 @@ func _title_button(text: String, tooltip: String) -> Button:
 	result.add_theme_stylebox_override("normal", _style(Color(0.06, 0.16, 0.2, 0.82), Color("#d8b45f"), 5, 1))
 	result.add_theme_stylebox_override("hover", _style(Color(0.17, 0.34, 0.37, 0.92), Color("#fff0a5"), 5, 2))
 	return result
+
+
+func _configure_title_hit_area(button: Button, key: String, rect: Rect2) -> void:
+	button.set_meta("source_key", key)
+	if _source_title_texture == null:
+		var index := ["start", "load", "option"].find(key)
+		button.position = Vector2(0.0, float(maxi(0, index)) * 46.0)
+		button.size = Vector2(144.0, 38.0)
+		return
+	button.position = rect.position
+	button.size = rect.size
+	button.text = ""
+	button.flat = true
+	button.focus_mode = Control.FOCUS_ALL
+	button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var hover_chunk: int = int({"start": 2, "load": 4, "option": 6}.get(key, -1))
+	if hover_chunk >= 0:
+		var hover_texture := _source_texture(_visuals.ui(_source_edition, "Data", 1, hover_chunk))
+		if hover_texture != null:
+			button.mouse_entered.connect(func() -> void: button.icon = hover_texture)
+			button.mouse_exited.connect(func() -> void: button.icon = null)
 
 
 func _toolbar_button(text: String, key: String) -> Button:

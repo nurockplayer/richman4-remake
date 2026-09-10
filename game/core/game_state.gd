@@ -83,6 +83,7 @@ const SETUP_CHARACTER_NAMES = [
 	"宮本寶藏", "糖糖", "烏咪", "孫小美", "小丹尼", "金貝貝",
 ]
 const SETUP_CHARACTER_COUNT = 12
+const SetupControls = preload("res://game/core/setup_controls.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
@@ -273,13 +274,16 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
 	for key in options.keys():
 		# Dictionary dot assignment produces StringName keys in Godot. Treat
 		# those keys as their canonical string spelling so callers that adjust a
 		# normalized setup dictionary keep the same validation path.
 		if typeof(key) not in [TYPE_STRING, TYPE_STRING_NAME] or not allowed_keys.has(str(key)):
 			return {}
+	var control_choices: Dictionary = SetupControls.normalize(options, player_count)
+	if not bool(control_choices.get("ok", false)):
+		return {}
 	if not options.has("start_date") or typeof(options.get("start_date")) != TYPE_DICTIONARY:
 		return {}
 	var start_date: Dictionary = options["start_date"]
@@ -388,7 +392,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	if original_building_cards and (not original_inventory or not original_facilities or not original_gods or not original_companies or not original_statuses or not original_hazards or not original_property_cards or not original_remodel or not original_research):
 		return {}
 
-	return {
+	var normalized: Dictionary = {
 		"initial_fund": initial_fund,
 		"day_limit": day_limit,
 		"wealth_multiplier": wealth_multiplier,
@@ -405,6 +409,8 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_research": original_research,
 		"original_building_cards": original_building_cards,
 	}
+	normalized.merge(control_choices.choices)
+	return normalized
 
 
 func _initialize_setup(seed_value: int, player_count: int, options: Dictionary) -> void:
@@ -451,6 +457,10 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 	state["elapsed"] = 0
 	state["last_settled_month"] = {}
 	state["character_ids"] = options["character_ids"].duplicate(true)
+	if options.has("human_flags"):
+		state["initial_human_flags"] = options.human_flags.duplicate()
+	if options.has("initial_vehicle"):
+		state["initial_vehicle"] = options.initial_vehicle
 	var start_position: int = int(state.get("start_position", START_POSITION))
 	state["players"] = _build_setup_players(
 		player_count,
@@ -458,6 +468,7 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		options["character_ids"],
 		start_position,
 		_is_graph(),
+		options.get("human_flags", []),
 	)
 	if bool(options.get("original_statuses", false)):
 		for player in state["players"]:
@@ -482,6 +493,9 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		if not bool(inventory_result.get("ok", false)):
 			state = {}
 			return
+	if options.has("initial_vehicle") and not SetupControls.apply_vehicle(state.players, state.get("inventory_supply", {}), options.initial_vehicle, _is_inventory()):
+		state = {}
+		return
 	if original_gods:
 		_initialize_original_gods()
 	if bool(options.get("original_remodel", false)):
@@ -506,12 +520,16 @@ func _build_setup_players(
 	character_ids: Array,
 	start_position: int,
 	graph_mode: bool,
+	human_flags: Array = [],
 ) -> Array:
 	var players: Array = _build_players(player_count, start_position, graph_mode)
 	for player_id in range(player_count):
 		var player: Dictionary = players[player_id]
 		var character_id: int = int(character_ids[player_id])
-		var cash_ratio: int = 50 if player_id == 0 else int(AI_CASH_RATIOS[character_id])
+		var human: bool = SetupControls.initially_human(human_flags, player_id)
+		var cash_ratio: int = 50 if human else int(AI_CASH_RATIOS[character_id])
+		player["is_human"] = human
+		player["is_ai"] = not human
 		player["character_id"] = character_id
 		player["name"] = SETUP_CHARACTER_NAMES[character_id]
 		player["init_cash_ratio"] = cash_ratio
@@ -8267,6 +8285,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 
 	var players: Variant = data.get("players", null)
 	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
+	errors.append_array(SetupControls.validate_metadata(data, player_count, setup_save))
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
 	if data.has("news") and typeof(data.get("news", null)) == TYPE_DICTIONARY:
@@ -8919,7 +8938,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			if setup_save:
 				var character_id_value: Variant = player.get("character_id", null)
 				var character_id_valid: bool = _valid_int(character_id_value, 0, SETUP_CHARACTER_COUNT - 1)
-				var expected_ratio: int = 50 if index == 0 else int(AI_CASH_RATIOS[int(character_id_value)]) if character_id_valid else -1
+				var initially_human: bool = SetupControls.initially_human(data.get("initial_human_flags", []), index)
+				var expected_ratio: int = 50 if initially_human else int(AI_CASH_RATIOS[int(character_id_value)]) if character_id_valid else -1
 				if not character_id_valid or typeof(data.get("character_ids", null)) != TYPE_ARRAY or index >= data["character_ids"].size() or int(data["character_ids"][index]) != int(character_id_value):
 					errors.append("player %d character identity invalid" % index)
 				if character_id_valid and _valid_string(player.get("name", null)) and str(player.get("name", "")) != str(SETUP_CHARACTER_NAMES[int(character_id_value)]):

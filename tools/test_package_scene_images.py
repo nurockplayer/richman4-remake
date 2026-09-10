@@ -30,6 +30,8 @@ from original_ui_assets import (
 from test_decode_original_images import make_mkf, make_smp, make_spr, read_png_rgba
 from package_scene_images import validate
 
+EXPECTED_BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30}
+
 
 class PackageSceneTests(unittest.TestCase):
     @staticmethod
@@ -43,6 +45,20 @@ class PackageSceneTests(unittest.TestCase):
         )
         pixels = b"".join(struct.pack("<H", 0x03E0 + chunk) for chunk in range(count))
         return b"SMP\0" + struct.pack("<II", count, start_offset) + chunks + pixels
+
+    @staticmethod
+    def _make_spr_chunks(count: int) -> bytes:
+        """Build a tiny multi-chunk SPR fixture for bounded bank assets."""
+
+        start_offset = 12 + count * 12
+        chunks = b"".join(
+            struct.pack("<hhhhI", 1, 1, chunk, -chunk, 1)
+            for chunk in range(count)
+        )
+        palette = bytearray(512)
+        struct.pack_into("<H", palette, 2, 0x7C00)
+        pixels = bytes((1,)) * count
+        return b"SPR\0" + struct.pack("<II", count, start_offset) + chunks + bytes(palette) + pixels
 
     @staticmethod
     def _make_raw_rgb555(*, zero: bool = False) -> bytes:
@@ -88,6 +104,28 @@ class PackageSceneTests(unittest.TestCase):
         for index, entry in replacements.items():
             entries[index] = entry
         return make_mkf(entries)
+
+    @classmethod
+    def _bank_panel_archive(
+        cls,
+        *,
+        panel21_count: int = 26,
+        panel23_count: int = 24,
+        panel24_count: int = 30,
+    ) -> bytes:
+        """Build Panel.mkf with the bounded source bank entries."""
+
+        panel21 = cls._make_spr_chunks(panel21_count)
+        panel23 = cls._make_smp_chunks(panel23_count)
+        panel24 = cls._make_smp_chunks(panel24_count)
+        return cls._indexed_archive(
+            77,
+            {
+                21: (panel21, len(panel21), 12 + panel21_count * 12, 512),
+                23: (panel23, len(panel23), 12 + panel23_count * 12, 2 * panel23_count),
+                24: (panel24, len(panel24), 12 + panel24_count * 12, 2 * panel24_count),
+            },
+        )
 
     def test_edition_bindings_keep_setup_and_save_indices_separate(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -181,6 +219,42 @@ class PackageSceneTests(unittest.TestCase):
             self.assertNotIn("479", mj_group["Data"]["resources"])
             self.assertEqual(game_group["Data"]["resources"]["479"]["source"]["resource_index"], 479)
             self.assertEqual(mj_group["Data"]["resources"]["520"]["source"]["resource_index"], 520)
+
+    def test_bank_source_resources_are_bound_for_both_editions(self):
+        expected_resources = {"0", "1", "2", "21", "23", "24", "75"}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for edition in ("Game", "MultiverseJourney"):
+                source = root / edition
+                source.mkdir()
+                archive = self._bank_panel_archive()
+                (source / "Panel.mkf").write_bytes(archive)
+
+                group = export_ui_resources(edition, source, root / f"{edition}-stage")
+                panel = group["Panel"]
+                self.assertEqual(set(panel["resources"]), expected_resources)
+                for resource_index, expected_count in EXPECTED_BANK_UI_CHUNK_COUNTS.items():
+                    record = panel["resources"][str(resource_index)]
+                    self.assertEqual(record["source"]["edition"], edition)
+                    self.assertEqual(record["signature"], "SPR" if resource_index == 21 else "SMP")
+                    self.assertEqual(record["chunks"].keys(), {str(i) for i in range(expected_count)})
+
+    def test_bank_source_missing_required_chunk_fails_closed(self):
+        cases = ((21, 25, 25), (23, 23, 23), (24, 29, 29))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for resource_index, count, missing in cases:
+                source = root / f"missing-{resource_index}"
+                source.mkdir()
+                (source / "Panel.mkf").write_bytes(
+                    self._bank_panel_archive(
+                        panel21_count=count if resource_index == 21 else 26,
+                        panel23_count=count if resource_index == 23 else 24,
+                        panel24_count=count if resource_index == 24 else 30,
+                    )
+                )
+                with self.assertRaisesRegex(FormatError, fr"missing chunk\(s\): {missing}"):
+                    export_ui_resources("Game", source, root / f"stage-{resource_index}")
 
     def test_headerless_loading_resource_has_explicit_rgb555_binding_and_hashes(self):
         with tempfile.TemporaryDirectory() as temp:

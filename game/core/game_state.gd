@@ -84,6 +84,7 @@ const SETUP_CHARACTER_NAMES = [
 ]
 const SETUP_CHARACTER_COUNT = 12
 const SetupControls = preload("res://game/core/setup_controls.gd")
+const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
@@ -274,7 +275,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
 	for key in options.keys():
 		# Dictionary dot assignment produces StringName keys in Godot. Treat
 		# those keys as their canonical string spelling so callers that adjust a
@@ -283,6 +284,8 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 			return {}
 	var control_choices: Dictionary = SetupControls.normalize(options, player_count)
 	if not bool(control_choices.get("ok", false)):
+		return {}
+	if options.has("land_tenure_months") and not LandTenure.valid_months(options.land_tenure_months):
 		return {}
 	if not options.has("start_date") or typeof(options.get("start_date")) != TYPE_DICTIONARY:
 		return {}
@@ -410,6 +413,8 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_building_cards": original_building_cards,
 	}
 	normalized.merge(control_choices.choices)
+	if options.has("land_tenure_months"):
+		normalized["land_tenure_months"] = int(options.land_tenure_months)
 	return normalized
 
 
@@ -510,6 +515,7 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 				continue
 			tile_value["research_tool"] = 0
 			tile_value["research_turns"] = 0
+	LandTenure.initialize(state, options)
 	_sync_state()
 	_set_action_options(0)
 
@@ -5510,6 +5516,7 @@ func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 		if fortune_facility_buy and facility_level == 0:
 			facility_updates["facility_type"] = fortune_facility_type
 		_update_facility_records(source_object_id, facility_updates)
+		LandTenure.acquire(self, facility)
 		if fortune_facility_buy:
 			_apply_fortune_construction_bonus(player_id, _facility_record(int(player.get("position", -1))))
 		var properties: Array = player.get("properties", []).duplicate(true)
@@ -5535,6 +5542,7 @@ func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 	player["cash"] = int(player.get("cash", 0)) - price
 	_bank_add_cash(price)
 	tile["owner"] = player_id
+	LandTenure.acquire(self, tile)
 	var properties: Array = player.get("properties", [])
 	properties.append(int(tile["index"]))
 	player["properties"] = properties
@@ -5849,6 +5857,7 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 		state["bank"] = facility_bank
 		var source_object_id: int = int(facility.get("source_object_id", -1))
 		_update_facility_records(source_object_id, {"owner": player_id})
+		LandTenure.acquire(self, facility)
 		var buyer_facility_properties: Array = player.get("properties", []).duplicate(true)
 		var buyer_facility_id: int = _facility_canonical_index(int(player.get("position", -1)))
 		if not buyer_facility_properties.has(buyer_facility_id):
@@ -5896,6 +5905,7 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 	else:
 		_bank_add_cash(price)
 	tile["owner"] = player_id
+	LandTenure.acquire(self, tile)
 	var buyer_properties: Array = player.get("properties", []).duplicate(true)
 	if not buyer_properties.has(int(tile.get("index", -1))):
 		buyer_properties.append(int(tile.get("index", -1)))
@@ -6383,6 +6393,8 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			_apply_month_boundary()
 			if state.get("phase", "") == "game_over":
 				return
+			# Source expiry follows deadline, market and month-end settlement.
+			LandTenure.expire_today(self)
 		else:
 			var market: Dictionary = state.get("market", {})
 			var trends: Dictionary = market.get("trends", {})
@@ -8286,6 +8298,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var players: Variant = data.get("players", null)
 	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
 	errors.append_array(SetupControls.validate_metadata(data, player_count, setup_save))
+	errors.append_array(LandTenure.validate_metadata(data, setup_save))
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
 	if data.has("news") and typeof(data.get("news", null)) == TYPE_DICTIONARY:
@@ -8574,7 +8587,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
-			if graph_save and not gods_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
+			if graph_save and not gods_save and not LandTenure.enabled(data) and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
 				errors.append("unowned graph property has improvements %d" % index)
 			if owner_valid and tile.get("kind", "") not in ["property", "facility"] and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
@@ -8635,6 +8648,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						var facility_keys: Array = ["facility_type", "facility_node_index", "owner", "building_level", "facility_state", "cost", "land_price", "upgrade_cost", "fee_by_level"]
 						if research_save:
 							facility_keys.append_array(["research_tool", "research_turns"])
+						if LandTenure.enabled(data):
+							facility_keys.append("land_expiry")
 						for facility_key in facility_keys:
 							var tile_field: Variant = _canonicalize_json_numbers(tile.get(facility_key, null))
 							var first_field: Variant = _canonicalize_json_numbers(first_facility.get(facility_key, null))

@@ -41,7 +41,9 @@ func _run() -> void:
 
 	_check_public_api(panel)
 	_test_model_isolation(panel)
+	_test_invalid_models_and_source_bounds(panel)
 	_test_atm_selection_and_bounds(panel)
+	_test_visual_accessor(panel)
 	_test_keypad_input_dispatch(panel)
 	_test_loan_front_and_calculator(panel)
 	_test_rear_special_gate(panel)
@@ -94,6 +96,48 @@ func _test_model_isolation(panel: Node) -> void:
 	expect(model == before, "selection and confirmation do not mutate host data")
 	expect(_requests.size() == 1 and _requests[0] == ["withdraw", 125], "explicit confirmation emits the requested withdrawal")
 	_requests.clear()
+
+
+func _test_invalid_models_and_source_bounds(panel: Node) -> void:
+	var invalid_mode := _base_model()
+	invalid_mode.entry_mode = "unsupported"
+	panel.call("set_view_model", invalid_mode)
+	var invalid_message_visible := false
+	for child in panel.get_children():
+		var label := child as Label
+		if label != null and label.text.contains("資料格式無法顯示"):
+			invalid_message_visible = true
+	expect(invalid_message_visible, "invalid model uses a visible error fallback")
+	var invalid_button: BaseButton = panel.find_child("ATMWithdraw", true, false) as BaseButton
+	expect(invalid_button == null, "invalid mode does not expose active ATM controls")
+	expect(not bool(panel.call("select_action", "withdraw")), "invalid model rejects action selection")
+
+	var invalid_edition := _base_model()
+	invalid_edition.edition = 42
+	panel.call("set_view_model", invalid_edition)
+	invalid_button = panel.find_child("ATMWithdraw", true, false) as BaseButton
+	expect(invalid_button == null, "invalid edition does not expose active controls")
+
+	var atm_model := _base_model()
+	panel.call("set_view_model", atm_model)
+	expect(panel.custom_minimum_size == Vector2(320, 338), "ATM keeps the source logical panel size")
+	var bar: HSlider = panel.find_child("ATMAmountBar", true, false) as HSlider
+	expect(bar != null and bar.position == Vector2(53, 137) and bar.size == Vector2(215, 29), "ATM amount bar keeps the source rectangle")
+	if bar != null:
+		panel.call("select_action", "withdraw")
+		expect(is_equal_approx(bar.max_value, 250.0), "ATM amount bar uses the host withdrawal limit")
+
+
+func _test_visual_accessor(panel: Node) -> void:
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	image.fill(Color("#7bc6a3"))
+	var texture := ImageTexture.create_from_image(image)
+	var visuals := {"Game.Panel24": texture}
+	panel.call("set_view_model", _base_model())
+	panel.call("set_visuals", visuals)
+	var source_visual: TextureRect = panel.find_child("SourceVisual", true, false) as TextureRect
+	expect(source_visual != null and source_visual.texture == texture, "host visual accessor supplies the source texture")
+	expect(visuals.has("Game.Panel24") and visuals["Game.Panel24"] == texture, "set_visuals does not mutate the host accessor")
 
 
 func _test_atm_selection_and_bounds(panel: Node) -> void:
@@ -213,8 +257,9 @@ func _test_rear_special_gate(panel: Node) -> void:
 	panel.call("set_view_model", model)
 	special_button = panel.find_child("SpecialBorrow", true, false) as BaseButton
 	expect(special_button != null and not special_button.disabled, "owner gate enables special financing")
-	var summary: Label = panel.find_child("SpecialSummary", true, false) as Label
-	expect(summary != null and summary.text.contains("80") and summary.text.contains("1000"), "rear scene displays supplied principal and other deposits")
+	var principal: Label = panel.find_child("SpecialPrincipal", true, false) as Label
+	var other_deposits: Label = panel.find_child("SpecialOtherDeposits", true, false) as Label
+	expect(principal != null and principal.text.contains("80") and other_deposits != null and other_deposits.text.contains("1000"), "rear scene displays supplied principal and other deposits")
 	if special_button != null:
 		_requests.clear()
 		special_button.pressed.emit()

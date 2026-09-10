@@ -6,6 +6,13 @@ class InitiallyInactivePanel extends "res://game/ui/source_monthly_panel.gd":
 	func _application_is_focused() -> bool:
 		return false
 
+func wait_for_close(panel: Control) -> void:
+	# Wait for the observable node timer outcome; native frame scheduling can
+	# deliver a SceneTreeTimer before the presenter Timer in the same frame.
+	var deadline := Time.get_ticks_msec() + 2000
+	while panel.is_open() and Time.get_ticks_msec() < deadline:
+		await create_timer(0.01).timeout
+
 func run() -> void:
 	# Native launch focus arrives after initial scene frames on macOS. Wait for
 	# that real startup event before deliberately simulating an inactive app.
@@ -36,7 +43,7 @@ func run() -> void:
 	expect(is_equal_approx(panel.get("_timer").time_left, remaining), "inactive time preserves the remaining viewing interval")
 	expect(panel.view_model() == before, "focus changes do not alter report payload")
 	panel.notification(Node.NOTIFICATION_APPLICATION_FOCUS_IN)
-	await create_timer(0.7).timeout
+	await wait_for_close(panel)
 	expect(not panel.is_open() and closed[0] == 1, "active viewing resumes the remaining interval and closes once")
 	panel.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
 	panel.notification(Node.NOTIFICATION_APPLICATION_FOCUS_IN)
@@ -54,7 +61,7 @@ func run() -> void:
 	await create_timer(0.8).timeout
 	expect(inactive.is_open(), "new report does not start counting before its first application focus")
 	inactive.notification(Node.NOTIFICATION_APPLICATION_FOCUS_IN)
-	await create_timer(0.7).timeout
+	await wait_for_close(inactive)
 	expect(not inactive.is_open(), "initially inactive report advances after receiving focus")
 	inactive.queue_free()
 	await settle()

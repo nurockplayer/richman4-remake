@@ -354,7 +354,7 @@ func _test_preview_and_music_boundary(panel: Control, viewport: SubViewport) -> 
 func _test_lifecycle_and_suspension(panel: Control, viewport: SubViewport) -> void:
 	await _present(panel, _model())
 	_commands.clear()
-	var before := panel.call("draft_settings")
+	var before: Dictionary = panel.call("draft_settings")
 	panel.call("suspend_input", true)
 	await _click(viewport, Vector2(81 + 16 * 2 + 1, 17 + 4))
 	await _click(viewport, Vector2(227 + 10, 14 + 10))

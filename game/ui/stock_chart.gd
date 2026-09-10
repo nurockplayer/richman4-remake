@@ -6,16 +6,9 @@ class_name RichmanStockChart
 ## Only prices present in the supplied chronological history are drawn.  The
 ## helper never pads, interpolates or otherwise invents market observations.
 
-const BAND_COLORS := [
-	Color("#e9ac14", 0.70),
-	Color("#ef3121", 0.70),
-	Color("#334fbd", 0.70),
-	Color("#0b7c2d", 0.70),
-	Color("#9b2139", 0.70),
-	Color("#e63232", 0.70),
-]
 const PLAYER_PIE_COLOR := Color("#ea1d2b")
 const OTHER_PIE_COLOR := Color("#151bd2")
+const SOURCE_PLOT := Rect2(13.0, 65.0, 344.0, 145.0)
 
 var history: Array = []
 var current_holdings := 0
@@ -92,7 +85,7 @@ func _build_points(values: Array) -> Array:
 	var points: Array = []
 	if values.is_empty():
 		return points
-	var plot := Rect2(13.0, 15.0, 344.0, 145.0)
+	var plot := SOURCE_PLOT
 	var low := float(values[0])
 	var high := float(values[0])
 	for value in values:
@@ -111,10 +104,7 @@ func _build_points(values: Array) -> Array:
 
 
 func _draw() -> void:
-	var plot := Rect2(13.0, 15.0, 344.0, 145.0)
-	var band_width := plot.size.x / float(BAND_COLORS.size())
-	for index in range(BAND_COLORS.size()):
-		draw_rect(Rect2(plot.position.x + band_width * index, plot.position.y, band_width + 1.0, plot.size.y), BAND_COLORS[index], true)
+	var plot := SOURCE_PLOT
 	if line_points.size() == 1:
 		draw_circle(line_points[0], 2.5, Color("#fff7d0"))
 	elif line_points.size() > 1:
@@ -122,17 +112,25 @@ func _draw() -> void:
 	for point in line_points:
 		draw_circle(point, 1.5, Color("#fff7d0"))
 
-	var center := Vector2(size.x - 83.0, 91.0)
-	var radius := minf(58.0, maxf(18.0, minf(size.x, size.y) * 0.29))
+	# Panel75 chunk 2 already carries the source six-bar backdrop and a
+	# horizontally rendered pie. Overlay only the source-driven ownership
+	# split in that footprint; repainting the bars creates a second chart over
+	# the source texture and visibly obscures its labels.
+	var center := Vector2(size.x - 78.0, size.y - 46.0)
+	var radius := minf(58.0, maxf(18.0, minf(size.x * 0.19, size.y * 0.26)))
 	var share_fraction := clampf(pie_ratio, 0.0, 1.0)
 	if share_fraction <= 0.0:
-		draw_circle(center, radius, OTHER_PIE_COLOR)
+		_draw_pie_segment(center, radius, -PI * 0.5, TAU - PI * 0.5, OTHER_PIE_COLOR)
 	elif share_fraction >= 1.0:
-		draw_circle(center, radius, PLAYER_PIE_COLOR)
+		_draw_pie_segment(center, radius, -PI * 0.5, TAU - PI * 0.5, PLAYER_PIE_COLOR)
 	else:
-		_draw_pie_segment(center, radius, 0.0, TAU * share_fraction, PLAYER_PIE_COLOR)
-		_draw_pie_segment(center, radius, TAU * share_fraction, TAU, OTHER_PIE_COLOR)
-	draw_arc(center, radius, 0.0, TAU, 64, Color("#0b173d"), 1.0, true)
+		_draw_pie_segment(center, radius, -PI * 0.5, -PI * 0.5 + TAU * share_fraction, PLAYER_PIE_COLOR)
+		_draw_pie_segment(center, radius, -PI * 0.5 + TAU * share_fraction, TAU - PI * 0.5, OTHER_PIE_COLOR)
+	var outline := PackedVector2Array()
+	for index in range(65):
+		var angle := TAU * float(index) / 64.0
+		outline.append(center + Vector2(cos(angle) * radius * 1.52, sin(angle) * radius * 0.50))
+	draw_polyline(outline, Color("#0b173d"), 1.0, true)
 
 
 func _draw_pie_segment(center: Vector2, radius: float, start_angle: float, end_angle: float, color: Color) -> void:
@@ -140,5 +138,5 @@ func _draw_pie_segment(center: Vector2, radius: float, start_angle: float, end_a
 	var steps := maxi(2, int(ceil(absf(end_angle - start_angle) * 20.0)))
 	for index in range(steps + 1):
 		var angle := lerpf(start_angle, end_angle, float(index) / float(steps))
-		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+		points.append(center + Vector2(cos(angle) * radius * 1.52, sin(angle) * radius * 0.50))
 	draw_colored_polygon(points, color)

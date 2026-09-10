@@ -23,6 +23,7 @@ const RESEARCH_SAVE_VERSION = 12
 const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
+const SpecialFinance = preload("res://game/core/special_finance.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -87,6 +88,7 @@ const SetupControls = preload("res://game/core/setup_controls.gd")
 const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
+const SourceLoans = preload("res://game/core/source_loans.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
 const GOD_CARD_IDS = ["送神符", "請神符"]
@@ -165,6 +167,7 @@ const EVENT_CARDS = [
 ]
 
 var _settling_company_dividends := false
+var _settling_special_finance := false
 var _resolving_news := false
 var _resolving_fate := false
 var _running_sleep_turn := false
@@ -1241,6 +1244,22 @@ func _update_company_owners() -> void:
 		if owner != old_owner:
 			_record_event("company_owner_changed", {"company_id":int(company.id), "company_name":str(company.display_name), "owner_id":owner, "previous_owner_id":old_owner})
 
+	if not _settling_special_finance:
+		_settling_special_finance = true
+		SpecialFinance.reconcile_ownership(self)
+		_settling_special_finance = false
+
+
+func _finish_company_trade(player_id: int) -> void:
+	# A chair loss can liquidate the trading actor. Movement bankruptcy may
+	# already have admitted its successor; action-phase bankruptcy has not.
+	# Keep end-turn/dividend ordering with those callers and finish only this
+	# immediate trade boundary, without replacing a successor's legal actions.
+	if state.get("phase", "") != "game_over" and int(state.current_player) == player_id and not bool(_player(player_id).get("alive", false)):
+		_advance_to_next_alive(player_id)
+	else:
+		_set_action_options(int(state.current_player))
+
 
 func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 	if state.get("phase", "") == "game_over": return _error("遊戲已結束")
@@ -1280,7 +1299,7 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 		StockAccounting.record_sale(player, stock_symbol, quantity, get_stock_symbols())
 	_update_company_owners()
 	_record_event("stock_bought" if action == "buy_stock" else "stock_sold", {"player_id":player_id,"symbol":stock_symbol,"stock_name":str(row.name),"quantity":quantity,"price":float(row.price),"amount":amount,"account":"deposit"})
-	_set_action_options(player_id)
+	_finish_company_trade(player_id)
 	return _result(true,"股票交易完成")
 
 
@@ -1303,7 +1322,7 @@ func _buy_company_stock(player_id: int, params: Dictionary) -> Dictionary:
 	state.company_purchase_remaining = int(state.company_purchase_remaining) - quantity
 	_update_company_owners()
 	_record_event("company_shares_bought", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"symbol":stock_symbol,"quantity":quantity,"price":face_price,"amount":amount})
-	_set_action_options(player_id)
+	_finish_company_trade(player_id)
 	return _result(true,"已購入企業股份")
 
 
@@ -1396,10 +1415,13 @@ func _resolve_company_visit(player_id: int, tile: Dictionary) -> void:
 	if _is_gods_hospital_action(player): return
 	var owner := int(company.get("owner", -1))
 	var company_type := int(company.company_type)
+	if company_type == 7 and not _is_sunday():
+		state["bank_access"] = true
+		state["bank_landing"] = true
 	var base := 0
 	var insurance_days := 0
 	var insurance_rng_before := _rng.state
-	var supported := company_type in [3, 4, 5, 6, 11, 12]
+	var supported := company_type in [3, 4, 5, 6, 7, 11, 12]
 	if company_type == 11 and owner >= 0:
 		if not get_company_upgrade_targets(player_id).is_empty():
 			if _company_payable_upgrade_targets(player_id, company).is_empty():
@@ -2359,10 +2381,19 @@ func _set_action_options(player_id: int) -> void:
 	# expose a research picker.
 	if _can_choose_research(player_id):
 		options.push_front("choose_research")
-	if not hospitalized and tile.get("kind", "") == "bank":
+	var bank_company: Dictionary = get_company_at(int(player.get("position", -1)))
+	var company_bank: bool = int(bank_company.get("company_type", 0)) == 7
+	if not hospitalized and (tile.get("kind", "") == "bank" or company_bank):
 		state["bank_landing"] = bank_open
 		if bank_open and not _loan_block_active(player):
 			options.push_front("take_loan")
+		if bank_open and _is_companies() and int(player.get("loan", 0)) > 0:
+			options.push_front("repay_loan")
+		if bank_open and company_bank and int(bank_company.get("owner", -1)) == player_id:
+			if not _loan_block_active(player) and SpecialFinance.limit("take_special_finance", state, player_id) > 0:
+				options.push_front("take_special_finance")
+			if SpecialFinance.limit("repay_special_finance", state, player_id) > 0:
+				options.push_front("repay_special_finance")
 	if bool(state.get("bank_access", false)) and bank_open:
 		if bank_transfer_limit("deposit", player_id) > 0:
 			options.push_front("deposit")
@@ -5056,6 +5087,8 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		debtor.erase("winter_sleep_days")
 		debtor["vehicle"] = "walking"
 		debtor["dice_count"] = 1
+	if debtor.has("special_finance"):
+		debtor["special_finance"] = 0
 	var auction: Dictionary = _auction_assets(debtor_id, creditor_id)
 	var loan: int = int(debtor.get("loan", 0))
 	if loan > 0:
@@ -5221,7 +5254,9 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		var building_pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(building_pending_remote) == TYPE_DICTIONARY and not building_pending_remote.is_empty():
 			return _error("遙控骰子已經排程")
-	if _is_sunday() and ["deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
+	if _is_companies() and normalized in ["take_loan", "repay_loan", "take_special_finance", "repay_special_finance"] and not _valid_int(params.get("amount", null), 1, MAX_GRAPH_POINTS):
+		return _error("貸款或還款金額必須是正整數")
+	if _is_sunday() and ["deposit", "withdraw", "take_loan", "repay_loan", "take_special_finance", "repay_special_finance", "buy_vehicle"].has(normalized):
 		return _error("週日銀行休息")
 	var action_options_before: Array = state.get("action_options", []).duplicate(true)
 	_set_action_options(player_id)
@@ -5246,7 +5281,17 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _deposit(player_id, int(params.get("amount", 0)))
 		"withdraw":
 			return _withdraw(player_id, int(params.get("amount", 0)))
-		"take_loan":
+		"take_special_finance", "repay_special_finance":
+			var special_result: Dictionary = _special_finance_action(player_id, normalized, int(params.get("amount", 0)))
+			if not bool(special_result.get("ok", false)):
+				state["action_options"] = action_options_before
+			return special_result
+		"take_loan", "repay_loan":
+			if _is_companies():
+				var loan_result: Dictionary = _source_loan_action(player_id, normalized, int(params.get("amount", 0)))
+				if not bool(loan_result.get("ok", false)):
+					state["action_options"] = action_options_before
+				return loan_result
 			return _take_loan(player_id, int(params.get("amount", 0)))
 		"buy_vehicle":
 			return _buy_vehicle(player_id, str(params.get("vehicle", "")))
@@ -5721,6 +5766,8 @@ func _withdraw(player_id: int, amount: int) -> Dictionary:
 		return _error("提款金額超出可用上限")
 	_withdraw_internal(player_id, amount)
 	_record_event("withdraw", {"player_id": player_id, "amount": amount})
+	if _is_companies():
+		SpecialFinance.after_withdrawal(self, player_id)
 	_set_action_options(player_id)
 	return _result(true, "已提款")
 
@@ -5736,6 +5783,66 @@ func _withdraw_internal(player_id: int, amount: int) -> void:
 	bank["deposits"] = max(0, int(bank.get("deposits", 0)) - actual)
 	state["bank"] = bank
 	_bank_subtract_cash(actual)
+
+
+func special_finance_limit(action: String, player_id: int = -1) -> int:
+	if not _is_companies() or state.get("phase", "") != "await_action" or _is_sunday():
+		return 0
+	var resolved_id: int = player_id if player_id >= 0 else int(state.get("current_player", -1))
+	if resolved_id != int(state.get("current_player", -1)):
+		return 0
+	var player: Dictionary = _player(resolved_id)
+	if player.is_empty() or not bool(player.get("alive", false)) or _sleep_active(player) or _is_gods_hospital_action(player) or (_is_statuses() and _status_active(player)):
+		return 0
+	if not AuctionRules.response(self).is_empty() or not _pending_finance().is_empty() or _trap_pending() or int(state.get("company_service_pending", 0)) > 0:
+		return 0
+	var company: Dictionary = get_company_at(int(player.get("position", -1)))
+	if not bool(state.get("bank_landing", false)) or int(company.get("company_type", 0)) != 7 or int(company.get("owner", -1)) != resolved_id:
+		return 0
+	var normalized := action.to_lower().strip_edges()
+	if normalized == "take_special_finance" and _loan_block_active(player):
+		return 0
+	return SpecialFinance.limit(normalized, state, resolved_id)
+
+
+func _special_finance_action(player_id: int, action: String, amount: int) -> Dictionary:
+	if amount <= 0 or amount > special_finance_limit(action, player_id):
+		return _error("融資或還款金額超出可用上限")
+	if action == "take_special_finance":
+		SpecialFinance.take(state, player_id, amount)
+	else:
+		SpecialFinance.repay(state, player_id, amount)
+	_record_event("special_finance_taken" if action == "take_special_finance" else "special_finance_repaid", {"player_id": player_id, "amount": amount})
+	_set_action_options(player_id)
+	return _result(true, "融資已存入帳戶" if action == "take_special_finance" else "已償還融資")
+
+
+func bank_loan_limit(action: String, player_id: int = -1) -> int:
+	if not _is_companies():
+		return 0
+	var resolved_id: int = player_id if player_id >= 0 else int(state.get("current_player", -1))
+	var player: Dictionary = _player(resolved_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return 0
+	return SourceLoans.limit(action.to_lower().strip_edges(), player, state.get("bank", {}), _player_wealth(resolved_id))
+
+
+func _source_loan_action(player_id: int, action: String, amount: int) -> Dictionary:
+	var player: Dictionary = _player(player_id)
+	if not bool(state.get("bank_landing", false)):
+		return _error("只有落在銀行時才能申請或償還貸款")
+	if action == "take_loan" and _loan_block_active(player):
+		return _error("新聞效果期間暫停申請貸款")
+	if amount <= 0 or amount > bank_loan_limit(action, player_id):
+		return _error("貸款或還款金額超出可用上限")
+	if action == "take_loan":
+		SourceLoans.take(player, state.bank, amount, int(state.day), int(state.weekday))
+		_record_event("loan_taken", {"player_id": player_id, "amount": amount, "due_day": int(player.loan_due_day)})
+	else:
+		SourceLoans.repay(player, state.bank, amount)
+		_record_event("loan_repaid", {"player_id": player_id, "amount": amount})
+	_set_action_options(player_id)
+	return _result(true, "貸款已存入帳戶" if action == "take_loan" else "已償還貸款")
 
 
 func _take_loan(player_id: int, amount: int) -> Dictionary:
@@ -6488,6 +6595,17 @@ func _repay_due_loan(player_id: int) -> void:
 	if loan <= 0 or int(state.get("day", 1)) < int(player.get("loan_due_day", 0)):
 		return
 	var available: int = int(player.get("cash", 0)) + int(player.get("deposit", 0))
+	if _is_companies():
+		var payment: int = bank_loan_limit("repay_loan", player_id)
+		if payment > 0:
+			SourceLoans.repay(player, state.bank, payment)
+		if available < loan:
+			_declare_bankruptcy(player_id, -1, int(player.loan), "loan_due")
+		elif int(player.loan) == 0:
+			_record_event("loan_repaid", {"player_id": player_id, "amount": loan})
+		# A saturated bank cash ledger can defer the remaining cash payment;
+		# do not overflow a valid save or bankrupt a solvent player.
+		return
 	if available < loan:
 		var deposit_payment: int = int(player.get("deposit", 0))
 		if deposit_payment > 0:
@@ -8421,7 +8539,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if research_save:
 		known_actions.append("choose_research")
 	if companies_save:
-		known_actions.append_array(["buy_company", "company_upgrade"])
+		known_actions.append_array(["buy_company", "company_upgrade", "repay_loan", "take_special_finance", "repay_special_finance"])
 	if inventory_save:
 		known_actions.append_array(["buy_item", "sell_item", "use_tool"])
 	if typeof(action_options) != TYPE_ARRAY:
@@ -8961,6 +9079,11 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					errors.append("player %d character name mismatch" % index)
 				if not _valid_int(player.get("init_cash_ratio", null), 0, 100) or int(player.get("init_cash_ratio", -1)) != expected_ratio:
 					errors.append("player %d initial cash ratio invalid" % index)
+			if player.has("special_finance"):
+				if not companies_save or not _valid_int(player.special_finance, 0, MAX_GRAPH_POINTS):
+					errors.append("player %d special_finance invalid" % index)
+				elif not bool(player.get("alive", false)) and int(player.special_finance) != 0:
+					errors.append("dead player cannot owe special finance")
 			for money_key in ["cash", "deposit", "property_values", "loan"]:
 				if not _valid_int(player.get(money_key, null), 0, 1000000000000):
 					errors.append("player %d %s invalid" % [index, money_key])

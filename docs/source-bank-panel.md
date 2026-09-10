@@ -88,8 +88,9 @@ native lane 重跑。這些測試證明 Godot 控制項事件邊界，不宣稱�
 原版 art 模式隱藏 fallback HSlider、LineEdit 與泛用常駐說明，避免滑桿圓點或重複字樣
 覆蓋來源圖。ATM 使用 Panel24 chunks19–28 的數字，末位 `(244,101)`，步距20；
 chunk4 的百分比列在 `(58,139)`，寬度依34階比例裁切。Calculator 使用 Panel21
-chunks16–25 的數字，末位 `(107,11)`，步距12；百分比列 `(10,42,108,12)` 採原版
-34個 threshold 對應 `floor(limit * index / 33)`。MAX、ENTER、C、0、退格與數字鍵
+chunks16–25 的數字，末位 `(107,11)`，步距12；百分比列 `(10,42,108,12)` 的點擊採原版
+34個 threshold 對應 `floor(limit * index / 33)`，繪製採 `threshold[floor(amount * 33 / limit)]`，
+零金額另顯示全空。先畫 empty chunk1，再從 source background0 複製 filled prefix。MAX、ENTER、C、0、退格與數字鍵
 的 pressed art 分別使用 Panel21 chunks2–15。ATM 使用 Panel24 chunks1–18。
 
 前台動態貸款文字中心 `(345,345)`／`(530,345)`，26px 黑色；主席入口文字中心
@@ -107,3 +108,11 @@ fallback 滑桿圓點，`427df44` 只增加禁止該圖層的檢查，在當時�
 後台、非主席前台及 calculator，並與原版 article22–24／來源繪製座標比對。
 這些影像只支持元件構圖方向；MainUI 入口、帳務後續、原生實體輸入與目前 package
 仍需另外驗收，不能將此元件或 headless 全綠視為 S11–S13 完整 PASS。
+
+新的獨立審查指出 Panel21 線性比例與來源 threshold 不同，以及按鍵 `0→1` 在一位數
+額度下會因前導零被錯判超額。Root 核對實際 chunk0／1 後也修正百分比列的填色方向。
+不變 tests-only `1f906a3`：headless20/18、native68/60 合格 RED；修正後20/0、68/0。
+原生 pixel case 使用來源相同的 filled-background／empty-strip 結構，分別檢查
+0／1／1700／3300 金額的左側實心、右側空白與離散寬度，沒有使用自訂全綠 baseline。
+ATM／calculator 的實際滑鼠按鍵還驗證重複零仍是一個0，接續1並ENTER可正確送出1；
+既有嚴格 amount parser、外部 malformed-input 拒絕和所有266／74 assertions保留。

@@ -9,6 +9,7 @@ signal cancelled
 signal invalid_input(reason: String)
 
 const SOURCE_SIZE := Vector2(128.0, 192.0)
+const PERCENT_THRESHOLDS := [3, 6, 9, 12, 15, 19, 22, 25, 28, 31, 34, 38, 41, 44, 47, 50, 53, 57, 60, 63, 66, 69, 73, 76, 79, 82, 85, 88, 92, 95, 98, 101, 104, 107]
 
 var action := ""
 var maximum := 0
@@ -26,6 +27,7 @@ var _edition := "Game"
 var _has_source_visual := false
 var _percent: Control
 var _progress: Control
+var _empty_progress: TextureRect
 var _digits: Control
 
 
@@ -141,6 +143,10 @@ func _build() -> void:
 	_digits.name = "AmountSourceDigits"
 	_digits.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_digits)
+	_empty_progress = _sprite(null, Vector2(108, 12))
+	_empty_progress.name = "AmountSourceEmptyProgress"
+	_empty_progress.position = Vector2(10, 42)
+	add_child(_empty_progress)
 	_progress = Control.new()
 	_progress.name = "AmountSourceProgress"
 	_progress.position = Vector2(10, 42)
@@ -360,6 +366,7 @@ func _digit_from_event(event: InputEventKey) -> String:
 
 
 func _append_digit(digit: String) -> void:
+	if input_field.text == "0": input_field.text = ""
 	input_field.text += digit
 	input_field.caret_column = input_field.text.length()
 	_focus_entry()
@@ -478,6 +485,7 @@ func _sprite(texture: Texture2D, logical_size: Vector2) -> TextureRect:
 func _refresh_source_art() -> void:
 	if _digits == null: return
 	_digits.visible = _has_source_visual
+	_empty_progress.visible = _has_source_visual
 	_progress.visible = _has_source_visual
 	_percent.visible = _has_source_visual
 	for child in _digits.get_children(): child.free()
@@ -497,10 +505,19 @@ func _refresh_source_art() -> void:
 			art.set_meta("source_chunk", chunk)
 			_digits.add_child(art)
 	var value := int(parsed_amount().get("amount", 0))
-	var width := floori(108.0 * clampf(float(value) / float(maxi(1, maximum)), 0.0, 1.0))
+	var step := clampi(floori(float(value) * 33.0 / float(maxi(1, maximum))), 0, 33)
+	var width := int(PERCENT_THRESHOLDS[step]) if value > 0 else 0
 	_progress.size = Vector2(width, 12)
-	var bar: Variant = _resolve_visual(1)
-	if bar is Texture2D: _progress.add_child(_sprite(bar, Vector2(108, 12)))
+	# Chunk1 is the empty strip. The source restores the filled prefix from
+	# background0 over it; clipping chunk1 itself would reverse the display.
+	_empty_progress.texture = _resolve_visual(1) as Texture2D
+	var background: Variant = _resolve_visual(0)
+	if background is Texture2D:
+		var filled := AtlasTexture.new()
+		filled.atlas = background
+		var pixel_scale: Vector2 = background.get_size() / SOURCE_SIZE
+		filled.region = Rect2(Vector2(10, 42) * pixel_scale, Vector2(108, 12) * pixel_scale)
+		_progress.add_child(_sprite(filled, Vector2(108, 12)))
 	var names := ["AmountMax", "AmountEnter", "AmountClear", "AmountDigit0", "AmountBackspace", "AmountDigit7", "AmountDigit8", "AmountDigit9", "AmountDigit4", "AmountDigit5", "AmountDigit6", "AmountDigit1", "AmountDigit2", "AmountDigit3"]
 	for index in range(names.size()):
 		var button := get_node_or_null(names[index]) as Button
@@ -524,9 +541,8 @@ func _on_percent_input(event: InputEvent) -> void:
 	active = active or (event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0)
 	if not active: return
 	var offset := clampf(event.position.x, 0.0, 107.0)
-	var thresholds := [3, 6, 9, 12, 15, 19, 22, 25, 28, 31, 34, 38, 41, 44, 47, 50, 53, 57, 60, 63, 66, 69, 73, 76, 79, 82, 85, 88, 92, 95, 98, 101, 104, 107]
 	var index := 0
-	while index < 33 and float(thresholds[index]) < offset: index += 1
+	while index < 33 and float(PERCENT_THRESHOLDS[index]) < offset: index += 1
 	set_amount_text(str(int(floor(float(maximum) * float(index) / 33.0))))
 	_percent.accept_event()
 	_focus_entry()

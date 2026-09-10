@@ -7,7 +7,7 @@ func run() -> void:
 	var game := setup(ui, 69811)
 	give(game, 0, "夢遊")
 	give(game, 1, "嫁禍")
-	use_card(ui, "夢遊", 1)
+	await use_card(ui, "夢遊", 1)
 	check(ui._human_trap_response_pending(), "valid dream awaits human response")
 	var pending_json: String = game.to_json()
 	ui.trap_popup.notification(MainLoop.NOTIFICATION_APPLICATION_FOCUS_OUT)

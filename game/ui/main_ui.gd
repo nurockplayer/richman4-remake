@@ -20,6 +20,8 @@ const FinancialPresentation = preload("res://game/ui/financial_presentation.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
+const GameShell = preload("res://game/ui/game_shell.gd")
+const StockPanel = preload("res://game/ui/stock_panel.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -63,6 +65,9 @@ const PLAYER_COLORS := [
 var game_state: Object
 var state: Dictionary = {}
 var board_view: Control
+var source_shell: Control
+var source_stock_panel: Control
+var legacy_interface_root: Control
 
 var seed_label: Label
 var map_identity_label: Label
@@ -144,6 +149,7 @@ var shop_balance_label: Label
 var shop_popup_list: VBoxContainer
 var shop_scroll: ScrollContainer
 var stocks_popup: PopupPanel
+var stocks_description_label: Label
 var company_popup: PopupPanel
 var trap_popup: PopupPanel
 var trap_prompt_label: Label
@@ -198,15 +204,20 @@ func _ready() -> void:
 	# absent or incomplete; tests can force either lane through the setter below.
 	_development_path_enabled = OS.is_debug_build()
 	_build_interface()
+	_build_source_shell()
 	_setup_audio()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
 	else:
 		_enter_unavailable_content_state()
+	if source_shell != null and source_shell.has_method("show_title"):
+		source_shell.call("show_title")
 
 func _process(_delta: float) -> void:
 	if _legacy_save_modal_open():
+		return
+	if _source_modal_open():
 		return
 	_maybe_schedule_ai_turn()
 
@@ -215,6 +226,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 			_cancel_legacy_save_load()
 		get_viewport().set_input_as_handled()
+		return
+	if _source_modal_open():
+		# Source title and stock controls own their local input.  Stop the
+		# legacy keyboard shortcuts from reaching the hidden adapter while a
+		# source surface is open; StockPanel still receives its _input() phase.
 		return
 	if _presentation_busy:
 		return
@@ -255,6 +271,7 @@ func _build_interface() -> void:
 	add_child(backdrop_glow)
 
 	var margins := MarginContainer.new()
+	legacy_interface_root = margins
 	margins.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	margins.add_theme_constant_override("margin_left", 22)
 	margins.add_theme_constant_override("margin_top", 18)
@@ -280,6 +297,162 @@ func _build_interface() -> void:
 	add_child(fate_popup)
 	fate_popup.visibility_changed.connect(_update_load_gate)
 	_build_end_overlay()
+
+func _build_source_shell() -> void:
+	var shell := GameShell.new()
+	shell.name = "SourceGameShell"
+	add_child(shell)
+	source_shell = shell
+	if shell.has_signal("start_requested"):
+		shell.start_requested.connect(_on_source_start_requested)
+		shell.load_requested.connect(_on_source_load_requested)
+		shell.save_requested.connect(_on_source_save_requested)
+		shell.option_requested.connect(_on_source_option_requested)
+		shell.help_requested.connect(_on_source_help_requested)
+		shell.ai_requested.connect(_on_source_ai_requested)
+		shell.map_requested.connect(_on_source_map_requested)
+		shell.inspect_requested.connect(_on_source_inspect_requested)
+		shell.tools_requested.connect(_on_source_tools_requested)
+		shell.cards_requested.connect(_on_source_cards_requested)
+		shell.sale_requested.connect(_on_source_sale_requested)
+		shell.stocks_requested.connect(_on_source_stocks_requested)
+		shell.roll_requested.connect(_on_source_roll_requested)
+		shell.buy_requested.connect(_on_source_buy_requested)
+		shell.upgrade_requested.connect(_on_source_upgrade_requested)
+		shell.end_turn_requested.connect(_on_source_end_turn_requested)
+		shell.route_requested.connect(_on_source_route_requested)
+		shell.minimap_pan_requested.connect(_on_source_minimap_pan_requested)
+		shell.minimap_node_requested.connect(_on_source_minimap_node_requested)
+	if shell.has_method("set_board_view"):
+		shell.call("set_board_view", board_view)
+	_build_source_stock_panel()
+	if legacy_interface_root != null:
+		legacy_interface_root.hide()
+
+func _build_source_stock_panel() -> void:
+	if source_shell == null:
+		return
+	var panel := StockPanel.new()
+	panel.name = "SourceStockPanel"
+	panel.hide()
+	panel.z_index = 20
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	canvas.add_child(panel)
+	panel.trade_requested.connect(_on_source_stock_trade_requested)
+	panel.closed.connect(_on_source_stock_closed)
+	source_stock_panel = panel
+
+func _on_source_stock_trade_requested(action: String, symbol: String, quantity: int) -> void:
+	if source_stock_panel == null or not source_stock_panel.visible:
+		return
+	var result := _invoke_game("choose_action", [action, {"symbol": symbol, "quantity": quantity}])
+	_append_local_log("股票交易：%s" % _result_text(result, "已送出交易指令。"))
+	_handle_result(result)
+	if source_stock_panel != null:
+		source_stock_panel.call("apply_trade_result", result, _active_map_definition)
+		if not _presentation_busy:
+			source_stock_panel.call("set_snapshot", state, _active_map_definition)
+
+func _on_source_stock_closed() -> void:
+	if source_stock_panel != null and source_stock_panel.visible:
+		return
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
+
+func _on_source_start_requested() -> void:
+	_on_new_game_pressed()
+
+func _on_source_load_requested() -> void:
+	_load_game()
+
+func _on_source_save_requested() -> void:
+	_save_game()
+
+func _on_source_option_requested() -> void:
+	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
+	_refresh_log_only()
+
+func _on_source_help_requested() -> void:
+	_append_local_log("說明功能將在後續原版指令頁接入。")
+	_refresh_log_only()
+
+func _on_source_ai_requested() -> void:
+	_append_local_log("託管功能將在後續原版指令頁接入。")
+	_refresh_log_only()
+
+func _on_source_map_requested() -> void:
+	if source_shell == null:
+		return
+	if source_shell.has_method("toggle_full_map_view"):
+		source_shell.call("toggle_full_map_view")
+	elif source_shell.has_method("toggle_map_view"):
+		source_shell.call("toggle_map_view")
+
+func _on_source_inspect_requested() -> void:
+	if source_shell != null and source_shell.has_method("open_player_inspector"):
+		source_shell.call("open_player_inspector")
+
+func _on_source_tools_requested() -> void:
+	_on_cards_pressed()
+
+func _on_source_cards_requested() -> void:
+	_on_cards_pressed()
+
+func _on_source_sale_requested() -> void:
+	_append_local_log("出售功能請從來源股市畫面操作；目前此指令保留待接入。")
+	_refresh_log_only()
+
+func _on_source_stocks_requested() -> void:
+	if source_stock_panel == null:
+		_on_stocks_pressed()
+		return
+	if not _has_original_companies():
+		_on_stocks_pressed()
+		return
+	if not _is_human_turn():
+		return
+	stocks_popup.hide()
+	if source_stock_panel.has_method("open_for"):
+		source_stock_panel.call("open_for", state, _active_map_definition)
+	else:
+		source_stock_panel.show()
+
+func _on_source_roll_requested() -> void:
+	_on_roll_pressed()
+
+func _on_source_buy_requested() -> void:
+	_on_buy_pressed()
+
+func _on_source_upgrade_requested() -> void:
+	_on_upgrade_pressed()
+
+func _on_source_end_turn_requested() -> void:
+	_on_end_turn_pressed()
+
+func _on_source_route_requested(next_index: int) -> void:
+	_on_route_selected(next_index)
+
+func _on_source_minimap_pan_requested(delta: Vector2) -> void:
+	if board_view != null and board_view.has_method("pan_by"):
+		board_view.call("pan_by", delta)
+	_refresh_source_minimap()
+
+func _on_source_minimap_node_requested(index: int) -> void:
+	if board_view == null:
+		return
+	if board_view.has_method("select_tile"):
+		board_view.call("select_tile", index)
+	if board_view.has_method("get_screen_position_for_index") and board_view.has_method("pan_by"):
+		var position: Vector2 = board_view.call("get_screen_position_for_index", index)
+		board_view.call("pan_by", board_view.size * 0.5 - position)
+	_refresh_source_minimap()
+
+
+func _refresh_source_minimap() -> void:
+	if source_shell != null and source_shell.has_method("refresh_minimap"):
+		source_shell.call("refresh_minimap")
 
 func _build_header() -> Control:
 	var panel := PanelContainer.new()
@@ -808,9 +981,10 @@ func _build_popups() -> void:
 	stocks_popup.min_size = Vector2i(760, 610)
 	var stocks_box := _popup_box(stocks_popup)
 	stocks_box.add_child(_make_label("股票市場", 19, TEXT_MAIN))
-	var stocks_description := _make_label("選擇股數後交易；公司市場從銀行存款扣款，市場供給與暫停狀態會限制買入。", 11, TEXT_MUTED)
-	stocks_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stocks_box.add_child(stocks_description)
+	stocks_description_label = _make_label("", 11, TEXT_MUTED)
+	stocks_description_label.name = "StocksDescription"
+	stocks_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stocks_box.add_child(stocks_description_label)
 	var stocks_scroll := ScrollContainer.new()
 	stocks_scroll.name = "StocksScroll"
 	stocks_scroll.custom_minimum_size = Vector2(0.0, 470.0)
@@ -1164,9 +1338,11 @@ func _update_setup_validation(show_message: bool) -> void:
 
 func _build_end_overlay() -> void:
 	end_overlay = ColorRect.new()
+	end_overlay.name = "SettlementOverlay"
 	end_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	end_overlay.color = Color(0.03, 0.08, 0.13, 0.84)
 	end_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	end_overlay.z_index = 100
 	add_child(end_overlay)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1193,9 +1369,11 @@ func _build_end_overlay() -> void:
 	end_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(end_detail)
 	var restart := _make_button("開始新局", _on_end_restart_pressed, true)
+	restart.name = "SettlementRestart"
 	restart.custom_minimum_size = Vector2(0.0, 48.0)
 	column.add_child(restart)
 	var close := _make_button("返回棋盤", _close_end_overlay)
+	close.name = "SettlementClose"
 	close.custom_minimum_size = Vector2(0.0, 38.0)
 	column.add_child(close)
 	end_overlay.hide()
@@ -1614,6 +1792,8 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_local_log.clear()
 		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
 	_refresh_from_state()
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 	end_overlay.hide()
 	_ai_pending = false
 	return true
@@ -1724,6 +1904,12 @@ func _save_game() -> void:
 func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
+func _source_modal_open() -> bool:
+	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
+	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
+	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
+	return title_open or stocks_open or inspect_open
+
 func _load_blocked_by_presentation() -> bool:
 	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
@@ -1782,6 +1968,8 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	if legacy_market:
 		_append_local_log("已讀取舊版開發存檔；目前使用舊版三股市模式。")
 	_refresh_from_state()
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 	end_overlay.hide()
 	_ai_pending = false
 
@@ -2255,6 +2443,7 @@ func _handle_result(result: Dictionary) -> void:
 			board_view.route_options = []
 			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
+			_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			board_view.play_movement(moves)
 			return
 	if result.is_empty():
@@ -2299,6 +2488,8 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 		state = snapshot.duplicate(true)
 	_adopt_map_from_snapshot(state)
 	_update_all()
+	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2338,11 +2529,34 @@ func _update_all() -> void:
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
 	_update_load_gate()
+	_sync_source_shell(phase, current_index)
+	_last_rendered_phase = phase
+
+func _sync_source_shell(phase: String, current_index: int) -> void:
+	if source_shell == null:
+		return
+	if source_shell.has_method("sync_snapshot"):
+		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
+	if source_shell.has_method("sync_action_state"):
+		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
+	if source_shell.has_method("set_toolbar_enabled"):
+		source_shell.call("set_toolbar_enabled", "help", false)
+		source_shell.call("set_toolbar_enabled", "options", false)
+		source_shell.call("set_toolbar_enabled", "ai", false)
+		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
+		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy)
+		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
+		source_shell.call("set_toolbar_enabled", "cards", false)
+		source_shell.call("set_toolbar_enabled", "tools", false)
+		source_shell.call("set_toolbar_enabled", "sale", false)
 	_last_rendered_phase = phase
 
 func _update_load_gate() -> void:
+	var enabled := not _load_blocked_by_presentation()
 	if load_button != null:
-		load_button.disabled = _load_blocked_by_presentation()
+		load_button.disabled = not enabled
+	if source_shell != null and source_shell.has_method("set_toolbar_enabled"):
+		source_shell.call("set_toolbar_enabled", "load", enabled)
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -2607,8 +2821,9 @@ func _update_actions(phase: String, current_index: int) -> void:
 				action_hint_label.text = "按%s回到道路並開始行動" % roll_button.text
 			else:
 				action_hint_label.text = "%s，按%s推進回合" % [_rest_status_label(rest_status), roll_button.text]
-	elif can_company_upgrade:
-		action_hint_label.text = "請先完成企業建設服務"
+	elif phase == "await_action" and (can_buy_company or can_company_upgrade or can_build or _has_action_option(action_options, "buy") or _has_action_option(action_options, "upgrade")):
+		var landing_hint := _landing_action_hint(action_options, _current_tile(), player)
+		action_hint_label.text = landing_hint if not landing_hint.is_empty() else "請處理目前格位"
 	elif _has_original_gods() and phase == "await_action" and (not rest_status.is_empty() or _as_array(state.get("last_roll", [])).is_empty()):
 		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
@@ -2667,6 +2882,7 @@ func _update_end_overlay(phase: String) -> void:
 	end_title.text = "本局結算"
 	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
 	end_overlay.show()
+	end_overlay.move_to_front()
 
 func _update_financial_popup() -> void:
 	if financial_popup == null: return
@@ -2750,6 +2966,8 @@ func _respond_to_trap(decline: bool) -> void:
 func _maybe_schedule_ai_turn() -> void:
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
+	if _source_modal_open():
+		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
@@ -2782,6 +3000,8 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 		return
 	_ai_pending = false
 	if _presentation_busy:
+		return
+	if _source_modal_open():
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
@@ -3054,6 +3274,10 @@ func _format_price(price: float) -> String:
 	return "$%.2f" % price
 
 
+func _stock_popup_description(is_company_market: bool) -> String:
+	return "選擇股數後交易；公司市場從銀行存款扣款，市場供給與暫停狀態會限制買入。" if is_company_market else "選擇股數後交易；舊版三股市使用現金，市場開放狀態與持股數量會限制買賣。"
+
+
 func _update_stocks_popup() -> void:
 	for child in stocks_popup_list.get_children():
 		child.free()
@@ -3063,6 +3287,8 @@ func _update_stocks_popup() -> void:
 	var symbols := _stock_symbols_for_ui()
 	var market_open := bool(market.get("open", true))
 	var is_company_market := _has_original_companies()
+	if stocks_description_label != null:
+		stocks_description_label.text = _stock_popup_description(is_company_market)
 	var account := int(player.get("deposit" if is_company_market else "cash", 0))
 	var account_name := "存款" if is_company_market else "現金"
 	var account_label := _make_label("%s：%s　·　持股為每檔獨立計算" % [account_name, _format_money(account)], 12, TEXT_GOLD)
@@ -3372,6 +3598,11 @@ func _current_player() -> Dictionary:
 	if index >= 0 and index < players.size() and players[index] is Dictionary:
 		return players[index]
 	return {"name": "玩家", "is_human": true, "cash": 0, "position": 0, "properties": [], "cards": []}
+
+func get_player_wealth(player_id: int) -> int:
+	if game_state != null and game_state.has_method("get_player_wealth"):
+		return int(game_state.call("get_player_wealth", player_id))
+	return 0
 
 func _current_tile() -> Dictionary:
 	var position := int(_current_player().get("position", 0))
@@ -3787,6 +4018,40 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	if tile.get("kind", "") == "facility":
 		return int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
 	return int(tile.get("cost", 0))
+
+func _landing_action_price(action: String, tile: Dictionary) -> int:
+	if game_state == null:
+		return -1
+	if action == "buy" and game_state.has_method("inventory_purchase_price"):
+		return int(game_state.call("inventory_purchase_price", tile))
+	if action == "upgrade":
+		var method_name := "_facility_upgrade_price" if str(tile.get("kind", "")) == "facility" else "_upgrade_price"
+		if game_state.has_method(method_name):
+			return int(game_state.call(method_name, tile))
+	return -1
+
+func _landing_action_hint(action_options: Array, tile: Dictionary, player: Dictionary) -> String:
+	var tile_name := str(tile.get("name", "目前格位"))
+	var company := _company_at_tile(tile)
+	if not company.is_empty():
+		tile_name = str(company.get("display_name", tile_name))
+	if _has_action_option(action_options, "buy_company"):
+		return "是否購買公司股份？\n%s · YES 確認／NO 放棄" % tile_name
+	if _has_action_option(action_options, "company_upgrade"):
+		return "是否進行企業建設？\n%s · YES 確認／NO 放棄" % tile_name
+	var facility_type_choice := _has_action_option(action_options, "build_facility")
+	if _has_action_option(action_options, "buy") and str(tile.get("kind", "")) == "facility":
+		facility_type_choice = facility_type_choice or (_has_original_gods() and int(player.get("god_id", 0)) in [3, 4] and int(tile.get("building_level", 0)) == 0)
+	if facility_type_choice:
+		return "是否選擇設施類型？\n%s · YES 確認／NO 放棄" % tile_name
+	var action := "buy" if _has_action_option(action_options, "buy") else "upgrade" if _has_action_option(action_options, "upgrade") else ""
+	if action.is_empty():
+		return ""
+	var verb := "購買" if action == "buy" else "升級"
+	var price := _landing_action_price(action, tile)
+	if price >= 0:
+		return "是否%s「%s」？\n價格 %s · YES 確認／NO 放棄" % [verb, tile_name, _format_money(price)]
+	return "是否%s「%s」？\n金額尚未取得 · YES 確認／NO 放棄" % [verb, tile_name]
 
 func _has_original_gods() -> bool:
 	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))

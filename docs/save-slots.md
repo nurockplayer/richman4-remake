@@ -74,3 +74,39 @@ MainUI 可用 `scan()` 建立六列 picker；選定 row 後保存 preview finger
 `GameState`，再沿用現有 `_load_blocked_by_presentation()`、legacy 三股市
 continue／cancel 與 presentation guard。這個 module 不會改動 live game、
 simulation 或 RNG，也不授權跳過既有 load guard。
+
+## SourceSavePanel 接線
+
+`game/ui/source_save_panel.gd` 是獨立的 640×480 來源構圖 picker。它只接收
+`SaveSlots.scan()` 的結果（或其中的 `slots` 陣列），不建立 `GameState`、不讀寫
+檔案，也不會把 snapshot 套用到目前棋局：
+
+```gdscript
+const SourceSavePanel = preload("res://game/ui/source_save_panel.gd")
+var picker := SourceSavePanel.new()
+picker.configure("Game", "load", storage.scan(), existing_visuals)
+```
+
+`existing_visuals` 是現有的 `OriginalVisuals` accessor；panel 不會自行建立
+filesystem-backed accessor。Game 使用 Data resource `479`，
+MultiverseJourney 使用 `520`；load 使用 chunk `0`（555×451），save 使用 chunk
+`1`（555×381）。save frame 的來源位置是 `(40,48)`，load frame 與 callback 對齊
+於 `(40,15)`；load rows 是 slot `0..5`，save rows 是 `1..5`，每列 72px，source
+callback 的 hit geometry 為 x `129..577`。
+
+```gdscript
+picker.slot_selected.connect(_on_slot_selected)
+picker.confirmed.connect(_on_slot_confirmed)
+picker.cancelled.connect(_on_slot_cancelled)
+picker.overwrite_confirmation_requested.connect(_on_overwrite_requested)
+```
+
+上述訊號都帶有 `slot_id`、該列 preview 的 `fingerprint` 與 preview 深拷貝。
+load 只允許 `valid` 列被選取；`empty`、`corrupt`、`invalid`、`unreadable` 會
+保留明確狀態並停用讀取。save 的既有列會先開啟 panel 內的來源風格覆寫確認，
+確認或返回都不會自行改變 previews。Data resource `2` 的肖像只在 preview
+提供已映射的 `portrait_chunk`、`player_character_ids` 或 player
+`character_id` 時透過 `OriginalVisuals.ui()` 取得，不以陣列位置猜測圖示順序。
+
+Presentation fidelity remains `UNACCEPTED` until a root render and fresh original
+comparison verify the combined screen.

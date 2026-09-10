@@ -99,10 +99,19 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	_expect(shell.action_strip.get_parent() == shell.game_screen, "context actions live on the board screen")
 	_expect(shell.roll_button.get_parent() == shell.action_strip and shell.roll_button.get_parent() != shell.hud_panel, "roll is a board-context action")
 	_expect(shell.buy_button.get_parent() == shell.action_strip and shell.upgrade_button.get_parent() == shell.action_strip and shell.end_turn_button.get_parent() == shell.action_strip, "landing actions share the board context strip")
+	_expect(shell.action_strip.find_child("ActionBackground", false, false) == null, "source actions do not mount a permanent navy scaffold")
 	for index in range(4):
 		var key: String = ["cash", "property", "stock", "other"][index]
 		var tab: Button = shell.tab_buttons[key]
-		_expect(tab.position == Vector2(176.0, float(index) * 42.0), "HUD tab %s follows the right edge" % key)
+		_expect(tab.position == Vector2(176.0, float(index) * 70.0), "HUD tab %s follows the source interval" % key)
+		_expect(tab.size == Vector2(24.0, 70.0), "HUD tab %s keeps a distinct source hit area" % key)
+		_expect(tab.text == ["資\n金", "地\n產", "股\n票", "其\n他"][index], "HUD tab %s renders both source label characters" % key)
+	if _source_assets_available(shell):
+		_expect(shell.cash_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_RIGHT, "source cash is right aligned beside the source icon")
+		_expect(shell.deposit_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_RIGHT and shell.wealth_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_RIGHT, "source deposit and wealth are right aligned")
+		_expect(shell.cash_label.position == Vector2(66.0, 96.0), "source cash value uses the source value row")
+		_expect(shell.cash_label.get_theme_color("font_color").v < 0.35, "source cash value uses dark ink on the pale panel")
+		_expect(str(shell.cash_label.text).begins_with("$"), "source cash value keeps visible dollar formatting")
 	var before_tabs: String = game.to_json()
 	for key in ["property", "stock", "other", "cash"]:
 		shell.select_tab(key)
@@ -114,6 +123,19 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	_expect(game.to_json() == before_calendar, "calendar toggle does not mutate simulation")
 	shell.toggle_map_view()
 	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "calendar toggle returns to the dated panel")
+	_expect(not shell.buy_button.visible and not shell.upgrade_button.visible and not shell.end_turn_button.visible, "non-landing source turn hides unrelated actions")
+	_expect(shell.roll_button.visible and shell.roll_button.text == "GO", "await-roll source turn exposes the bounded GO control")
+	game.state.phase = "await_action"
+	game.state.action_options = ["buy", "end_turn"]
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not shell.roll_button.visible and shell.buy_button.visible and shell.buy_button.text == "YES", "landing source turn exposes only the purchase YES control")
+	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "landing source turn exposes the decline NO control")
+	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
 
 
 func _test_stock_names(shell: Control) -> void:
@@ -135,6 +157,8 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	var points: Array[Vector2] = shell.minimap.call("_board_points")
 	var target_index: int = mini(2, points.size() - 1)
 	var before_pan: Vector2 = view.map_pan if view.get("map_pan") is Vector2 else Vector2.ZERO
+	var before_refresh := int(shell.minimap.get("_refresh_serial"))
+	var before_polygon: Array = shell.minimap.call("_viewport_polygon")
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
@@ -143,6 +167,9 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	click.pressed = false
 	shell.minimap._gui_input(click)
 	_expect(game.to_json() == before_state, "minimap click does not mutate simulation")
+	_expect(int(shell.minimap.get("_refresh_serial")) > before_refresh, "camera-only minimap selection requests a viewport redraw")
+	var after_polygon: Array = shell.minimap.call("_viewport_polygon")
+	_expect(after_polygon != before_polygon, "minimap viewport outline follows the changed board camera")
 	if view.has_method("pan_by"):
 		_expect(view.map_pan != before_pan, "minimap click pans the board view")
 	if target_index >= 0 and view.has_method("get_screen_position_for_index"):
@@ -174,7 +201,7 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	_expect(not shell.title_load_button.disabled, "source title load follows the open load gate")
 	shell.roll_button.pressed.emit()
 	_expect(ui.get("_presentation_busy") == true, "source roll starts the movement presentation")
-	_expect(shell.action_strip.visible, "source action strip stays visible during movement")
+	_expect(shell.action_strip.visible, "source GO remains visible as the active movement gate")
 	_expect(shell.roll_button.visible and shell.roll_button.disabled, "visible source roll is disabled during movement")
 	_expect(source_load != null and source_load.disabled, "visible source load is disabled during movement")
 	_expect(ui.load_button.disabled, "legacy load adapter shares the movement gate")
@@ -184,7 +211,7 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 		board._advance_movement(100.0)
 	_expect(ui.get("_presentation_busy") == false, "source movement finish clears the presentation lock")
 	_expect(source_load != null and not source_load.disabled, "visible source load re-enables after movement")
-	_expect(shell.roll_button.visible and shell.roll_button.disabled, "source roll remains visible and disabled while awaiting route")
+	_expect(not shell.roll_button.visible, "source GO hides once the turn awaits a route")
 	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() > 0, "visible source route choices appear after movement")
 	if shell.route_buttons.get_child_count() > 0:
 		var route: Button = shell.route_buttons.get_child(0) as Button

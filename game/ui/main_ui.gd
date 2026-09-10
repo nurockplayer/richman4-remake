@@ -433,6 +433,7 @@ func _on_source_route_requested(next_index: int) -> void:
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
+	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
 	if board_view == null:
@@ -442,6 +443,12 @@ func _on_source_minimap_node_requested(index: int) -> void:
 	if board_view.has_method("get_screen_position_for_index") and board_view.has_method("pan_by"):
 		var position: Vector2 = board_view.call("get_screen_position_for_index", index)
 		board_view.call("pan_by", board_view.size * 0.5 - position)
+	_refresh_source_minimap()
+
+
+func _refresh_source_minimap() -> void:
+	if source_shell != null and source_shell.has_method("refresh_minimap"):
+		source_shell.call("refresh_minimap")
 
 func _build_header() -> Control:
 	var panel := PanelContainer.new()
@@ -2522,7 +2529,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell.has_method("sync_snapshot"):
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
 	if source_shell.has_method("sync_action_state"):
-		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])))
+		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):
 		source_shell.call("set_toolbar_enabled", "help", false)
 		source_shell.call("set_toolbar_enabled", "options", false)

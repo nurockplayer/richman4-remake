@@ -24,6 +24,7 @@ var _source_scene: Dictionary = {}
 var _source_scene_texture: Texture2D
 var _dragging := false
 var _last_pointer := Vector2.ZERO
+var _refresh_serial := 0
 
 
 func _ready() -> void:
@@ -35,7 +36,7 @@ func _ready() -> void:
 
 func set_board_view(view: Control) -> void:
 	board_view = view
-	queue_redraw()
+	refresh_viewport()
 
 
 func set_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}) -> void:
@@ -43,6 +44,11 @@ func set_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}) -
 	map_definition = next_definition.duplicate(true)
 	_source_scene = _visuals.scene_for(map_definition)
 	_source_scene_texture = _visuals.texture(_source_scene.get("image", {}))
+	refresh_viewport()
+
+
+func refresh_viewport() -> void:
+	_refresh_serial += 1
 	queue_redraw()
 
 
@@ -61,7 +67,7 @@ func _gui_input(event: InputEvent) -> void:
 		_last_pointer = event.position
 		if delta.length_squared() > 0.0:
 			pan_requested.emit(-delta * 2.2)
-			queue_redraw()
+			refresh_viewport()
 		accept_event()
 
 

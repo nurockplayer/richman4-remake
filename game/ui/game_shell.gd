@@ -20,6 +20,10 @@ const TEXT_GOLD := Color("#f1d28a")
 const PANEL := Color("#172f3e")
 const PANEL_DARK := Color("#0d1d2b")
 const PANEL_BORDER := Color("#c8a356")
+const SOURCE_TEXT_MAIN := Color("#1b2a2c")
+const SOURCE_TEXT_MUTED := Color("#263b3d")
+const SOURCE_TEXT_MONEY := Color("#10191b")
+const SOURCE_TAB_TEXT := Color("#152428")
 
 signal start_requested
 signal load_requested
@@ -47,6 +51,7 @@ var reference_canvas: Control
 var title_screen: Control
 var game_screen: Control
 var toolbar: Control
+var board_view: Control
 var board_host: Control
 var hud_panel: Control
 var calendar_panel: Control
@@ -94,6 +99,7 @@ var _source_calendar_texture: Texture2D
 var _title_art: TextureRect
 var _hud_art: TextureRect
 var _calendar_art: TextureRect
+var _last_camera_signature := ""
 
 
 func _ready() -> void:
@@ -107,6 +113,10 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED and reference_canvas != null:
 		_layout_reference_canvas()
+
+
+func _process(_delta: float) -> void:
+	_refresh_minimap_if_camera_changed()
 
 
 func _build_reference_canvas() -> void:
@@ -290,6 +300,9 @@ func _build_hud() -> void:
 		border.size = Vector2(2.0, HUD_RECT.size.y)
 		border.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		hud_panel.add_child(border)
+	var hud_main_color := SOURCE_TEXT_MAIN if _source_hud_texture != null else TEXT_MAIN
+	var hud_muted_color := SOURCE_TEXT_MUTED if _source_hud_texture != null else TEXT_MUTED
+	var hud_money_color := SOURCE_TEXT_MONEY if _source_hud_texture != null else TEXT_GOLD
 	portrait = TextureRect.new()
 	portrait.name = "SourcePortrait"
 	portrait.position = Vector2(4.0, 4.0)
@@ -298,73 +311,77 @@ func _build_hud() -> void:
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_panel.add_child(portrait)
-	player_name_label = _hud_label("玩家", 15, Vector2(80.0, 8.0), Vector2(88.0, 24.0), TEXT_MAIN)
-	cash_caption = _hud_label("現金", 10, Vector2(28.0, 80.0), Vector2(140.0, 18.0), TEXT_MUTED)
-	cash_label = _hud_label("$0", 16, Vector2(28.0, 96.0), Vector2(140.0, 30.0), TEXT_GOLD)
-	deposit_caption = _hud_label("存款", 10, Vector2(28.0, 143.0), Vector2(140.0, 18.0), TEXT_MUTED)
-	deposit_label = _hud_label("$0", 16, Vector2(28.0, 159.0), Vector2(140.0, 30.0), TEXT_GOLD)
-	wealth_caption = _hud_label("總資產", 10, Vector2(28.0, 206.0), Vector2(140.0, 18.0), TEXT_MUTED)
-	wealth_label = _hud_label("$0", 16, Vector2(28.0, 222.0), Vector2(140.0, 30.0), TEXT_GOLD)
-	property_label = _hud_label("地產\n0 筆 · $0", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
+	player_name_label = _hud_label("玩家", 15, Vector2(80.0, 8.0), Vector2(88.0, 24.0), hud_main_color)
+	cash_caption = _hud_label("現金", 10, Vector2(28.0, 80.0), Vector2(140.0, 18.0), hud_muted_color)
+	cash_label = _hud_label("$0", 16, Vector2(66.0, 96.0), Vector2(106.0, 30.0), hud_money_color)
+	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	deposit_caption = _hud_label("存款", 10, Vector2(28.0, 143.0), Vector2(140.0, 18.0), hud_muted_color)
+	deposit_label = _hud_label("$0", 16, Vector2(66.0, 159.0), Vector2(106.0, 30.0), hud_money_color)
+	deposit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	wealth_caption = _hud_label("總資產", 10, Vector2(28.0, 206.0), Vector2(140.0, 18.0), hud_muted_color)
+	wealth_label = _hud_label("$0", 16, Vector2(66.0, 222.0), Vector2(106.0, 30.0), hud_money_color)
+	wealth_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	property_label = _hud_label("地產\n0 筆 · $0", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
 	property_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stock_label = _hud_label("股票\n0 股", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
+	stock_label = _hud_label("股票\n0 股", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
 	stock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stock_label.hide()
-	other_label = _hud_label("其他\n點券 0 · 卡片 0\n道具 0 種", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), TEXT_MAIN)
+	other_label = _hud_label("其他\n點券 0 · 卡片 0\n道具 0 種", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
 	other_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	other_label.hide()
-	var tab_names := {"cash": "資", "property": "產", "stock": "股", "other": "他"}
-	for index in range(tab_names.size()):
-		var key := str(tab_names.keys()[index])
-		var tab := _tab_button(str(tab_names[key]), key)
-		tab.position = Vector2(176.0, float(index) * 42.0)
-		tab.size = Vector2(24.0, 40.0)
+	var tab_entries := [["cash", "資\n金"], ["property", "地\n產"], ["stock", "股\n票"], ["other", "其\n他"]]
+	for index in range(tab_entries.size()):
+		var entry: Array = tab_entries[index]
+		var key := str(entry[0])
+		var tab := _tab_button(str(entry[1]), key)
+		tab.position = Vector2(176.0, float(index) * 70.0)
+		tab.size = Vector2(24.0, 70.0)
+		tab.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		tab.add_theme_font_size_override("font_size", 13)
+		var tab_text_color := SOURCE_TAB_TEXT if _source_hud_texture != null else Color("#263540")
+		tab.add_theme_color_override("font_color", tab_text_color)
+		tab.add_theme_color_override("font_hover_color", tab_text_color)
+		tab.add_theme_color_override("font_pressed_color", tab_text_color)
 		tab.pressed.connect(_select_tab.bind(key))
 		hud_panel.add_child(tab)
 		tab_buttons[key] = tab
 	action_strip = Control.new()
 	action_strip.name = "SourceActionStrip"
-	action_strip.position = Vector2(8.0, 398.0)
-	action_strip.size = Vector2(424.0, 76.0)
+	action_strip.position = Vector2(14.0, 350.0)
+	action_strip.size = Vector2(412.0, 116.0)
 	action_strip.mouse_filter = Control.MOUSE_FILTER_STOP
 	action_strip.hide()
 	game_screen.add_child(action_strip)
-	var action_background := ColorRect.new()
-	action_background.name = "ActionBackground"
-	action_background.color = Color(0.04, 0.12, 0.16, 0.88)
-	action_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	action_strip.add_child(action_background)
-	roll_button = _action_button("擲骰", "roll")
-	roll_button.position = Vector2(8.0, 7.0)
-	roll_button.size = Vector2(94.0, 29.0)
+	roll_button = _action_button("GO", "roll")
+	roll_button.position = Vector2(154.0, 9.0)
+	roll_button.size = Vector2(104.0, 34.0)
 	roll_button.pressed.connect(func() -> void: roll_requested.emit())
 	action_strip.add_child(roll_button)
-	buy_button = _action_button("購買", "buy")
-	buy_button.position = Vector2(108.0, 7.0)
-	buy_button.size = Vector2(120.0, 29.0)
+	buy_button = _action_button("YES", "buy")
+	buy_button.position = Vector2(92.0, 9.0)
+	buy_button.size = Vector2(104.0, 34.0)
 	buy_button.pressed.connect(func() -> void: buy_requested.emit())
 	action_strip.add_child(buy_button)
-	upgrade_button = _action_button("升級", "upgrade")
-	upgrade_button.position = Vector2(234.0, 7.0)
-	upgrade_button.size = Vector2(86.0, 29.0)
+	upgrade_button = _action_button("YES", "upgrade")
+	upgrade_button.position = Vector2(92.0, 9.0)
+	upgrade_button.size = Vector2(104.0, 34.0)
 	upgrade_button.pressed.connect(func() -> void: upgrade_requested.emit())
 	action_strip.add_child(upgrade_button)
-	end_turn_button = _action_button("結束", "end_turn")
-	end_turn_button.position = Vector2(326.0, 7.0)
-	end_turn_button.size = Vector2(90.0, 29.0)
+	end_turn_button = _action_button("NO", "end_turn")
+	end_turn_button.position = Vector2(216.0, 9.0)
+	end_turn_button.size = Vector2(104.0, 34.0)
 	end_turn_button.pressed.connect(func() -> void: end_turn_requested.emit())
 	action_strip.add_child(end_turn_button)
-	action_hint_label = _label("等待棋局", 10, TEXT_MUTED)
+	action_hint_label = _label("等待棋局", 11, TEXT_MAIN)
 	action_hint_label.name = "SourceActionHint"
-	action_hint_label.position = Vector2(8.0, 41.0)
-	action_hint_label.size = Vector2(408.0, 26.0)
+	action_hint_label.position = Vector2(8.0, 52.0)
+	action_hint_label.size = Vector2(396.0, 50.0)
 	action_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	action_strip.add_child(action_hint_label)
 	route_buttons = HBoxContainer.new()
 	route_buttons.name = "SourceRouteChoices"
-	route_buttons.position = Vector2(8.0, 7.0)
-	route_buttons.size = Vector2(408.0, 29.0)
+	route_buttons.position = Vector2(8.0, 9.0)
+	route_buttons.size = Vector2(396.0, 34.0)
 	route_buttons.add_theme_constant_override("separation", 3)
 	route_buttons.hide()
 	action_strip.add_child(route_buttons)
@@ -488,6 +505,7 @@ func set_board_view(view: Control) -> void:
 	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if minimap != null and minimap.has_method("set_board_view"):
 		minimap.call("set_board_view", view)
+	_refresh_minimap_if_camera_changed(true)
 
 
 func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, player_wealth: int = -1) -> void:
@@ -500,10 +518,11 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 		minimap.call("set_snapshot", snapshot, map_definition)
 
 
-func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String, buy_disabled: bool, upgrade_text: String, upgrade_disabled: bool, end_disabled: bool, hint: String, routes: Array = []) -> void:
+func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String, buy_disabled: bool, upgrade_text: String, upgrade_disabled: bool, end_disabled: bool, hint: String, routes: Array = [], phase: String = "", action_options: Array = []) -> void:
 	if roll_button == null:
 		return
 	roll_button.text = roll_text
+	roll_button.tooltip_text = roll_text
 	roll_button.disabled = roll_disabled
 	buy_button.text = buy_text
 	buy_button.disabled = buy_disabled
@@ -511,10 +530,23 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	upgrade_button.disabled = upgrade_disabled
 	end_turn_button.disabled = end_disabled
 	action_hint_label.text = hint
-	roll_button.visible = true
-	buy_button.visible = true
-	upgrade_button.visible = true
-	end_turn_button.visible = true
+	if phase.is_empty():
+		phase = "await_route" if not routes.is_empty() else "await_roll"
+	var can_buy := action_options.has("buy") or action_options.has("buy_company")
+	var can_upgrade := action_options.has("upgrade") or action_options.has("build_facility") or action_options.has("company_upgrade")
+	var can_end := action_options.has("end_turn")
+	roll_button.visible = phase == "await_roll"
+	buy_button.visible = phase == "await_action" and can_buy
+	upgrade_button.visible = phase == "await_action" and can_upgrade and not can_buy
+	end_turn_button.visible = phase == "await_action" and can_end
+	if roll_button.visible:
+		roll_button.text = "GO"
+	if buy_button.visible or upgrade_button.visible:
+		buy_button.text = "YES" if buy_button.visible else buy_text
+		upgrade_button.text = "YES" if upgrade_button.visible else upgrade_text
+		end_turn_button.text = "NO"
+	else:
+		end_turn_button.text = "結束"
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()
@@ -524,12 +556,26 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 		route.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
-	route_buttons.visible = not routes.is_empty()
-	# Keep the board-context controls mounted while a movement or event
-	# presentation is running.  Their disabled state is the visible gate, so
-	# the source surface cannot appear to lose the active turn controls while
-	# the legacy adapter is temporarily blocked.
-	action_strip.visible = true
+	route_buttons.visible = phase == "await_route" and not routes.is_empty()
+	action_hint_label.visible = phase in ["await_roll", "await_action", "await_route"] and (roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible)
+	action_strip.visible = roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible
+
+
+func refresh_minimap() -> void:
+	if minimap != null and minimap.has_method("refresh_viewport"):
+		minimap.call("refresh_viewport")
+
+
+func _refresh_minimap_if_camera_changed(force := false) -> void:
+	if minimap == null or board_view == null or not board_view.has_method("get_camera_state"):
+		return
+	var camera: Variant = board_view.call("get_camera_state")
+	if not camera is Dictionary:
+		return
+	var signature := "%s|%s|%s|%s" % [camera.get("pan", Vector2.ZERO), camera.get("zoom", 1.0), camera.get("rotation", 0.0), camera.get("viewport_size", Vector2.ZERO)]
+	if force or signature != _last_camera_signature:
+		_last_camera_signature = signature
+		refresh_minimap()
 
 
 func set_toolbar_enabled(key: String, enabled: bool) -> void:

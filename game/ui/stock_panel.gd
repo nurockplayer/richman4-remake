@@ -630,7 +630,7 @@ func _refresh_detail() -> void:
 		["經營者", owner],
 	]
 	for index in range(left_fields.size()):
-		_detail_root.add_child(_detail_label("DetailLeft%d" % index, "%s\n%s" % [left_fields[index][0], left_fields[index][1]], Vector2(112, 103 + index * 36), Vector2(145, 34), TEXT_LIGHT, 11))
+		_detail_root.add_child(_detail_label("DetailLeft%d" % index, "%s\n%s" % [left_fields[index][0], left_fields[index][1]], Vector2(132, 103 + index * 36), Vector2(145, 34), TEXT_LIGHT, 11))
 	var right_fields := [
 		["成交價", format_price(price)],
 		["交易量", str(int(row.get("turn_supply", -1))) if row.has("turn_supply") else "—"],
@@ -643,7 +643,9 @@ func _refresh_detail() -> void:
 	]
 	for index in range(right_fields.size()):
 		_detail_root.add_child(_detail_label("DetailRight%d" % index, "%s\n%s" % [right_fields[index][0], right_fields[index][1]], Vector2(399, 99 + index * 29), Vector2(150, 28), TEXT_LIGHT, 10))
-	_detail_root.add_child(_detail_label("DetailPieTitle", "持股比例", Vector2(440, 327), Vector2(100, 18), TEXT_LIGHT, 10))
+	var pie_title := _detail_label("DetailPieTitle", "持股比例", Vector2(440, 407), Vector2(130, 18), TEXT_LIGHT, 10)
+	pie_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_detail_root.add_child(pie_title)
 	if int(row.get("suspension", 0)) > 0:
 		_status_label.text = "暫停交易 %d 天" % int(row.get("suspension", 0))
 

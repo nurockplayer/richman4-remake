@@ -101,6 +101,14 @@ func run() -> void:
 	var rotation_text := OS.get_environment("BOARD_CAMERA_CAPTURE_ROTATION")
 	if rotation_text.is_valid_float():
 		capture_rotation = float(rotation_text)
+	var facing_direction := -1
+	var facing_text := OS.get_environment("BOARD_CAMERA_CAPTURE_FACING_DIRECTION")
+	if not facing_text.is_empty():
+		if not facing_text.is_valid_int() or int(facing_text) < 0 or int(facing_text) >= 8:
+			push_error("BOARD_CAMERA_CAPTURE_FACING_DIRECTION must be an integer from 0 through 7")
+			quit(2)
+			return
+		facing_direction = int(facing_text)
 	if catalog_path.is_empty() or scene_manifest_path.is_empty() or capture_path.is_empty() or capture_head.is_empty():
 		push_error("RICHMAN4_MAP_CATALOG, RICHMAN4_SCENE_MANIFEST, BOARD_CAMERA_CAPTURE_PATH, and BOARD_CAMERA_CAPTURE_HEAD are required")
 		quit(2)
@@ -162,6 +170,11 @@ func run() -> void:
 	board.set_game_data(definition.board, players, 0, definition)
 	if not is_zero_approx(capture_rotation):
 		board.set_map_rotation(capture_rotation)
+	if facing_direction >= 0:
+		# Seed a stationary fixture with a known world-facing direction while
+		# preserving the idle camera and simulation state for visual comparison.
+		board.play_movement([{"player_id": 0, "from": capture_position, "to": capture_position, "direction": facing_direction}], 1.0)
+		board.cancel_movement()
 	await process_frame
 	await process_frame
 	await process_frame
@@ -190,6 +203,7 @@ func run() -> void:
 			"phase": "idle",
 			"capture_position": capture_position,
 			"capture_rotation": capture_rotation,
+			"facing_direction": facing_direction,
 			"current_player_index": 0,
 			"players": players,
 			"viewport_size": [viewport.size.x, viewport.size.y],

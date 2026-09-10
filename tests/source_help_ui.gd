@@ -36,6 +36,9 @@ func run() -> void:
 	check(panel != null and panel.visible and panel.has_method("is_model_valid"), "help uses the real presenter including its explicit unavailable state")
 	if not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
 		check(panel.is_model_valid() and panel.view_model().get("edition") == "Game", "supplied help bundle must present valid Game content")
+	if not OS.get_environment("RICHMAN4_SCENE_MANIFEST").is_empty() and not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
+		check(panel.source_art_available(), "supplied Game help art must resolve")
+	await inspect_help(panel, "Game")
 	check(ui._source_modal_open() and ui._load_blocked_by_presentation(), "help participates in modal and load guards")
 	check(game.to_json() == before, "opening help preserves the full ledger and RNG")
 	ui._on_source_help_requested()
@@ -79,6 +82,9 @@ func run() -> void:
 	check(controller.current_edition() == "MultiverseJourney", "help content follows the adopted edition")
 	if not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
 		check(controller.help_panel.is_model_valid() and controller.help_panel.view_model().get("edition") == "MultiverseJourney", "supplied help bundle must present valid replacement edition content")
+	if not OS.get_environment("RICHMAN4_SCENE_MANIFEST").is_empty() and not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
+		check(controller.help_panel.source_art_available(), "supplied expansion help art must resolve")
+	await inspect_help(controller.help_panel, "MultiverseJourney")
 	controller.cancel()
 	viewport.queue_free()
 	await settle()
@@ -90,3 +96,7 @@ func _controller(ui: Control) -> Control:
 		if property.name == "source_help_controller":
 			return ui.get("source_help_controller")
 	return null
+
+func inspect_help(_panel: Control, _edition: String) -> void:
+	# Private native capture subclasses can inspect the real public-entry panel.
+	pass

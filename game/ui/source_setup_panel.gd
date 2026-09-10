@@ -95,6 +95,8 @@ func collect_options() -> Dictionary:
 			humans += 1
 	if humans == 0:
 		return {"ok": false, "message": "至少需要一位真人玩家。"}
+	if _land_tenure != null and _land_tenure.get_selected_id() != 0:
+		return {"ok": false, "message": "土地期限功能尚未由核心支援；請選擇無限期。"}
 	if _selected_map.is_empty():
 		return {"ok": false, "message": "尚未選擇可用地圖。"}
 	return {"ok": true, "options": {
@@ -220,9 +222,16 @@ func _build_surface() -> void:
 	_land_tenure.set_item_text(0, "無限")
 	for index in range(1, _land_tenure.item_count):
 		_land_tenure.set_item_text(index, "%d月" % LAND_TENURE[index])
+		_land_tenure.set_item_disabled(index, true)
+	_land_tenure.tooltip_text = "土地期限：核心功能待接入，目前僅支援無限期。"
 	_year = _spin(settings, "StartYear", 1998, 9999, 1998, Vector2(7, 126))
 	_month = _spin(settings, "StartMonth", 1, 12, 1, Vector2(62, 126))
 	_day = _spin(settings, "StartDay", 1, 31, 1, Vector2(117, 126))
+	var pending := _label("土地期限：核心待接入（無限期）", 8, INK)
+	pending.name = "LandTenurePending"
+	pending.position = Vector2(7, 150)
+	pending.size = Vector2(160, 18)
+	settings.add_child(pending)
 	_error = _label("", 9, Color("#b83d3d"))
 	_error.position = Vector2(12, 436)
 	_error.size = Vector2(420, 20)

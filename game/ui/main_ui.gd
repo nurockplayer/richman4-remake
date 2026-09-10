@@ -1270,7 +1270,7 @@ func _setup_options_from_state() -> Dictionary:
 		if not player is Dictionary or not player.has("character_id"):
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
-	return {
+	var options := {
 		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
@@ -1287,6 +1287,19 @@ func _setup_options_from_state() -> Dictionary:
 		"start_date": {"year": int(start_date.get("year", 0)), "month": int(start_date.get("month", 0)), "day": int(start_date.get("day", 0))},
 		"character_ids": character_ids,
 	}
+	var initial_flags: Variant = state.get("initial_human_flags", null)
+	if initial_flags is Array and initial_flags.size() == player_count:
+		var flags_valid := true
+		for flag in initial_flags:
+			if typeof(flag) != TYPE_BOOL:
+				flags_valid = false
+				break
+		if flags_valid:
+			options["human_flags"] = initial_flags.duplicate()
+	var initial_vehicle: Variant = state.get("initial_vehicle", null)
+	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
+		options["initial_vehicle"] = initial_vehicle
+	return options
 
 func _populate_setup_controls() -> void:
 	var player_count := int(_as_array(state.get("players", [])).size())
@@ -1810,13 +1823,15 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	var effective_setup := setup_options.duplicate(true)
 	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
 		effective_setup = _default_setup_options(resolved_players, selected_definition)
+	if effective_setup.has("land_tenure_months") and int(effective_setup.get("land_tenure_months", 0)) != 0:
+		_append_local_log("土地期限功能尚未由核心支援；請選擇無限期。")
+		_refresh_log_only()
+		return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var engine_setup := effective_setup.duplicate(true)
-	# Source setup has a richer presentation contract than the current core;
-	# keep UI-only player controls out of the core's strict setup validator.
-	engine_setup.erase("player_types")
-	engine_setup.erase("human_flags")
-	engine_setup.erase("initial_vehicle")
+	# Land tenure is displayed as a bounded pending option until the core
+	# contract lands. Zero is the current infinite-tenure default and is omitted
+	# explicitly so the strict factory does not mistake it for implemented input.
 	engine_setup.erase("land_tenure_months")
 	var candidate: Variant = null
 	if state_script != null:
@@ -1835,7 +1850,6 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	else:
 		_cancel_presentation()
 		game_state = candidate
-		_apply_source_player_types(candidate, setup_options)
 		_active_map_definition = selected_definition
 		_local_log.clear()
 		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
@@ -1845,14 +1859,6 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	end_overlay.hide()
 	_ai_pending = false
 	return true
-
-func _apply_source_player_types(candidate: Object, setup_options: Dictionary) -> void:
-	var flags: Variant = setup_options.get("human_flags", [])
-	if not flags is Array or not candidate.has_method("set_player_ai"):
-		return
-	for index in range(mini(flags.size(), int(setup_options.get("character_ids", []).size()))):
-		candidate.call("set_player_ai", index, not bool(flags[index]))
-
 func _setup_audio() -> void:
 	var audio_script: Variant = load("res://game/platform/original_audio.gd")
 	if audio_script == null:

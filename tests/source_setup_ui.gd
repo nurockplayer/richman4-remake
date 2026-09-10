@@ -48,7 +48,40 @@ func _run() -> void:
 		_expect(setup.find_child("InitialFund", true, false) != null, "source setup keeps the initial fund selector")
 		_expect(setup.find_child("DayLimit", true, false) != null, "source setup keeps the game time selector")
 		_expect(setup.find_child("WealthTarget", true, false) != null, "source setup keeps the victory target selector")
+		_expect(setup.find_child("InitialVehicle", true, false) != null, "source setup exposes the initial vehicle selector")
+		_expect(setup.find_child("LandTenure", true, false) != null, "source setup exposes the bounded land-tenure status")
 		_expect(setup.find_child("OK", true, false) != null and setup.find_child("EXIT", true, false) != null, "source setup has OK and EXIT controls")
+		var land_tenure := setup.find_child("LandTenure", true, false) as OptionButton
+		_expect(land_tenure != null and land_tenure.get_popup().is_item_disabled(1), "unsupported nonzero land tenure choices are visibly disabled")
+		if land_tenure != null:
+			land_tenure.select(1)
+			var blocked_tenure: Dictionary = setup.call("collect_options")
+			_expect(not bool(blocked_tenure.get("ok", false)), "unsupported nonzero land tenure cannot be silently discarded")
+			land_tenure.select(0)
+		var before_cancel: String = ui.game_state.to_json() if ui.game_state != null else JSON.stringify(ui.state)
+		setup.call("cancel")
+		await process_frame
+		_expect(not bool(shell.call("is_setup_visible")), "EXIT closes the source setup panel")
+		_expect((ui.game_state.to_json() if ui.game_state != null else JSON.stringify(ui.state)) == before_cancel, "cancel leaves the current match unchanged")
+		ui._on_source_start_requested()
+		await process_frame
+		var confirmed_options: Dictionary = ui._default_setup_options(3, ui._active_map_definition)
+		confirmed_options["character_ids"] = [0, 1, 2]
+		confirmed_options["human_flags"] = [true, true, false]
+		confirmed_options["initial_vehicle"] = "car"
+		ui._on_source_setup_confirmed(confirmed_options, ui._active_map_definition)
+		await process_frame
+		var players: Array = ui.state.get("players", [])
+		_expect(players.size() == 3, "source setup confirmation creates the requested player count")
+		if players.size() == 3:
+			_expect(bool(players[0].get("is_human", false)) and bool(players[1].get("is_human", false)) and bool(players[2].get("is_ai", false)), "source setup confirmation preserves selected human and AI controls")
+			_expect(int(players[0].get("cash", 0)) == 100000 and int(players[0].get("deposit", 0)) == 100000 and int(players[1].get("cash", 0)) == 100000 and int(players[1].get("deposit", 0)) == 100000, "source setup confirmation gives each selected human equal opening cash and deposit")
+			_expect(int(players[2].get("cash", 0)) == 140000 and int(players[2].get("deposit", 0)) == 60000, "source setup confirmation preserves the computer character cash ratio")
+			_expect(players.all(func(player: Dictionary) -> bool: return str(player.get("vehicle", "")) == "car" and int(player.get("dice_count", 0)) == 3), "source setup confirmation applies the selected vehicle and dice")
+			_expect(int(ui.state.get("inventory_supply", {}).get("tools", {}).get("汽車", -1)) == 7 and players.all(func(player: Dictionary) -> bool: return int(player.get("tools", {}).get("汽車", 0)) == 0), "source setup confirmation deducts equipped cars once from the shared supply")
+			_expect(int(ui.state.get("bank", {}).get("deposits", -1)) == int(players[0].get("deposit", 0)) + int(players[1].get("deposit", 0)) + int(players[2].get("deposit", 0)), "source setup confirmation keeps bank deposits authoritative")
+			var restart_options: Dictionary = ui._setup_options_from_state()
+			_expect(restart_options.get("human_flags", []) == [true, true, false] and restart_options.get("initial_vehicle", "") == "car", "restart setup defaults preserve the selected source controls")
 	ui.queue_free()
 	await create_timer(0.1).timeout
 	print("Source setup UI checks: %d, failures: %d" % [checks, failures])

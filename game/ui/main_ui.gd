@@ -563,6 +563,7 @@ func _build_popups() -> void:
 	auction_popup = AuctionPresentation.new()
 	add_child(auction_popup)
 	auction_popup.answered.connect(_respond_to_auction)
+	auction_popup.visibility_changed.connect(_update_load_gate)
 	new_game_popup = _make_popup(Vector2i(760, 680))
 	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
@@ -1709,7 +1710,7 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _load_blocked_by_presentation() -> bool:
-	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible)
+	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")

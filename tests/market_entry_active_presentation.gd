@@ -87,6 +87,36 @@ func _test_news_and_fate_load_guards(ui: Control, load_path: String) -> void:
 		presentation.hide()
 
 
+func _test_auction_load_guard(ui: Control, load_path: String) -> void:
+	var game := _human_game(ui, 61203)
+	game.state.current_player = 0
+	game.state.phase = "await_action"
+	game.state.pending_auction = {
+		"caster_id": 1,
+		"bidder_id": 0,
+		"node_id": 1,
+		"opening_bid": 100,
+		"current_bid": 100,
+		"highest_bidder_id": -1,
+		"withdrawn": [],
+	}
+	game._sync_state()
+	ui._refresh_from_state()
+	var before_core: String = game.to_json()
+	var before_ui: Dictionary = ui.state.duplicate(true)
+	_expect(ui.auction_popup.visible, "human auction response is visible before blocked load")
+	_expect(ui.load_button.disabled, "human auction response disables load")
+	ui._load_game_from_path(load_path)
+	_expect(game.to_json() == before_core, "load during human auction leaves the current core unchanged")
+	_expect(ui.state == before_ui, "load during human auction leaves the current UI snapshot unchanged")
+	_expect(ui.auction_popup.visible, "blocked load preserves the human auction response")
+	_expect(not ui.legacy_save_dialog.visible, "blocked auction load does not open a legacy choice modal")
+	game.state.erase("pending_auction")
+	game._sync_state()
+	ui._cancel_presentation()
+	ui._refresh_from_state()
+
+
 func _run() -> void:
 	var ui: Control = MainScene.instantiate()
 	root.add_child(ui)
@@ -100,6 +130,7 @@ func _run() -> void:
 	_write_snapshot(load_path, valid_snapshot)
 	_test_movement_load_guard(ui, load_path)
 	_test_news_and_fate_load_guards(ui, load_path)
+	_test_auction_load_guard(ui, load_path)
 	_remove_snapshot(load_path)
 	ui.queue_free()
 	await create_timer(0.15).timeout

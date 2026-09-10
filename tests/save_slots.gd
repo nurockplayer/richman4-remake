@@ -2,6 +2,8 @@ extends SceneTree
 
 const GameState = preload("res://game/core/game_state.gd")
 const SaveSlotsScript = preload("res://game/platform/save_slots.gd")
+const NewsFixture = preload("res://tests/fixtures/news_fixture.gd")
+const FateFixture = preload("res://tests/fixtures/fate_fixture.gd")
 
 var checks := 0
 var failures := 0
@@ -85,6 +87,7 @@ func _initialize() -> void:
 	_test_valid_round_trip_and_rng_continuation()
 	_test_five_independent_slots()
 	_test_readonly_default()
+	_test_existing_supported_migrations()
 	_test_malformed_ids_and_payloads()
 	_test_stale_fingerprint_protection()
 	_test_read_expected_fingerprint_protection()
@@ -229,6 +232,50 @@ func _test_readonly_default() -> void:
 	var slot_write: Dictionary = store.write(1, _game(11888).to_dict(), "")
 	expect(bool(slot_write.get("ok", false)), "writable row still succeeds beside default")
 	expect_equal(_bytes(_default_path), original_bytes, "writing a dedicated slot never changes default bytes")
+
+
+func _test_existing_supported_migrations() -> void:
+	_clear_slots()
+	var store := _store()
+	for entry in [["news", "unsupported"], ["fate", "unsupported"], ["fate", "rest"]]:
+		var game: Object = NewsFixture.new_game() if entry[0] == "news" else FateFixture.new_game()
+		expect(game != null, "migration fixture constructs")
+		if game == null:
+			continue
+		var old: Dictionary = game.to_dict()
+		old.board.back().kind = entry[1]
+		var old_text := JSON.stringify(old)
+		var canonical: Object = GameState.from_dict(JSON.parse_string(old_text))
+		expect(canonical != null, "existing core supports the migration")
+		expect(not GameState.validate_save(old).get("ok", false), "raw predecessor requires existing migration")
+		if canonical == null:
+			continue
+		var normalized: Dictionary = JSON.parse_string(canonical.to_json())
+		for slot_id in [0, 1]:
+			_write_raw(store.slot_path(slot_id), old_text)
+			var original_bytes := _bytes(store.slot_path(slot_id))
+			var preview: Dictionary = store.preview(slot_id)
+			expect_equal(preview.get("status"), SaveSlotsScript.STATUS_VALID, "supported predecessor is a valid picker row")
+			var fingerprint := str(preview.get("fingerprint", ""))
+			expect_equal(fingerprint, old_text.sha256_text(), "migration preview fingerprint describes original disk bytes")
+			var read: Dictionary = store.read(slot_id, fingerprint)
+			expect_equal(read.get("status"), SaveSlotsScript.STATUS_VALID, "supported predecessor can be selected and read")
+			var snapshot: Dictionary = read.get("snapshot", {})
+			expect_equal(JSON.parse_string(JSON.stringify(snapshot)), normalized, "read returns the existing core's canonical migrated snapshot")
+			expect(GameState.validate_save(snapshot).get("ok", false), "returned migrated snapshot passes strict validation")
+			expect_equal(snapshot.get("version"), old.get("version"), "read preserves save capability version for legacy decision")
+			expect_equal(snapshot.get("rng_state_text"), old.get("rng_state_text"), "read migration preserves RNG continuation")
+			expect_equal(_bytes(store.slot_path(slot_id)), original_bytes, "preview and read never rewrite the original file")
+			if read.get("ok", false):
+				var written: Dictionary = store.write(5, snapshot)
+				expect_equal(written.get("status"), SaveSlotsScript.STATUS_WRITTEN, "explicitly saving the normalized candidate succeeds")
+				expect_equal(JSON.parse_string(FileAccess.get_file_as_string(store.slot_path(5))), normalized, "explicit write stores the normalized candidate")
+		var forged := old.duplicate(true)
+		forged.board.back().kind = "property"
+		_write_raw(store.slot_path(2), JSON.stringify(forged))
+		expect_equal(store.preview(2).get("status"), SaveSlotsScript.STATUS_INVALID, "unrelated forged classification is not migrated")
+		expect(not store.read(2).has("snapshot"), "invalid source classification never exposes a snapshot")
+		expect_equal(JSON.stringify(old), old_text, "migration leaves caller snapshot unchanged")
 
 
 func _test_malformed_ids_and_payloads() -> void:

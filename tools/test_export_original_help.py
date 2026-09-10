@@ -491,6 +491,17 @@ class SourceProvenanceValidateTests(HelpBundleTestCase):
         with self.assertRaises(DecodeError):
             exporter.validate(self.index_path, source_root=self.root)
 
+    def test_source_root_rejects_rewritten_pages_with_recomputed_content_digest(self) -> None:
+        edition = read_json(self.content)
+        topic = edition["sections"][0]["topics"][0]
+        topic["pages"][0][0] = "rewritten synthetic line"
+        topic["payload_sha256"] = canonical_payload(topic["pages"])
+        write_json(self.content, edition)
+        sync_sha(self.index_path, "Game")
+        exporter.validate(self.index_path)
+        with self.assertRaises(DecodeError):
+            exporter.validate(self.index_path, source_root=self.root)
+
     def test_source_root_accepts_the_unmodified_export(self) -> None:
         exporter.validate(self.index_path, source_root=self.root)
 

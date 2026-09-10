@@ -44,7 +44,7 @@ func run() -> void:
 		await create_timer(0.01).timeout
 	if not focused():
 		record("STARTUP_FOCUS_UNAVAILABLE")
-		finish("PRECONDITION_UNMET: no actual OS focus",2)
+		await finish("PRECONDITION_UNMET: no actual OS focus",2)
 		return
 	record("REAL_FOCUS_ESTABLISHED")
 	for pressed in [true,false]:
@@ -61,14 +61,14 @@ func run() -> void:
 	while Time.get_ticks_msec()<deadline:
 		if not focused():
 			record("REAL_FOCUS_LOST")
-			finish("PRECONDITION_UNMET: focus left during observation",2)
+			await finish("PRECONDITION_UNMET: focus left during observation",2)
 			return
 		seen_on = seen_on or panel.pending_blink_visible()
 		seen_off = seen_off or not panel.pending_blink_visible()
 		await create_timer(0.01).timeout
 	record("OBSERVATION_END")
-	var passed := panel.get("_editing_slot")==8 and bool(panel.get("_application_active")) and seen_on and seen_off
-	finish("PASS: real focused native timer showed both phases" if passed else "FAIL: focused native edit did not show both phases",0 if passed else 1)
+	var passed: bool = panel.get("_editing_slot")==8 and bool(panel.get("_application_active")) and seen_on and seen_off
+	await finish("PASS: real focused native timer showed both phases" if passed else "FAIL: focused native edit did not show both phases",0 if passed else 1)
 
 func finish(result: String, code: int) -> void:
 	print("HOTKEY_FOCUS_AUDIT ",JSON.stringify(trace))

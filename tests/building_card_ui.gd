@@ -52,6 +52,21 @@ func run() -> void:
 	game._recalculate_property_values()
 	game._set_action_options(0)
 	ui._refresh_from_state()
+	# The current 440x440 source viewport is laid out on the next frame.  Put
+	# the initial building-card target in view through the public camera API so
+	# this test exercises card selection rather than the visibility filter.
+	await process_frame
+	var initial_camera_state: Dictionary = ui.board_view.get_camera_state()
+	var initial_tile: Dictionary = game.state.board[1]
+	var monster_tile: Dictionary = game.state.board[7]
+	var target_world := Vector2(float(initial_tile.get("x", 0)), float(initial_tile.get("y", 0)))
+	var monster_world := Vector2(float(monster_tile.get("x", 0)), float(monster_tile.get("y", 0)))
+	var target_midpoint := (target_world + monster_world) * 0.5
+	ui.board_view.set_zoom(0.55)
+	var initial_target_screen: Vector2 = ui.board_view.map_to_screen(target_midpoint)
+	var initial_viewport_size: Vector2 = initial_camera_state.get("viewport_size", Vector2.ZERO)
+	ui.board_view.pan_by(initial_viewport_size * 0.5 - initial_target_screen)
+	await process_frame
 	ui._on_cards_pressed()
 	for card in ["天使", "惡魔", "怪獸"]:
 		var button: Button = ui.cards_popup.find_child("UseCard_" + card, true, false)
@@ -98,6 +113,15 @@ func run() -> void:
 	await process_frame
 	expect(game.state.board[7].building_level == 0 and game.state.board[7].owner == 1, "actual monster button destroys building and preserves landlord")
 	expect(game.state.board[8].building_level == 0, "monster updates facility alias")
+	# Return the source camera to the current player's facility before opening
+	# the demon picker; building-card targets are intentionally limited to the
+	# visible 440x440 board region.
+	var own_target: Dictionary = game.state.board[1]
+	var own_world := Vector2(float(own_target.get("x", 0)), float(own_target.get("y", 0)))
+	var own_screen: Vector2 = board_camera.map_to_screen(own_world)
+	var own_viewport_size: Vector2 = board_camera.get_camera_state().get("viewport_size", Vector2.ZERO)
+	board_camera.pan_by(own_viewport_size * 0.5 - own_screen)
+	await process_frame
 	ui._on_cards_pressed()
 	target = ui.cards_popup.find_child("Target_惡魔", true, false)
 	expect(select_id(target, 1), "demon picker allows own facility")

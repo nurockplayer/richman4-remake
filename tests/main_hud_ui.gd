@@ -138,6 +138,39 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	ui._refresh_from_state()
 
 
+func _test_source_purchase_offer(ui: Control, shell: Control) -> void:
+	var game := _set_human_graph_game(ui)
+	game.state.current_player = 0
+	game.state.players[0].position = 2
+	game.state.players[0].previous_position = 0
+	game.state.players[0].cash = 2000
+	game.state.property_action_used = false
+	game.state.phase = "await_action"
+	game._set_action_options(0)
+	game._sync_state()
+	var before_purchase_refresh: String = game.to_json()
+	ui._refresh_from_state()
+	var purchase_hint := str(shell.action_hint_label.text)
+	_expect(purchase_hint.contains("測試路"), "source landing purchase offer names the current property")
+	_expect(purchase_hint.contains("$1,000"), "source landing purchase offer uses the authoritative property price")
+	_expect(purchase_hint.contains("YES") and purchase_hint.contains("NO"), "source landing purchase offer exposes confirm and decline controls")
+	_expect(game.to_json() == before_purchase_refresh, "source landing purchase refresh does not mutate simulation state")
+
+	game.state.board[2].owner = 0
+	game.state.players[0].properties = [2]
+	game.state.players[0].cash = 500
+	game.state.property_action_used = false
+	game._set_action_options(0)
+	game._sync_state()
+	var before_upgrade_refresh: String = game.to_json()
+	ui._refresh_from_state()
+	var upgrade_hint := str(shell.action_hint_label.text)
+	_expect(upgrade_hint.contains("升級"), "source owned-property offer names the upgrade action")
+	_expect(upgrade_hint.contains("$300"), "source owned-property offer uses the authoritative upgrade price")
+	_expect(upgrade_hint.contains("YES") and upgrade_hint.contains("NO"), "source owned-property offer exposes confirm and decline controls")
+	_expect(game.to_json() == before_upgrade_refresh, "source owned-property refresh does not mutate simulation state")
+
+
 func _test_stock_names(shell: Control) -> void:
 	var stock_snapshot := {
 		"current_player": 0,
@@ -330,6 +363,7 @@ func _run() -> void:
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
 	_test_hud_tabs_and_actions(ui, shell, game)
+	_test_source_purchase_offer(ui, shell)
 	_test_minimap_input(ui, shell, game)
 	_test_source_roll_presentation_gate(ui, shell)
 	await _test_source_stock_modal_gate(ui, shell)

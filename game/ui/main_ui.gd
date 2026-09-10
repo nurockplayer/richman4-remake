@@ -2812,8 +2812,9 @@ func _update_actions(phase: String, current_index: int) -> void:
 				action_hint_label.text = "按%s回到道路並開始行動" % roll_button.text
 			else:
 				action_hint_label.text = "%s，按%s推進回合" % [_rest_status_label(rest_status), roll_button.text]
-	elif can_company_upgrade:
-		action_hint_label.text = "請先完成企業建設服務"
+	elif phase == "await_action" and (can_buy_company or can_company_upgrade or can_build or _has_action_option(action_options, "buy") or _has_action_option(action_options, "upgrade")):
+		var landing_hint := _landing_action_hint(action_options, _current_tile(), player)
+		action_hint_label.text = landing_hint if not landing_hint.is_empty() else "請處理目前格位"
 	elif _has_original_gods() and phase == "await_action" and (not rest_status.is_empty() or _as_array(state.get("last_roll", [])).is_empty()):
 		action_hint_label.text = "本回合休息，請結束回合"
 	elif _has_original_gods() and int(player.get("god_id", 0)) in [9, 10, 12]:
@@ -4007,6 +4008,40 @@ func _inventory_purchase_price(tile: Dictionary) -> int:
 	if tile.get("kind", "") == "facility":
 		return int(tile.get("land_price", 0)) * int(state.get("price_index", 1))
 	return int(tile.get("cost", 0))
+
+func _landing_action_price(action: String, tile: Dictionary) -> int:
+	if game_state == null:
+		return -1
+	if action == "buy" and game_state.has_method("inventory_purchase_price"):
+		return int(game_state.call("inventory_purchase_price", tile))
+	if action == "upgrade":
+		var method_name := "_facility_upgrade_price" if str(tile.get("kind", "")) == "facility" else "_upgrade_price"
+		if game_state.has_method(method_name):
+			return int(game_state.call(method_name, tile))
+	return -1
+
+func _landing_action_hint(action_options: Array, tile: Dictionary, player: Dictionary) -> String:
+	var tile_name := str(tile.get("name", "目前格位"))
+	var company := _company_at_tile(tile)
+	if not company.is_empty():
+		tile_name = str(company.get("display_name", tile_name))
+	if _has_action_option(action_options, "buy_company"):
+		return "是否購買公司股份？\n%s · YES 確認／NO 放棄" % tile_name
+	if _has_action_option(action_options, "company_upgrade"):
+		return "是否進行企業建設？\n%s · YES 確認／NO 放棄" % tile_name
+	var facility_type_choice := _has_action_option(action_options, "build_facility")
+	if _has_action_option(action_options, "buy") and str(tile.get("kind", "")) == "facility":
+		facility_type_choice = facility_type_choice or (_has_original_gods() and int(player.get("god_id", 0)) in [3, 4] and int(tile.get("building_level", 0)) == 0)
+	if facility_type_choice:
+		return "是否選擇設施類型？\n%s · YES 確認／NO 放棄" % tile_name
+	var action := "buy" if _has_action_option(action_options, "buy") else "upgrade" if _has_action_option(action_options, "upgrade") else ""
+	if action.is_empty():
+		return ""
+	var verb := "購買" if action == "buy" else "升級"
+	var price := _landing_action_price(action, tile)
+	if price >= 0:
+		return "是否%s「%s」？\n價格 %s · YES 確認／NO 放棄" % [verb, tile_name, _format_money(price)]
+	return "是否%s「%s」？\n金額尚未取得 · YES 確認／NO 放棄" % [verb, tile_name]
 
 func _has_original_gods() -> bool:
 	return int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION] and bool(state.get("original_gods", false))

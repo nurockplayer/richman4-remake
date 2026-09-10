@@ -113,12 +113,12 @@ func _prepare_roll(game: Object, origin: int = 0, previous: int = -1) -> void:
 	game._set_action_options(0)
 
 
-func _arm_two_step_roll(game: Object, label: String) -> bool:
+func _arm_two_step_roll(game: Object, label: String, value: int = 2) -> bool:
 	# Facilities imply the v7 inventory boundary, so a serialized remote die is a
-	# deterministic two-step roll for both versions.  Validate this exact state
-	# before the public roll call; a malformed fixture is setup failure rather than
-	# encounter RED.
-	game.state["pending_remote_dice"] = {"player_id": 0, "value": 2}
+	# deterministic roll for both versions.  Validate this exact state before the
+	# public roll call; a malformed fixture is setup failure rather than encounter
+	# RED.  Most cases use two steps; the branch fixture supplies four explicitly.
+	game.state["pending_remote_dice"] = {"player_id": 0, "value": value}
 	game._set_action_options(0)
 	return _setup_expect(_valid_save(game), label + " setup validates before roll")
 
@@ -253,10 +253,21 @@ func _test_v7_roadblock_deferred_until_resume() -> void:
 	_expect(game.to_json() == restored.to_json(), "fresh and restored roadblock continuations are identical")
 	_expect(not game.state.roadblocks.has("1"), "roadblock is consumed after bank resume")
 	_expect(_event_count(game, "roadblock_hit") == 1, "roadblock collision is recorded exactly once")
-	_expect(game.state.get("pending_bank_visit", {}).is_empty(), "roadblock resume leaves no stale bank token")
+	var landing_token: Variant = game.state.get("pending_bank_visit", null)
+	var landing_token_ok: bool = typeof(landing_token) == TYPE_DICTIONARY and landing_token.get("kind", "") == "landing" and int(landing_token.get("player_id", -1)) == 0 and int(landing_token.get("node_id", -1)) == 1
+	_expect(landing_token_ok, "roadblock resume exposes the exact bank landing token")
+	_expect(int(game.state.get("remaining_steps", -1)) == 0, "roadblock landing has no remaining movement")
+	_expect(game.state.get("pending_movement", {}) == {}, "roadblock landing clears pending movement")
+	_expect(str(game.state.get("phase", "")) == "await_action" and game.state.get("bank_landing", false) == true, "roadblock landing returns to the action phase")
 	var after_resume: String = game.to_json()
 	var repeated: Dictionary = game.resume_bank_visit()
 	_expect(not bool(repeated.get("ok", false)) and game.to_json() == after_resume, "duplicate roadblock resume is rejected atomically")
+	var completed: Dictionary = game.complete_bank_visit()
+	var restored_completed: Dictionary = restored.complete_bank_visit()
+	_expect(bool(completed.get("ok", false)) and bool(restored_completed.get("ok", false)), "roadblock landing completes after resume")
+	_expect(game.to_json() == restored.to_json(), "fresh and restored roadblock completions are identical")
+	_expect(game.state.get("pending_bank_visit", {}).is_empty(), "roadblock completion consumes the landing token")
+	_expect(str(game.state.get("phase", "")) == "await_action" and game.state.action_options.has("end_turn"), "roadblock completion restores normal action options")
 
 
 func _test_v9_carried_bomb_deferred_until_resume() -> void:
@@ -307,11 +318,11 @@ func _test_v9_ground_objects_survive_bank_pauses() -> void:
 	_expect(bool(mine.get("ok", false)) and bool(timed_bomb.get("ok", false)), "v9 bank ground objects place on separate bank nodes")
 	if not bool(mine.get("ok", false)) or not bool(timed_bomb.get("ok", false)):
 		return
-	if not _arm_two_step_roll(first, "v9 first ground object bank"):
+	if not _arm_two_step_roll(first, "v9 first ground object bank", 4):
 		return
 	var rolled: Dictionary = first.roll()
 	_expect(bool(rolled.get("ok", false)), "v9 first ground object roll reaches the first bank")
-	if not _pending_pass(first, 1, 1, "v9 first ground object"):
+	if not _pending_pass(first, 1, 3, "v9 first ground object"):
 		return
 	_expect(first.state.ground_hazards.get("1", {}).get("kind", "") == "mine", "mine remains under the bank pause")
 	_expect_valid_save(first, "v9 mine and bank overlap pending save")
@@ -324,7 +335,7 @@ func _test_v9_ground_objects_survive_bank_pauses() -> void:
 	var first_restored_resume: Dictionary = first_restored.resume_bank_visit()
 	_expect(bool(first_resume.get("ok", false)) and bool(first_restored_resume.get("ok", false)), "fresh and restored first bank pauses resume")
 	_expect(first.to_json() == first_restored.to_json(), "first ground object continuation is deterministic")
-	_expect(first.state.get("phase", "") == "await_route" and first.state.route_options == [3, 4], "first bank resume preserves the later branch")
+	_expect(first.state.get("phase", "") == "await_route" and first.state.route_options == [3, 4] and int(first.state.get("remaining_steps", -1)) == 2, "first bank resume preserves the later branch")
 
 	# Select the second bank on both copies.  The timed bomb is then at the
 	# moving actor's bank node while the second pass token is persisted.

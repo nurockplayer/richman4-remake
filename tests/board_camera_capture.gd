@@ -34,6 +34,60 @@ func _camera_json(camera: Dictionary) -> Dictionary:
 		"focus": _vector_json(camera.get("focus", Vector2.ZERO)),
 	}
 
+func _git_directory(project_root: String) -> String:
+	var dot_git := project_root.path_join(".git")
+	if DirAccess.dir_exists_absolute(dot_git):
+		return dot_git
+	if not FileAccess.file_exists(dot_git):
+		return ""
+	var pointer := FileAccess.get_file_as_string(dot_git).strip_edges()
+	if not pointer.begins_with("gitdir:"):
+		return ""
+	var git_directory := pointer.trim_prefix("gitdir:").strip_edges()
+	if not git_directory.begins_with("/"):
+		git_directory = project_root.path_join(git_directory)
+	return git_directory
+
+func _packed_ref(git_directory: String, reference: String) -> String:
+	var packed_refs_path := git_directory.path_join("packed-refs")
+	if not FileAccess.file_exists(packed_refs_path):
+		return ""
+	for line_value in FileAccess.get_file_as_string(packed_refs_path).split("\n"):
+		var line := str(line_value).strip_edges()
+		if line.is_empty() or line.begins_with("#") or line.begins_with("^"):
+			continue
+		var fields := line.split(" ", false)
+		if fields.size() >= 2 and fields[1] == reference:
+			return fields[0]
+	return ""
+
+func _checkout_head(project_root: String) -> String:
+	var git_directory := _git_directory(project_root)
+	if git_directory.is_empty():
+		return ""
+	var head_path := git_directory.path_join("HEAD")
+	if not FileAccess.file_exists(head_path):
+		return ""
+	var head_value := FileAccess.get_file_as_string(head_path).strip_edges()
+	if head_value.begins_with("ref:"):
+		var reference := head_value.trim_prefix("ref:").strip_edges()
+		var reference_directories: Array = [git_directory]
+		var commondir_path := git_directory.path_join("commondir")
+		if FileAccess.file_exists(commondir_path):
+			var common_directory := FileAccess.get_file_as_string(commondir_path).strip_edges()
+			if not common_directory.is_empty():
+				if not common_directory.begins_with("/"):
+					common_directory = git_directory.path_join(common_directory)
+				reference_directories.append(common_directory)
+		for reference_directory in reference_directories:
+			var reference_path := str(reference_directory).path_join(reference)
+			if FileAccess.file_exists(reference_path):
+				return FileAccess.get_file_as_string(reference_path).strip_edges()
+			var packed_commit := _packed_ref(str(reference_directory), reference)
+			if not packed_commit.is_empty():
+				return packed_commit
+	return head_value
+
 func run() -> void:
 	var catalog_path := OS.get_environment("RICHMAN4_MAP_CATALOG")
 	var scene_manifest_path := OS.get_environment("RICHMAN4_SCENE_MANIFEST")
@@ -59,6 +113,18 @@ func run() -> void:
 	head_pattern.compile("^[0-9a-fA-F]{40}$")
 	if head_pattern.search(capture_head) == null:
 		push_error("BOARD_CAMERA_CAPTURE_HEAD must be a full 40-character commit SHA")
+		quit(2)
+		return
+	var checkout_root := ProjectSettings.globalize_path("res://")
+	if checkout_root.ends_with("/"):
+		checkout_root = checkout_root.trim_suffix("/")
+	var checkout_head := _checkout_head(checkout_root)
+	if checkout_head.is_empty() or head_pattern.search(checkout_head) == null:
+		push_error("unable to read a full commit SHA from the actual checkout HEAD")
+		quit(2)
+		return
+	if capture_head.to_lower() != checkout_head.to_lower():
+		push_error("BOARD_CAMERA_CAPTURE_HEAD does not match the actual checkout HEAD (%s)" % checkout_head)
 		quit(2)
 		return
 	var catalog_sha256 := FileAccess.get_sha256(catalog_path)
@@ -114,6 +180,7 @@ func run() -> void:
 	var sidecar := {
 		"schema": CAPTURE_SCHEMA,
 		"head": capture_head,
+		"checkout": {"root": checkout_root, "head": checkout_head},
 		"map": {
 			"id": definition.get("id", ""),
 			"source": definition.get("source", {}),

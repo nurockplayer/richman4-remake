@@ -23,6 +23,16 @@ const REFERENCE_BOARD_SIZE := Vector2(440.0, 440.0)
 const SOURCE_CROP_WORLD_SPAN := 440.0
 # Original manual, printed page 12: each map rotation command turns 45 degrees.
 const ROTATION_STEP := PI / 4.0
+const SOURCE_DIRECTION_VECTORS := [
+	Vector2(0, 1),
+	Vector2(1, 1),
+	Vector2(1, 0),
+	Vector2(1, -1),
+	Vector2(0, -1),
+	Vector2(-1, -1),
+	Vector2(-1, 0),
+	Vector2(-1, 1),
+]
 const PLAYER_COLORS := [
 	Color("#ef6a65"),
 	Color("#4ba6e8"),
@@ -123,6 +133,42 @@ func get_player_screen_position(player_id: int) -> Vector2:
 	if player_id >= 0 and player_id < players_data.size():
 		return get_screen_position_for_index(int(players_data[player_id].get("position", 0)))
 	return Vector2.ZERO
+
+func get_character_frame_direction(player_id: int) -> int:
+	return _character_frame_direction(player_id)
+
+func _character_frame_direction(player_id: int) -> int:
+	var fallback := clampi(int(_player_directions.get(player_id, 0)), 0, SOURCE_DIRECTION_VECTORS.size() - 1)
+	var world_delta := _player_world_delta(player_id)
+	if world_delta.length_squared() <= 0.000001:
+		return fallback
+	return _nearest_source_direction(world_delta.rotated(map_rotation), fallback)
+
+func _player_world_delta(player_id: int) -> Vector2:
+	if not _movement_queue.is_empty() and _movement_index >= 0 and _movement_index < _movement_queue.size():
+		var move_value: Variant = _movement_queue[_movement_index]
+		if move_value is Dictionary and int(move_value.get("player_id", -1)) == player_id:
+			var move: Dictionary = move_value
+			var from_point := _world_position_for_index(int(move.get("from", -1)))
+			var to_point := _world_position_for_index(int(move.get("to", -1)))
+			var movement_delta := to_point - from_point
+			if movement_delta.length_squared() > 0.000001:
+				return movement_delta
+	var direction := clampi(int(_player_directions.get(player_id, 0)), 0, SOURCE_DIRECTION_VECTORS.size() - 1)
+	return SOURCE_DIRECTION_VECTORS[direction]
+
+func _nearest_source_direction(delta: Vector2, fallback: int = 0) -> int:
+	if delta.length_squared() <= 0.000001:
+		return clampi(fallback, 0, SOURCE_DIRECTION_VECTORS.size() - 1)
+	var unit := delta.normalized()
+	var best_direction := clampi(fallback, 0, SOURCE_DIRECTION_VECTORS.size() - 1)
+	var best_dot := -INF
+	for index in range(SOURCE_DIRECTION_VECTORS.size()):
+		var score := unit.dot(SOURCE_DIRECTION_VECTORS[index].normalized())
+		if score > best_dot:
+			best_dot = score
+			best_direction = index
+	return best_direction
 
 func _ready() -> void:
 	clip_contents = true
@@ -667,7 +713,7 @@ func _draw_original_players() -> void:
 			var center: Vector2 = _node_positions[int(tile_index)] + Vector2(cos(angle), sin(angle)) * min(13.0, radius * 0.68)
 			if not _movement_queue.is_empty() and int(_movement_queue[_movement_index].player_id) == player_index:
 				center = get_player_screen_position(player_index)
-			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index)), int(_player_directions.get(player_index, 0))) if _background != null else {}
+			var frame: Dictionary = visuals.character(str(map_definition.get("source", {}).get("edition", "")), int(players_data[player_index].get("character_id", player_index)), _character_frame_direction(player_index)) if _background != null else {}
 			if visuals.texture(frame) != null:
 				_scene_draws.append({"kind": "player", "layer": 2, "frame": frame, "center": center, "color": PLAYER_COLORS[player_index % PLAYER_COLORS.size()]})
 				continue
@@ -838,6 +884,12 @@ func _map_scale() -> float:
 func _map_scale_for_bounds(bounds: Rect2) -> float:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
 		return 1.0
+	if preview_mode:
+		# Preview presents the complete source scene inside the panel. Player
+		# mode keeps the source-like crop above so a focused actor remains legible.
+		var preview_width := maxf(1.0, size.x - 32.0)
+		var preview_height := maxf(1.0, size.y - 32.0)
+		return maxf(0.01, minf(preview_width / bounds.size.x, preview_height / bounds.size.y))
 	var board_scale := minf(size.x / REFERENCE_BOARD_SIZE.x, size.y / REFERENCE_BOARD_SIZE.y)
 	return maxf(0.01, board_scale * REFERENCE_BOARD_SIZE.x / SOURCE_CROP_WORLD_SPAN)
 

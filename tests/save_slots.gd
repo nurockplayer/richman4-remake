@@ -310,8 +310,15 @@ func _test_read_expected_fingerprint_protection() -> void:
 
 
 func _read_with_expected(store: Object, slot_id: int, expected_fingerprint: Variant) -> Dictionary:
-	var result: Variant = store.callv("read", [slot_id, expected_fingerprint])
-	return result if result is Dictionary else {}
+	# Replay the same assertions on the original public API. Its actual raw
+	# read returns replacement B; an invalid call with two arguments would only
+	# prove a harness/API mismatch, not the missing stale-selection behavior.
+	for method in store.get_method_list():
+		if str(method.get("name", "")) == "read":
+			var arguments: Array = method.get("args", [])
+			var result: Variant = store.callv("read", [slot_id, expected_fingerprint] if arguments.size() >= 2 else [slot_id])
+			return result if result is Dictionary else {}
+	return {}
 
 
 func _test_failure_preserves_existing_bytes() -> void:

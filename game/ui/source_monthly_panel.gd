@@ -142,7 +142,7 @@ func source_geometry() -> Dictionary:
 		"panel_size": DIVIDEND_PANEL_SIZE,
 		"dividend": {
 			"title_center": DIVIDEND_PANEL_ORIGIN + Vector2(296.0, 25.0),
-			"header_company_center": DIVIDEND_PANEL_ORIGIN + Vector2(18.0, 94.0),
+			"header_company_origin": DIVIDEND_PANEL_ORIGIN + Vector2(18.0, 82.0),
 			"header_player_center": DIVIDEND_PANEL_ORIGIN + Vector2(104.0, 82.0),
 			"player_center": DIVIDEND_PANEL_ORIGIN + Vector2(160.0, 88.0),
 			"profit_center": DIVIDEND_PANEL_ORIGIN + Vector2(542.0, 88.0),
@@ -302,7 +302,7 @@ func _build_dividend() -> void:
 
 	var title_center := DIVIDEND_PANEL_ORIGIN + Vector2(296.0, 25.0)
 	_make_centered_label("DividendTitle", "上市公司分紅", title_center, Vector2(300.0, 36.0), 28, SOURCE_WHITE, SOURCE_SHADOW)
-	_make_company_header()
+	_make_label("DividendHeaderCompany", "公司", Rect2(DIVIDEND_PANEL_ORIGIN + Vector2(18.0, 82.0), Vector2(42.0, 24.0)), 16, SOURCE_DARK, HORIZONTAL_ALIGNMENT_LEFT)
 	_make_centered_label(
 		"DividendHeaderPlayer",
 		"人名",
@@ -541,18 +541,6 @@ func _make_label(
 	color: Color,
 	alignment: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT,
 ) -> Label:
-	return _make_label_in(_surface, node_name, text_value, rect, font_size, color, alignment)
-
-
-func _make_label_in(
-	parent: Control,
-	node_name: String,
-	text_value: String,
-	rect: Rect2,
-	font_size: int,
-	color: Color,
-	alignment: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT,
-) -> Label:
 	var label := Label.new()
 	label.name = node_name
 	label.position = rect.position
@@ -563,27 +551,8 @@ func _make_label_in(
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	parent.add_child(label)
+	_surface.add_child(label)
 	return label
-
-
-func _make_company_header() -> Label:
-	# Keep the legacy local rect center for existing presenter callers while
-	# placing the actual source text at panel.x + 18 (a left edge).
-	var anchor := Control.new()
-	anchor.name = "DividendHeaderCompanySourceAnchor"
-	anchor.position = Vector2(21.0, 0.0)
-	anchor.size = REFERENCE_SIZE
-	anchor.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_surface.add_child(anchor)
-	return _make_label_in(
-		anchor,
-		"DividendHeaderCompany",
-		"公司",
-		Rect2(21.0, DIVIDEND_PANEL_ORIGIN.y + 82.0, 42.0, 24.0),
-		16,
-		SOURCE_DARK,
-	)
 
 
 func _resolve_source(resource: int, chunk: int) -> Dictionary:

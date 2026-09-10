@@ -121,6 +121,16 @@ func _test_invalid_models_and_source_bounds(panel: Node) -> void:
 	panel.call("set_view_model", invalid_edition)
 	invalid_button = panel.find_child("ATMWithdraw", true, false) as BaseButton
 	expect(invalid_button == null, "invalid edition does not expose active controls")
+	var legacy_scene_edition := _base_model()
+	legacy_scene_edition.edition = "rear"
+	panel.call("set_view_model", legacy_scene_edition)
+	invalid_button = panel.find_child("ATMWithdraw", true, false) as BaseButton
+	expect(invalid_button == null, "legacy front/rear scene labels are not accepted as source editions")
+	var mj_model := _base_model()
+	mj_model.edition = "MJ"
+	panel.call("set_view_model", mj_model)
+	var mj_button: BaseButton = panel.find_child("ATMWithdraw", true, false) as BaseButton
+	expect(mj_button != null, "MJ source edition keeps the ATM entry available")
 
 	var atm_model := _base_model()
 	panel.call("set_view_model", atm_model)
@@ -142,6 +152,15 @@ func _test_visual_accessor(panel: Node) -> void:
 	var source_visual: TextureRect = panel.find_child("SourceVisual", true, false) as TextureRect
 	expect(source_visual != null and source_visual.texture == texture, "host visual accessor supplies the source texture")
 	expect(visuals.has("Game.Panel24") and visuals["Game.Panel24"] == texture, "set_visuals does not mutate the host accessor")
+	var amount_bar: HSlider = panel.find_child("ATMAmountBar", true, false) as HSlider
+	if amount_bar != null:
+		expect(amount_bar.get_theme_stylebox("slider") is StyleBoxEmpty, "source ATM amount control is transparent over the source art")
+	var mj_model := _base_model()
+	mj_model.edition = "MJ"
+	panel.call("set_view_model", mj_model)
+	panel.call("set_visuals", {"MJ.Panel24": texture})
+	source_visual = panel.find_child("SourceVisual", true, false) as TextureRect
+	expect(source_visual != null and source_visual.texture == texture, "MJ visual aliases resolve the canonical source edition")
 
 
 func _test_atm_selection_and_bounds(panel: Node) -> void:
@@ -258,6 +277,8 @@ func _test_bank_scene_transition_and_action_gates(panel: Node) -> void:
 	var special_button: BaseButton = input_panel.find_child("SpecialBorrow", true, false) as BaseButton
 	expect(borrow_button != null, "loan entry always starts on the source front scene")
 	expect(special_button == null, "owner permission does not auto-switch loan entry to the rear scene")
+	var rear_entry: BaseButton = input_panel.find_child("BankRearEntry", true, false) as BaseButton
+	expect(rear_entry != null and rear_entry.position == Vector2(268, 51) and rear_entry.size == Vector2(323, 222), "owner front scene exposes the exact rear-entry hit target")
 	expect(not bool(input_panel.call("select_action", "take_special_finance")), "front scene rejects direct special-finance selection")
 	_click(viewport, Vector2(300, 100))
 	await process_frame
@@ -265,6 +286,20 @@ func _test_bank_scene_transition_and_action_gates(panel: Node) -> void:
 	borrow_button = input_panel.find_child("LoanBorrow", true, false) as BaseButton
 	expect(special_button != null, "owner rear-entry hit target opens the source special scene")
 	expect(borrow_button == null, "rear scene does not expose ordinary loan actions")
+	expect(not bool(input_panel.call("select_action", "take_loan")), "rear scene rejects direct ordinary-loan selection")
+	var refreshed_model: Dictionary = model.duplicate(true)
+	input_panel.call("set_view_model", refreshed_model)
+	await process_frame
+	expect(input_panel.find_child("SpecialBorrow", true, false) != null, "model refresh preserves a valid owner rear scene")
+	refreshed_model.can_special = false
+	input_panel.call("set_view_model", refreshed_model)
+	await process_frame
+	expect(input_panel.find_child("LoanBorrow", true, false) != null and input_panel.find_child("SpecialBorrow", true, false) == null, "owner revocation returns a refreshed rear scene to front")
+	refreshed_model.can_special = true
+	input_panel.call("set_view_model", refreshed_model)
+	await process_frame
+	_click(viewport, Vector2(300, 100))
+	await process_frame
 	var exit_button: BaseButton = input_panel.find_child("BankExit", true, false) as BaseButton
 	_closed_count = 0
 	if exit_button != null:
@@ -287,6 +322,7 @@ func _test_rear_special_gate(panel: Node) -> void:
 	panel.call("set_view_model", model)
 	var special_button: BaseButton = panel.find_child("SpecialBorrow", true, false) as BaseButton
 	expect(special_button == null, "non-owner cannot enter or render the owner-only rear scene")
+	expect(panel.find_child("BankRearEntry", true, false) == null, "non-owner front scene has no rear-entry hit target")
 	expect(not bool(panel.call("select_action", "take_special_finance")), "non-owner cannot select special financing from the front scene")
 
 	model.can_special = true
@@ -362,6 +398,9 @@ func _test_visual_layering_and_source_chunks(panel: Node) -> void:
 	await process_frame
 	var source_visual: TextureRect = input_panel.find_child("SourceVisual", true, false) as TextureRect
 	expect(source_visual != null and source_visual.texture == front_texture, "front scene binds the Game Panel23 source background")
+	var loan_button: Button = input_panel.find_child("LoanBorrow", true, false) as Button
+	if loan_button != null:
+		expect(loan_button.get_theme_stylebox("normal") is StyleBoxEmpty, "source loan controls are transparent hit targets")
 	var blind: TextureRect = input_panel.find_child("SourceRearBlind", true, false) as TextureRect
 	expect(blind != null and blind.texture == blind_texture and blind.position == Vector2(258, 42), "non-owner front scene assembles the anchored rear-entry blind")
 	var render_texture := viewport.get_texture()
@@ -401,6 +440,14 @@ func _test_amount_pad_source_layering() -> void:
 	pad.call("set_visuals", {"Game.Panel21": texture}, "Game")
 	pad.call("configure", "take_loan", 1200)
 	await process_frame
+	var source_visual: TextureRect = pad.find_child("AmountPadSourceVisual", true, false) as TextureRect
+	var surface: Panel = pad.find_child("AmountPadSurface", true, false) as Panel
+	expect(source_visual != null and surface != null and source_visual.get_index() < surface.get_index(), "Panel21 source image stays below controls but above the fallback surface")
+	if surface != null:
+		expect(surface.get_theme_stylebox("panel") is StyleBoxEmpty, "Panel21 fallback surface is transparent when source art is bound")
+	var amount_button: Button = pad.find_child("AmountDigit7", true, false) as Button
+	if amount_button != null:
+		expect(amount_button.get_theme_stylebox("normal") is StyleBoxEmpty, "Panel21 keypad uses transparent source hit targets")
 	await process_frame
 	var render_texture := viewport.get_texture()
 	if DisplayServer.get_name() == "headless" or render_texture == null or render_texture.get_width() <= 0 or render_texture.get_height() <= 0:

@@ -20,8 +20,10 @@ const ATM_BOARD_ORIGIN := Vector2(60.0, 71.0)
 var _model: Dictionary = {}
 var _visual_accessor: Variant = null
 var _mode := "atm"
-var _edition := "game"
+var _edition := "Game"
 var _model_valid := false
+var _bank_scene := "front"
+var _has_source_visual := false
 var _selected_action := ""
 var _amount_text := ""
 var _amount_pad: Node = null
@@ -41,11 +43,14 @@ func _init() -> void:
 ## Replace the displayed snapshot.  The caller's dictionary is copied deeply
 ## so selection, rendering and validation cannot mutate host state.
 func set_view_model(model: Dictionary) -> void:
+	var was_rear := _mode == "loan" and _bank_scene == "rear"
 	_model = model.duplicate(true)
 	_mode = str(_model.get("entry_mode", "atm")).to_lower().strip_edges()
-	_edition = str(_model.get("edition", "game")).to_lower().strip_edges()
-	var edition_value: Variant = _model.get("edition", "game")
-	_model_valid = _mode in ["atm", "loan"] and (not _model.has("edition") or typeof(edition_value) == TYPE_STRING)
+	var edition_value: Variant = _model.get("edition", "Game")
+	_edition = _canonical_edition(edition_value)
+	_model_valid = _mode in ["atm", "loan"] and not _edition.is_empty()
+	if not was_rear or _mode != "loan" or not _can_enter_rear():
+		_bank_scene = "front"
 	_selected_action = ""
 	_amount_text = ""
 	_close_amount_pad()
@@ -112,7 +117,7 @@ func select_action(action: String) -> bool:
 
 func _input(event: InputEvent) -> void:
 	# ATM 按鍵由父 panel 處理；貸款／特殊融資的鍵盤焦點交給子計算器。
-	if _mode != "atm" or _amount_pad != null or not event is InputEventKey:
+	if not visible or not is_visible_in_tree() or _mode != "atm" or _amount_pad != null or not event is InputEventKey:
 		return
 	var key_event := event as InputEventKey
 	if not key_event.pressed or key_event.echo:
@@ -163,10 +168,12 @@ func action_limit(action: String) -> int:
 
 
 func _build_screen() -> void:
+	_close_amount_pad()
 	_clear_children()
 	var screen_size := ATM_SIZE if _mode == "atm" else BANK_SIZE
 	custom_minimum_size = screen_size
 	size = screen_size
+	_has_source_visual = false
 	_amount_bar = null
 	_amount_value = null
 	_feedback = null
@@ -204,9 +211,10 @@ func _build_atm() -> void:
 	_amount_bar.min_value = 0.0
 	_amount_bar.step = 1.0
 	_amount_bar.focus_mode = Control.FOCUS_ALL
-	_amount_bar.tooltip_text = "選擇金額"
 	_amount_bar.add_theme_stylebox_override("slider", _style(Color("#294f4c"), Color("#bdc885"), 1))
 	_amount_bar.add_theme_stylebox_override("grabber_area", _style(Color("#6e9e77"), Color("#edf0b3"), 1))
+	if _has_source_visual:
+		_set_slider_transparent(_amount_bar)
 	_amount_bar.value_changed.connect(_on_amount_bar_changed)
 	add_child(_amount_bar)
 	_amount_value = _make_label("金額 —", Rect2(53, 168, 215, 22), 11, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "ATMAmountValue")
@@ -242,14 +250,15 @@ func _build_atm() -> void:
 
 
 func _build_bank_scene() -> void:
-	var special := _is_rear_edition()
-	if special:
+	if _bank_scene == "rear" and _can_enter_rear():
 		_build_special_scene()
 	else:
+		_bank_scene = "front"
 		_build_loan_scene()
 
 
 func _build_loan_scene() -> void:
+	_add_nonowner_rear_blind()
 	add_child(_make_label("銀行", Rect2(24, 24, 160, 28), 21, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_LEFT, "LoanTitle"))
 	add_child(_make_label("現金 %s" % _display_value("cash"), Rect2(30, 84, 205, 22), 13, Color("#eff0bf"), HORIZONTAL_ALIGNMENT_LEFT, "LoanCash"))
 	add_child(_make_label("存款 %s" % _display_value("deposit"), Rect2(30, 108, 205, 22), 13, Color("#eff0bf"), HORIZONTAL_ALIGNMENT_LEFT, "LoanDeposit"))
@@ -264,12 +273,14 @@ func _build_loan_scene() -> void:
 	var exit := _make_source_button("EXIT", "BankExit", Rect2(548, 431, 80, 40))
 	exit.pressed.connect(_close_flow)
 	add_child(exit)
+	_add_rear_entry_target()
 	_feedback = _make_label("請選擇銀行操作", Rect2(250, 252, 270, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "BankFeedback")
 	add_child(_feedback)
 	_refresh_action_buttons()
 
 
 func _build_special_scene() -> void:
+	_add_special_summary()
 	add_child(_make_label("銀行", Rect2(8, 22, 180, 28), 21, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_LEFT, "SpecialTitle"))
 	add_child(_make_label("客戶存款總額", Rect2(10, 136, 136, 22), 12, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "SpecialOtherDepositsLabel"))
 	add_child(_make_label(_display_value("other_deposits"), Rect2(10, 153, 118, 20), 16, Color("#fff2b6"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialOtherDeposits"))
@@ -278,19 +289,80 @@ func _build_special_scene() -> void:
 	add_child(_make_label("尚可融資金額", Rect2(10, 232, 136, 22), 12, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "SpecialAvailableLabel"))
 	add_child(_make_label(_display_value_for_limit("take_special_finance"), Rect2(10, 249, 118, 20), 16, Color("#fff2b6"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialAvailable"))
 	var borrow := _make_source_button("週轉現金", "SpecialBorrow", Rect2(11, 305, 114, 40))
-	borrow.tooltip_text = "來源文字保留；實際款項進入存款"
 	borrow.pressed.connect(func() -> void: _select_action("take_special_finance"))
 	add_child(borrow)
 	var repay := _make_source_button("歸還款項", "SpecialRepay", Rect2(11, 362, 114, 40))
 	repay.pressed.connect(func() -> void: _select_action("repay_special_finance"))
 	add_child(repay)
 	var exit := _make_source_button("EXIT", "BankExit", Rect2(11, 419, 80, 40))
-	exit.pressed.connect(_close_flow)
+	exit.pressed.connect(_exit_bank_scene)
 	add_child(exit)
 	add_child(_make_label("特別融資", Rect2(443, 427, 190, 24), 14, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialWindowTitle"))
 	_feedback = _make_label("僅銀行主席可用", Rect2(162, 294, 280, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_LEFT, "BankFeedback")
 	add_child(_feedback)
 	_refresh_action_buttons()
+
+
+func _add_rear_entry_target() -> void:
+	if not _can_enter_rear():
+		return
+	var target := _make_source_hit_target("BankRearEntry", Rect2(268, 51, 323, 222))
+	target.pressed.connect(_enter_rear)
+	add_child(target)
+
+
+func _add_nonowner_rear_blind() -> void:
+	if _can_enter_rear():
+		return
+	var visual: Variant = _resolve_chunk_visual(23, 1, "%s.Panel23.chunk1" % _source_edition())
+	if visual is Texture2D:
+		_add_source_layer("SourceRearBlind", visual, Vector2(258, 42))
+
+
+func _add_special_summary() -> void:
+	var visual: Variant = _resolve_chunk_visual(23, 20, "%s.Panel23.chunk20" % _source_edition())
+	if visual is Texture2D:
+		_add_source_layer("SourceSpecialSummary", visual, Vector2(10, 125))
+
+
+func _add_source_layer(node_name: String, visual: Texture2D, origin: Vector2) -> TextureRect:
+	var texture_rect := TextureRect.new()
+	texture_rect.name = node_name
+	texture_rect.position = origin
+	texture_rect.size = visual.get_size()
+	texture_rect.texture = visual
+	texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	texture_rect.stretch_mode = TextureRect.STRETCH_KEEP
+	texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(texture_rect)
+	move_child(texture_rect, mini(1, get_child_count() - 1))
+	return texture_rect
+
+
+func _enter_rear() -> void:
+	if not _can_enter_rear():
+		_show_feedback("僅銀行主席可用")
+		return
+	call_deferred("_switch_bank_scene", "rear")
+
+
+func _switch_bank_scene(scene: String) -> void:
+	if scene == "rear" and not _can_enter_rear():
+		return
+	_bank_scene = scene
+	_selected_action = ""
+	_amount_text = ""
+	_close_amount_pad()
+	_build_screen()
+	grab_focus()
+
+
+func _exit_bank_scene() -> void:
+	if _bank_scene == "rear":
+		call_deferred("_switch_bank_scene", "front")
+		return
+	_close_flow()
 
 
 func _add_source_background(key: String, screen_size: Vector2) -> void:
@@ -307,6 +379,7 @@ func _add_source_background(key: String, screen_size: Vector2) -> void:
 		texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(texture_rect)
 		move_child(texture_rect, 0)
+		_has_source_visual = true
 		return
 	var panel := Panel.new()
 	panel.name = "SourceVisualFallback"
@@ -322,26 +395,20 @@ func _visual_key() -> String:
 	var source_edition := _source_edition()
 	if _mode == "atm":
 		return "%s.Panel24" % source_edition
-	if _is_rear_edition():
+	if _bank_scene == "rear":
 		return "%s.Panel23.rear" % source_edition
 	return "%s.Panel23.front" % source_edition
 
 
 func _source_edition() -> String:
-	return "MultiverseJourney" if _edition in ["multiversejourney", "multiverse_journey", "mj", "journey"] else "Game"
+	return _edition if _edition in ["Game", "MultiverseJourney"] else ""
 
 
 func _resolve_visual(key: String) -> Variant:
 	if _visual_accessor == null:
 		return null
 	if _visual_accessor is Dictionary:
-		var visuals: Dictionary = _visual_accessor
-		if visuals.has(key):
-			return visuals.get(key)
-		for alias in [key.to_lower(), key.to_upper(), key.replace(".", "/"), key.replace(".", "_")]:
-			if visuals.has(alias):
-				return visuals.get(alias)
-		return null
+		return _resolve_dictionary_visual(_visual_accessor, key)
 	if _visual_accessor is Callable:
 		return _visual_accessor.call(key)
 	if _visual_accessor is Object:
@@ -350,7 +417,7 @@ func _resolve_visual(key: String) -> Variant:
 		# any path or file handling.
 		if _visual_accessor.has_method("ui") and _visual_accessor.has_method("texture"):
 			var resource := 24 if _mode == "atm" else 23
-			var chunk := 2 if _is_rear_edition() else 0
+			var chunk := 2 if _bank_scene == "rear" else 0
 			var frame: Variant = _visual_accessor.call("ui", _source_edition(), "Panel", resource, chunk)
 			if frame is Dictionary:
 				return _visual_accessor.call("texture", frame)
@@ -358,6 +425,53 @@ func _resolve_visual(key: String) -> Variant:
 			if _visual_accessor.has_method(method):
 				return _visual_accessor.call(method, key)
 	return null
+
+
+func _resolve_chunk_visual(resource: int, chunk: int, key: String) -> Variant:
+	if _visual_accessor == null:
+		return null
+	if _visual_accessor is Dictionary:
+		var visuals: Dictionary = _visual_accessor
+		var direct: Variant = _resolve_dictionary_visual(visuals, key)
+		if direct != null:
+			return direct
+		for candidate in [
+			"%s.Panel%d.%d" % [_source_edition(), resource, chunk],
+			"%s.Panel%d.chunk%d" % [_source_edition(), resource, chunk],
+			"%s.Panel%d/chunk%d" % [_source_edition(), resource, chunk],
+		]:
+			direct = _resolve_dictionary_visual(visuals, candidate)
+			if direct != null:
+				return direct
+		return null
+	if _visual_accessor is Callable:
+		return _visual_accessor.call(key)
+	if _visual_accessor is Object and _visual_accessor.has_method("ui") and _visual_accessor.has_method("texture"):
+		var frame: Variant = _visual_accessor.call("ui", _source_edition(), "Panel", resource, chunk)
+		if frame is Dictionary:
+			return _visual_accessor.call("texture", frame)
+	return null
+
+
+func _resolve_dictionary_visual(visuals: Dictionary, key: String) -> Variant:
+	var aliases := [key, key.to_lower(), key.to_upper(), key.replace(".", "/"), key.replace(".", "_")]
+	if key.begins_with("MultiverseJourney"):
+		aliases.append(key.replace("MultiverseJourney", "MJ"))
+	for alias in aliases:
+		if visuals.has(alias):
+			return visuals.get(alias)
+	return null
+
+
+func _canonical_edition(value: Variant) -> String:
+	if typeof(value) != TYPE_STRING:
+		return ""
+	var normalized := str(value).to_lower().strip_edges().replace("-", "_").replace(" ", "_")
+	if normalized in ["game", "g"]:
+		return "Game"
+	if normalized in ["multiversejourney", "multiverse_journey", "mj", "journey"]:
+		return "MultiverseJourney"
+	return ""
 
 
 func _select_action(action: String) -> bool:
@@ -405,7 +519,7 @@ func _on_pad_confirmed(amount: int) -> void:
 		return
 	action_requested.emit(_selected_action, amount)
 	if _feedback != null:
-		_feedback.text = "已送出 %s：%d" % [_selected_action, amount]
+		_feedback.text = "已送出 %s：%d" % [_action_label(_selected_action), amount]
 
 
 func _on_pad_cancelled() -> void:
@@ -435,7 +549,7 @@ func _confirm_current_amount() -> bool:
 		_show_feedback(str(result.get("reason", "金額無效")))
 		return false
 	action_requested.emit(_selected_action, int(result.get("amount", 0)))
-	_show_feedback("已送出 %s：%d" % [_selected_action, int(result.get("amount", 0))])
+	_show_feedback("已送出 %s：%d" % [_action_label(_selected_action), int(result.get("amount", 0))])
 	return true
 
 
@@ -467,6 +581,8 @@ func _is_action_allowed(action: String) -> bool:
 		return false
 	if action in ["exit", "back"]:
 		return true
+	if not _action_allowed_in_scene(action):
+		return false
 	var allowed_value: Variant = _model.get("allowed_actions", [])
 	var permitted := false
 	if typeof(allowed_value) in [TYPE_ARRAY, TYPE_PACKED_STRING_ARRAY]:
@@ -519,20 +635,16 @@ func _action_aliases(action: String) -> Array:
 	return []
 
 
-func _is_rear_edition() -> bool:
-	if _edition in ["rear", "back", "special", "special_finance", "panel23.rear"] or _edition.ends_with("rear"):
-		return true
-	var allowed_value: Variant = _model.get("allowed_actions", [])
-	if typeof(allowed_value) in [TYPE_ARRAY, TYPE_PACKED_STRING_ARRAY]:
-		for item in allowed_value:
-			if typeof(item) == TYPE_STRING and _canonical_action(str(item)) in ["take_special_finance", "repay_special_finance"]:
-				return true
-	if allowed_value is Dictionary:
-		for action in ["take_special_finance", "repay_special_finance"]:
-			for alias in _action_aliases(action):
-				if allowed_value.has(alias) and typeof(allowed_value.get(alias)) == TYPE_BOOL and bool(allowed_value.get(alias)):
-					return true
-	return false
+func _action_allowed_in_scene(action: String) -> bool:
+	if _mode == "atm":
+		return action in ["withdraw", "deposit"]
+	if _bank_scene == "rear":
+		return action in ["take_special_finance", "repay_special_finance"]
+	return action in ["take_loan", "repay_loan"]
+
+
+func _can_enter_rear() -> bool:
+	return _mode == "loan" and _model_valid and typeof(_model.get("can_special", false)) == TYPE_BOOL and bool(_model.get("can_special", false))
 
 
 func _display_value(key: String) -> String:
@@ -572,7 +684,19 @@ func _unavailable_message(action: String) -> String:
 		return "目前不可用的銀行操作"
 	if action in ["take_special_finance", "repay_special_finance"] and not bool(_model.get("can_special", false)):
 		return "僅銀行主席可用"
-	return "目前不可用：%s" % action
+	return "目前不可用：%s" % _action_label(action)
+
+
+func _action_label(action: String) -> String:
+	match action:
+		"withdraw": return "提款"
+		"deposit": return "存款"
+		"take_loan": return "申請貸款"
+		"repay_loan": return "償還貸款"
+		"take_special_finance": return "週轉現金"
+		"repay_special_finance": return "歸還款項"
+		"exit": return "EXIT"
+	return "銀行操作"
 
 
 func _refresh_action_buttons() -> void:
@@ -587,10 +711,12 @@ func _refresh_action_buttons() -> void:
 			continue
 		button.disabled = not _is_action_allowed(action)
 		if button is Button:
-			button.tooltip_text = "目前不可用" if button.disabled else "選擇後輸入金額"
-			(button as Button).add_theme_stylebox_override("normal", _style(Color("#3a5d57"), Color("#c5c889"), 1))
-			if action == _selected_action:
-				(button as Button).add_theme_stylebox_override("normal", _style(Color("#695f32"), Color("#fff4bc"), 2))
+			if _has_source_visual:
+				_set_button_transparent(button as Button)
+			else:
+				(button as Button).add_theme_stylebox_override("normal", _style(Color("#3a5d57"), Color("#c5c889"), 1))
+				if action == _selected_action:
+					(button as Button).add_theme_stylebox_override("normal", _style(Color("#695f32"), Color("#fff4bc"), 2))
 
 
 func _on_amount_bar_changed(value: float) -> void:
@@ -684,7 +810,34 @@ func _make_source_button(text_value: String, node_name: String, button_rect: Rec
 	button.add_theme_stylebox_override("hover", _style(Color("#557b6c"), Color("#fff0b2"), 1))
 	button.add_theme_stylebox_override("pressed", _style(Color("#263f3c"), Color("#fff4c8"), 2))
 	button.add_theme_stylebox_override("disabled", _style(Color("#2a3736"), Color("#657469"), 1))
+	if _has_source_visual:
+		_set_button_transparent(button)
 	return button
+
+
+func _make_source_hit_target(node_name: String, target_rect: Rect2) -> Button:
+	var target := Button.new()
+	target.name = node_name
+	target.position = target_rect.position
+	target.size = target_rect.size
+	target.custom_minimum_size = target_rect.size
+	target.focus_mode = Control.FOCUS_NONE
+	target.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	target.text = ""
+	_set_button_transparent(target)
+	return target
+
+
+func _set_button_transparent(button: Button) -> void:
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		button.add_theme_stylebox_override(state, empty)
+
+
+func _set_slider_transparent(slider: HSlider) -> void:
+	var empty := StyleBoxEmpty.new()
+	for state in ["slider", "grabber_area", "grabber_area_highlight", "grabber", "grabber_highlight", "focus"]:
+		slider.add_theme_stylebox_override(state, empty)
 
 
 func _make_label(text_value: String, label_rect: Rect2, font_size: int, color: Color, alignment: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT, node_name: String = "") -> Label:

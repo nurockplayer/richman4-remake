@@ -11,8 +11,8 @@ view model。
 
 | 欄位 | 用途 |
 | --- | --- |
-| `edition` | `Game` 或 `MultiverseJourney` 的來源版別；也接受小寫寫法 |
-| `entry_mode` | `atm` 顯示提款機，`loan` 顯示 Panel23 銀行場景 |
+| `edition` | `Game` 或 `MultiverseJourney` 的來源版別；接受小寫、`MJ` 等別名；`front`／`rear` 不是 edition |
+| `entry_mode` | `atm` 顯示提款機，`loan` 一律先顯示 Panel23 前台 |
 | `allowed_actions` | 正式允許的 action 陣列，或 action→bool 字典 |
 | `action_limits` | 正式 action→非負整數上限；元件不自行推算額度 |
 | `cash`, `deposit`, `loan`, `due_date` | 前台／提款機要顯示的 host 數值 |
@@ -35,6 +35,13 @@ view model。
 | Panel23 後台 | `640×480` | 週轉現金／歸還款項 `(11,305,114,40)`／`(11,362,114,40)`；EXIT `(11,419,80,40)` |
 | Panel21 calculator | `128×192`，疊在銀行場景 `(256,144)` | 由 `RichmanSourceAmountPad` 顯示 MAX／ENTER 與數字鍵 |
 
+`loan` 的前台／後台是同一流程內的 scene state，不由 `edition` 或
+`allowed_actions` 推導。`can_special=true` 時，前台才建立 owner-only 透明入口
+`(268,51,323,222)`；點擊後才進入後台。非主席前台可綁定 Panel23 chunk1，來源偏移
+`(62,198)` 以 `(320,240)` 為 anchor，畫在 `(258,42)`。後台綁定 chunk2 與 chunk20
+summary；chunk20 放在 `(10,125)`。後台 EXIT 回到前台，前台 EXIT 才發出 `closed()`。
+刷新 view model 時，仍有效的後台 scene 會保留；`can_special` 被撤銷則立即回前台。
+
 後台的三組文字保留來源中心 x=`78`、y=`147/195/243`，對應金額右界 x=`128`、
 y=`163/211/259`。`週轉現金` 是原版文字；正式 action 是
 `take_special_finance`，其 accounting 語意由核心決定為增加 `deposit`，元件不
@@ -42,10 +49,11 @@ y=`163/211/259`。`週轉現金` 是原版文字；正式 action 是
 
 `set_visuals(accessor)` 接受 keyed `Dictionary`、`Callable`，或提供
 `ui(edition, archive, resource, chunk)` 與 `texture(frame)` 的 resolver。前者可用
-`Game.Panel24`、`Game.Panel23.front`、`Game.Panel23.rear`、`Game.Panel21` 等 key；
-後者會查詢 Panel24／23／21 的指定 chunk。缺少素材時保留來源座標 fallback。Panel22
-沒有視覺資源，因此不會建立或假造 Panel22 圖像。原圖、匯出器與 full cache 由父層
-另行接入。
+`Game.Panel24`、`Game.Panel23.front`、`Game.Panel23.rear`、`Game.Panel23.chunk1`、
+`Game.Panel23.chunk20`、`Game.Panel21` 等 key；後者會查詢 Panel24／23／21 的指定
+chunk。來源圖存在時，按鈕是透明 hit target，獨立 labels 疊在來源 art 上；缺少主圖時
+才保留來源座標 fallback controls。Panel22 沒有視覺資源，因此不會建立或假造 Panel22
+圖像。原圖、匯出器與 full cache 由父層另行接入。
 
 ## Signals 與操作
 
@@ -57,9 +65,9 @@ y=`163/211/259`。`週轉現金` 是原版文字；正式 action 是
 
 空白、零、負數、含空白、非數字、非整數與超過上限的輸入會留在畫面上並顯示錯誤，
 不會發出訊號。ATM 的提款在左、存款在右，且 MAX 只填入該 action 的 host 上限。
-貸款／特殊融資按鈕會開啟獨立 Panel21 calculator；calculator 的取消只返回銀行
-場景。銀行場景的 EXIT 或沒有選取金額時的 Escape 才發出 `closed()`，由父層決定
-返回上一個流程。
+貸款／特殊融資按鈕會開啟獨立 Panel21 calculator；calculator 的取消只返回目前銀行
+scene。ATM 與 calculator 只有在自身可見時才攔截鍵盤事件。銀行前台 EXIT 或沒有選取
+金額時的 Escape 才發出 `closed()`；後台 EXIT 只返回前台，由父層決定返回上一個流程。
 
 ## 驗證
 
@@ -67,7 +75,9 @@ y=`163/211/259`。`週轉現金` 是原版文字；正式 action 是
 godot --headless --path . --script tests/source_bank_panel.gd
 ```
 
-測試以 SubViewport `push_input` 驗證鍵盤事件，以及按鈕事件、上限與 gate、三種場景、
-calculator 取消和 host dictionary 不變。這證明 Godot 控制項事件邊界，不宣稱作業系統
-實體輸入、原生視窗時序、原版素材完整匯入或畫面相似度已驗收；來源動畫時序的微小
-不確定性仍依契約記錄，待父層素材／MainUI 接線後另做整合與視覺審查。
+測試以 SubViewport `push_input` 驗證鍵盤／滑鼠事件，以及按鈕事件、上限與 gate、三種
+scene、calculator 取消、source chunk 組合和 host dictionary 不變。來源圖層以高對比
+texture 做像素檢查；Godot dummy headless renderer 會明確 SKIP 該像素段，需在可渲染的
+native lane 重跑。這些測試證明 Godot 控制項事件邊界，不宣稱作業系統實體輸入、原生
+視窗時序、原版素材完整匯入或畫面相似度已驗收；來源動畫時序的微小不確定性仍依契約
+記錄，待父層素材／MainUI 接線後另做整合與視覺審查。

@@ -23,6 +23,7 @@ var _available := false
 var _availability_message := ""
 var _visual_accessor: Variant = null
 var _edition := "Game"
+var _has_source_visual := false
 
 
 func _init() -> void:
@@ -209,7 +210,14 @@ func cancel() -> void:
 func _apply_visual() -> void:
 	var visual: Variant = _resolve_visual()
 	if not visual is Texture2D:
+		_has_source_visual = false
+		_set_source_layering(false)
+		var stale := get_node_or_null("AmountPadSourceVisual")
+		if stale != null:
+			stale.free()
 		return
+	_has_source_visual = true
+	_set_source_layering(true)
 	var existing := get_node_or_null("AmountPadSourceVisual") as TextureRect
 	if existing != null:
 		existing.texture = visual
@@ -233,9 +241,10 @@ func _resolve_visual() -> Variant:
 	var key := "%s.Panel21" % _edition
 	if _visual_accessor is Dictionary:
 		var visuals: Dictionary = _visual_accessor
-		if visuals.has(key):
-			return visuals.get(key)
-		for alias in [key.to_lower(), key.to_upper(), key.replace(".", "/"), key.replace(".", "_")]:
+		var aliases := [key, key.to_lower(), key.to_upper(), key.replace(".", "/"), key.replace(".", "_")]
+		if key.begins_with("MultiverseJourney"):
+			aliases.append(key.replace("MultiverseJourney", "MJ"))
+		for alias in aliases:
 			if visuals.has(alias):
 				return visuals.get(alias)
 		return null
@@ -252,8 +261,36 @@ func _resolve_visual() -> Variant:
 	return null
 
 
+func _set_source_layering(enabled: bool) -> void:
+	var surface := get_node_or_null("AmountPadSurface") as Panel
+	if surface != null:
+		surface.add_theme_stylebox_override("panel", StyleBoxEmpty.new() if enabled else _style(Color("#1b3030"), Color("#d8c37c"), 1))
+	if input_field != null:
+		input_field.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if enabled else _style(Color("#d9e5af"), Color("#f4e7ae"), 1))
+		input_field.add_theme_stylebox_override("focus", StyleBoxEmpty.new() if enabled else _style(Color("#d9e5af"), Color("#f4e7ae"), 1))
+	for child in get_children():
+		if child is Button:
+			if enabled:
+				_set_button_transparent(child as Button)
+			else:
+				_restore_button_style(child as Button)
+
+
+func _set_button_transparent(button: Button) -> void:
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		button.add_theme_stylebox_override(state, empty)
+
+
+func _restore_button_style(button: Button) -> void:
+	button.add_theme_stylebox_override("normal", _style(Color("#355955"), Color("#c4c98d"), 1))
+	button.add_theme_stylebox_override("hover", _style(Color("#4d7465"), Color("#fff0b2"), 1))
+	button.add_theme_stylebox_override("pressed", _style(Color("#1f3938"), Color("#fff4c8"), 1))
+	button.add_theme_stylebox_override("disabled", _style(Color("#273635"), Color("#65766b"), 1))
+
+
 func _gui_input(event: InputEvent) -> void:
-	if not event is InputEventKey:
+	if not visible or not is_visible_in_tree() or not event is InputEventKey:
 		return
 	var key_event := event as InputEventKey
 	if not key_event.pressed or key_event.echo:

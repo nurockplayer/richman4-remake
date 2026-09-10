@@ -315,7 +315,7 @@ func _build_toolbar() -> void:
 	_add_top_button("StockViewToggle", "持有股數表", Rect2(0, 0, 96, 40), _toggle_view)
 	_add_top_button("StockBuy", "買進", Rect2(97, 0, 90, 40), func() -> void: _open_quantity_pad("buy_stock"))
 	_add_top_button("StockSell", "賣出", Rect2(192, 0, 90, 40), func() -> void: _open_quantity_pad("sell_stock"))
-	_add_top_button("StockCompanyInfo", "上市公司資訊", Rect2(287, 0, 96, 40), func() -> void: show_detail())
+	_add_top_button("StockCompanyInfo", "上市公司資訊", Rect2(287, 0, 96, 40), _toggle_detail_screen)
 	_deposit_label = Label.new()
 	_deposit_label.name = "StockDeposit"
 	_deposit_label.position = Vector2(384, 2)
@@ -678,10 +678,18 @@ func _toggle_view() -> void:
 		show_overview()
 
 
+func _toggle_detail_screen() -> void:
+	if _screen_mode == "detail":
+		show_overview()
+	else:
+		show_detail()
+
+
 func _open_quantity_pad(action: String) -> void:
 	if _screen_mode == "detail":
 		_screen_mode = "overview"
 		_table_mode = "overview"
+		_refresh()
 	if _selected_symbol.is_empty():
 		_status_label.text = "請先選擇股票"
 		return

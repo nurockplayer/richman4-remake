@@ -27,6 +27,7 @@ var _has_source_visual := false
 var _selected_action := ""
 var _amount_text := ""
 var _amount_pad: Node = null
+var _amount_modal: Control = null
 var _feedback: Label
 var _amount_bar: HSlider
 var _amount_value: Label
@@ -369,6 +370,8 @@ func _add_source_layer(node_name: String, visual: Texture2D, origin: Vector2, lo
 
 
 func _enter_rear() -> void:
+	if _amount_pad != null:
+		return
 	if not _can_enter_rear():
 		_show_feedback("僅銀行主席可用")
 		return
@@ -376,6 +379,8 @@ func _enter_rear() -> void:
 
 
 func _switch_bank_scene(scene: String) -> void:
+	if _amount_pad != null:
+		return
 	if scene == "rear" and not _can_enter_rear():
 		return
 	_bank_scene = scene
@@ -387,6 +392,8 @@ func _switch_bank_scene(scene: String) -> void:
 
 
 func _exit_bank_scene() -> void:
+	if _amount_pad != null:
+		return
 	if _bank_scene == "rear":
 		call_deferred("_switch_bank_scene", "front")
 		return
@@ -503,6 +510,8 @@ func _canonical_edition(value: Variant) -> String:
 
 
 func _select_action(action: String) -> bool:
+	if _amount_pad != null:
+		return false
 	var canonical := _canonical_action(action)
 	if canonical.is_empty() or not _is_action_allowed(canonical):
 		_selected_action = ""
@@ -525,6 +534,15 @@ func _select_action(action: String) -> bool:
 
 func _open_amount_pad(action: String) -> void:
 	_close_amount_pad()
+	# Panel21 runs a nested source input loop: the bank scene remains visible
+	# but cannot receive pointer or keyboard activation until it returns.
+	_amount_modal = Control.new()
+	_amount_modal.name = "AmountModalBoundary"
+	_amount_modal.size = BANK_SIZE
+	_amount_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_amount_modal.z_index = 19
+	add_child(_amount_modal)
+	focus_mode = Control.FOCUS_NONE
 	_amount_pad = AmountPadScript.new()
 	_amount_pad.name = "SourceAmountPad"
 	_amount_pad.position = Vector2(256, 144)
@@ -545,9 +563,13 @@ func _on_pad_confirmed(amount: int) -> void:
 	if amount <= 0 or amount > _limit_for(_selected_action) or not _is_action_allowed(_selected_action):
 		_on_pad_invalid("金額已超過目前可用上限")
 		return
-	action_requested.emit(_selected_action, amount)
+	var submitted_action := _selected_action
+	_close_amount_pad()
+	_selected_action = ""
+	_refresh_action_buttons()
+	action_requested.emit(submitted_action, amount)
 	if _feedback != null:
-		_feedback.text = "已送出 %s：%d" % [_action_label(_selected_action), amount]
+		_feedback.text = "已送出 %s：%d" % [_action_label(submitted_action), amount]
 
 
 func _on_pad_cancelled() -> void:
@@ -728,6 +750,10 @@ func _action_label(action: String) -> String:
 
 
 func _refresh_action_buttons() -> void:
+	for node_name in ["BankExit", "BankRearEntry"]:
+		var parent_button := find_child(node_name, true, false) as BaseButton
+		if parent_button != null:
+			parent_button.disabled = _amount_pad != null
 	var button_names := {
 		"withdraw": "ATMWithdraw", "deposit": "ATMDeposit", "take_loan": "LoanBorrow",
 		"repay_loan": "LoanRepay", "take_special_finance": "SpecialBorrow",
@@ -737,7 +763,7 @@ func _refresh_action_buttons() -> void:
 		var button := find_child(str(button_names[action]), true, false) as BaseButton
 		if button == null:
 			continue
-		button.disabled = not _is_action_allowed(action)
+		button.disabled = _amount_pad != null or not _is_action_allowed(action)
 		if button is Button:
 			if _has_source_visual:
 				_set_button_transparent(button as Button)
@@ -812,11 +838,20 @@ func _show_feedback(message: String) -> void:
 
 func _close_amount_pad() -> void:
 	if _amount_pad != null and is_instance_valid(_amount_pad):
-		_amount_pad.free()
+		# Cancellation may originate inside the calculator's input callback.
+		_amount_pad.hide()
+		_amount_pad.queue_free()
 	_amount_pad = null
+	if _amount_modal != null and is_instance_valid(_amount_modal):
+		_amount_modal.hide()
+		_amount_modal.queue_free()
+	_amount_modal = null
+	focus_mode = Control.FOCUS_ALL
 
 
 func _close_flow() -> void:
+	if _amount_pad != null:
+		return
 	_close_amount_pad()
 	closed.emit()
 

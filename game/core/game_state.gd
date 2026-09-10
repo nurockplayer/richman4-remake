@@ -24,6 +24,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SpecialFinance = preload("res://game/core/special_finance.gd")
+const MonthlyStatements = preload("res://game/core/monthly_statements.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -1599,22 +1600,29 @@ func _settle_company_dividends() -> void:
 	if not _is_companies() or int(state.get("day_of_month", 0)) != 15: return
 	var payouts: Dictionary = {}
 	var settlements: Array = []
+	var report_rows: Array = []
 	for player in _players():
 		if bool(player.get("alive", false)): payouts[int(player.id)] = 0
 	for company in state.companies:
 		var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
+		var row := {"company_id": int(company.id), "name": str(company.display_name), "monthly_profit": int(company.monthly_profit), "stock_index": int(company.stock_index), "payouts": []}
 		var total_shares := 0
 		for player_id in payouts:
 			total_shares += int(_player(int(player_id)).stocks[stock_symbol])
+			row.payouts.append(0)
+		report_rows.append(row)
 		if total_shares == 0: continue
 		var pool := int(company.monthly_profit)
 		var distributed := 0
+		var report_player := 0
 		for player_id in payouts:
 			var shares := int(_player(int(player_id)).stocks[stock_symbol])
 			# Integer division truncates toward zero for positive and negative pools.
 			var payout: int = pool * shares / total_shares
 			payouts[player_id] = int(payouts[player_id]) + payout
 			distributed += payout
+			row.payouts[report_player] = payout
+			report_player += 1
 		settlements.append({"company":company,"pool":pool,"distributed":distributed})
 	var projected_bank_deposits := int(state.bank.deposits)
 	for player_id in payouts:
@@ -1627,6 +1635,10 @@ func _settle_company_dividends() -> void:
 	if projected_bank_deposits>1000000000000:
 		_record_event("company_dividend_unavailable", {"reason":"balance_limit"})
 		return
+	# Capture before pool reset/bankruptcy, using the exact amounts above.
+	# This synchronous settlement completes before its result reaches any UI.
+	var report := MonthlyStatements.dividend(state, report_rows, payouts)
+	if not report.is_empty(): _record_event("monthly_statement", {"report": report})
 	_settling_company_dividends = true
 	for settlement in settlements:
 		var company: Dictionary = settlement.company
@@ -6630,6 +6642,7 @@ func _apply_month_boundary() -> void:
 
 func _apply_deposit_interest() -> void:
 	var players: Array = _players()
+	var report := MonthlyStatements.begin(state, "interest")
 	for player in players:
 		if not bool(player.get("alive", false)) or int(player.get("loan", 0)) > 0:
 			continue
@@ -6644,7 +6657,9 @@ func _apply_deposit_interest() -> void:
 		bank["deposits"] = int(bank.get("deposits", 0)) + interest
 		state["bank"] = bank
 		_bank_subtract_cash(interest)
+		MonthlyStatements.record_interest(report, int(player.id), interest)
 		_record_event("monthly_interest", {"player_id": int(player["id"]), "amount": interest})
+	if not report.is_empty(): _record_event("monthly_statement", {"report": report})
 
 
 func _repay_due_loan(player_id: int) -> void:

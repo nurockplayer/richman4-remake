@@ -7,9 +7,10 @@ func run() -> void:
 	var controller := Controller.new()
 	controller.panel_factory = func() -> Control:
 		var panel := ReportPanel.new()
-		panel.auto_advance_seconds = 0.08
+		panel.auto_advance_seconds = 0.5
 		return panel
 	root.add_child(controller)
+	await settle()
 	var owner := RefCounted.new()
 	var before := {"event_log": [{"type": "turn_started", "day": 14, "turn": 1}]}
 	var after := {"event_log": before.event_log + [event("dividend")]}
@@ -21,7 +22,7 @@ func run() -> void:
 	await create_timer(0.02).timeout
 	controller.sync(owner, false)
 	expect(controller.report_panel == panel, "refresh keeps the existing timed report")
-	await create_timer(0.16).timeout
+	await create_timer(0.8).timeout
 	await settle()
 	expect(not controller.is_open(), "real dividend presenter automatically advances through the host lifecycle")
 	controller.capture_transition(owner, before, after)

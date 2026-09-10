@@ -49,6 +49,7 @@ func run() -> void:
 	_test_corrupted_edition_does_not_borrow_the_other()
 	_test_wrong_edition_binding()
 	_test_page_line_rules()
+	_test_source_digest_enforced()
 	_test_structural_integer_handling()
 	_test_unsafe_index_path()
 	_test_oversized_index_and_content()
@@ -149,6 +150,28 @@ func _test_page_line_rules() -> void:
 	var loader_three: RefCounted = help_script.new(manifest_path)
 	expect(not loader_three.available("Game"), "fifteen-line page is rejected")
 
+func _test_source_digest_enforced() -> void:
+	var manifest_path := _new_bundle("source_digest")
+	var valid: RefCounted = help_script.new(manifest_path)
+	expect(valid.available("Game"), "fixture carrying source digest loads")
+	var edition := _edition_dictionary("Game", "Game", "a".repeat(64))
+	edition["sections"][0]["topics"][0].erase("source_payload_sha256")
+	write_text(_root.path_join("source_digest/content/Game.json"), JSON.stringify(edition))
+	var sha := FileAccess.get_sha256(_root.path_join("source_digest/content/Game.json"))
+	write_text(manifest_path, _index_text(sha, FileAccess.get_sha256(_root.path_join("source_digest/content/MultiverseJourney.json"))))
+	var loader: RefCounted = help_script.new(manifest_path)
+	expect(not loader.available("Game"), "missing source digest is rejected")
+	for bad in ["A".repeat(64), "c".repeat(63), "g".repeat(64), "c".repeat(65)]:
+		edition = _edition_dictionary("Game", "Game", "a".repeat(64))
+		edition["sections"][0]["topics"][0]["source_payload_sha256"] = bad
+		write_text(_root.path_join("source_digest/content/Game.json"), JSON.stringify(edition))
+		sha = FileAccess.get_sha256(_root.path_join("source_digest/content/Game.json"))
+		write_text(manifest_path, _index_text(sha, FileAccess.get_sha256(_root.path_join("source_digest/content/MultiverseJourney.json"))))
+		var broken: RefCounted = help_script.new(manifest_path)
+		expect(not broken.available("Game"), "malformed source digest %s is rejected" % bad)
+	expect(valid.available("MultiverseJourney"), "source digest rejection stays local to Game")
+
+
 func _test_structural_integer_handling() -> void:
 	var manifest_path := _new_bundle("floats")
 	var base_index := FileAccess.open(manifest_path, FileAccess.READ).get_as_text()
@@ -212,6 +235,7 @@ func _edition_dictionary(edition: String, declared: String, archive_sha: String)
 				"resource_index": index,
 				"title": "%s-topic-%d" % [declared, index],
 				"payload_sha256": "0".repeat(64),
+				"source_payload_sha256": "c".repeat(64),
 				"pages": [["%s line one" % declared, "%s line two" % declared]],
 			})
 			index += 1

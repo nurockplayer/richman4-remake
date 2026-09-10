@@ -143,6 +143,12 @@ def canonical_payload(pages: list) -> str:
     ).hexdigest()
 
 
+def source_payload_digest(payload: bytes) -> str:
+    """Digest of the exact decoded resource bytes, before any page decoding."""
+
+    return hashlib.sha256(payload).hexdigest()
+
+
 class HelpBundleTestCase(unittest.TestCase):
     def setUp(self) -> None:
         if exporter is None:
@@ -399,6 +405,94 @@ class ValidateRejectionTests(HelpBundleTestCase):
         sync_sha(self.index_path, "Game")
         with self.assertRaises(DecodeError):
             exporter.validate(self.index_path)
+
+
+class SourceProvenanceTests(HelpBundleTestCase):
+    def test_every_topic_records_the_exact_decoded_source_digest(self) -> None:
+        self.export()
+        for name, payloads in (
+            ("Game", game_payloads()),
+            ("MultiverseJourney", mj_payloads()),
+        ):
+            topics = self.topics(name)
+            self.assertEqual(len(topics), 99)
+            for topic in topics:
+                index = topic["resource_index"]
+                self.assertRegex(topic.get("source_payload_sha256", ""), r"^[0-9a-f]{64}$")
+                self.assertEqual(
+                    topic["source_payload_sha256"],
+                    source_payload_digest(payloads[index]),
+                )
+
+    def test_source_digest_covers_raw_nul_separator_and_cp950_bytes(self) -> None:
+        self.export()
+        payloads = game_payloads()
+        # A standalone @ page separator and honest blank lines are raw bytes.
+        self.assertEqual(
+            self.topics()[1]["source_payload_sha256"], source_payload_digest(payloads[2])
+        )
+        self.assertEqual(
+            self.topics()[2]["source_payload_sha256"], source_payload_digest(payloads[3])
+        )
+        # 0x40 is a CP950 trail byte here, so the raw bytes must be digested
+        # before page/encoding conversion ever touches them.
+        trail = self.topics()[3]
+        self.assertEqual(
+            trail["source_payload_sha256"],
+            hashlib.sha256(TRAIL_40_LINE + b"\x00").hexdigest(),
+        )
+        self.assertEqual(trail["source_payload_sha256"], source_payload_digest(payloads[4]))
+
+    def test_source_digest_is_distinct_from_the_canonical_page_digest(self) -> None:
+        self.export()
+        payloads = game_payloads()
+        for index in (1, 2, 3, 4, 11):
+            topic = self.topics()[index - 1]
+            self.assertNotEqual(topic["source_payload_sha256"], topic["payload_sha256"])
+            self.assertEqual(topic["payload_sha256"], canonical_payload(topic["pages"]))
+            self.assertEqual(
+                topic["source_payload_sha256"], source_payload_digest(payloads[index])
+            )
+
+
+class SourceProvenanceValidateTests(HelpBundleTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.export()
+        self.index_path = self.output / "manifest.json"
+        self.content = self.output / "content" / "Game.json"
+
+    def _tamper(self, value: object) -> None:
+        edition = read_json(self.content)
+        edition["sections"][0]["topics"][0]["source_payload_sha256"] = value
+        write_json(self.content, edition)
+        sync_sha(self.index_path, "Game")
+
+    def test_absent_source_digest_is_rejected(self) -> None:
+        edition = read_json(self.content)
+        topic = edition["sections"][0]["topics"][0]
+        topic.pop("source_payload_sha256", None)
+        write_json(self.content, edition)
+        sync_sha(self.index_path, "Game")
+        with self.assertRaises(DecodeError):
+            exporter.validate(self.index_path)
+
+    def test_malformed_source_digest_is_rejected(self) -> None:
+        for bad in ("A" * 64, "0" * 63, "g" * 64, 123, None):
+            with self.subTest(value=bad):
+                self._tamper(bad)
+                with self.assertRaises(DecodeError):
+                    exporter.validate(self.index_path)
+
+    def test_source_root_recomputes_exact_source_equality(self) -> None:
+        self._tamper("d" * 64)
+        # Structural-only validation cannot detect a forged source digest.
+        exporter.validate(self.index_path)
+        with self.assertRaises(DecodeError):
+            exporter.validate(self.index_path, source_root=self.root)
+
+    def test_source_root_accepts_the_unmodified_export(self) -> None:
+        exporter.validate(self.index_path, source_root=self.root)
 
 
 class CommandLineTests(HelpBundleTestCase):

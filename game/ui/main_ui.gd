@@ -21,6 +21,7 @@ const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
+const StockPanel = preload("res://game/ui/stock_panel.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -65,6 +66,7 @@ var game_state: Object
 var state: Dictionary = {}
 var board_view: Control
 var source_shell: Control
+var source_stock_panel: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -316,8 +318,41 @@ func _build_source_shell() -> void:
 		shell.minimap_node_requested.connect(_on_source_minimap_node_requested)
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
+	_build_source_stock_panel()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
+
+func _build_source_stock_panel() -> void:
+	if source_shell == null:
+		return
+	var panel := StockPanel.new()
+	panel.name = "SourceStockPanel"
+	panel.hide()
+	panel.z_index = 20
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	canvas.add_child(panel)
+	panel.trade_requested.connect(_on_source_stock_trade_requested)
+	panel.closed.connect(_on_source_stock_closed)
+	source_stock_panel = panel
+
+func _on_source_stock_trade_requested(action: String, symbol: String, quantity: int) -> void:
+	if source_stock_panel == null or not source_stock_panel.visible:
+		return
+	var result := _invoke_game("choose_action", [action, {"symbol": symbol, "quantity": quantity}])
+	_append_local_log("股票交易：%s" % _result_text(result, "已送出交易指令。"))
+	_handle_result(result)
+	if source_stock_panel != null:
+		source_stock_panel.call("apply_trade_result", result, _active_map_definition)
+		if not _presentation_busy:
+			source_stock_panel.call("set_snapshot", state, _active_map_definition)
+
+func _on_source_stock_closed() -> void:
+	if source_stock_panel != null and source_stock_panel.visible:
+		return
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
 	_on_new_game_pressed()

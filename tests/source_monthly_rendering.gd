@@ -33,7 +33,9 @@ class FakeVisuals extends RefCounted:
 		var image := Image.create(maxi(1, int(float(logical["width"]) * 2.0)), maxi(1, int(float(logical["height"]) * 2.0)), false, Image.FORMAT_RGBA8)
 		if int(frame["resource"]) == 25 and int(frame["chunk"]) == 0:
 			image.fill(source_color)
-			image.set_pixel(0, 0, Color(0, 0, 0, 0))
+			# A logical pixel samples a 2x source texture at its center. Use a
+			# bounded transparent area so the probe cannot sample a green neighbor.
+			image.fill_rect(Rect2i(0, 0, 8, 8), Color(0, 0, 0, 0))
 		else:
 			image.fill(Color("#728fd7"))
 		return ImageTexture.create_from_image(image)
@@ -101,9 +103,11 @@ func _run() -> void:
 		skipped += 2
 		print("SKIP: native pixel probes require a non-headless DisplayServer; metadata and geometry still ran")
 	else:
+		await RenderingServer.frame_post_draw
 		var pixels := viewport.get_texture().get_image()
 		_expect(pixels.get_pixel(20, 20).is_equal_approx(visuals.source_color), "source interest background is visible above fallback")
-		_expect(pixels.get_pixel(0, 0).is_equal_approx(Color.BLACK), "transparent interest source pixels expose opaque black backing")
+		print("MONTHLY_BACKGROUND_PROBE opaque=%s zero=%s" % [pixels.get_pixel(20, 20), pixels.get_pixel(2, 2)])
+		_expect(pixels.get_pixel(2, 2).is_equal_approx(Color.BLACK), "transparent interest source pixels expose opaque black backing")
 
 	panel.call("set_view_model", _dividend_model())
 	await _settle()

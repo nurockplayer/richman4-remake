@@ -223,7 +223,10 @@ func _test_dividend_model_and_geometry(panel: Node) -> void:
 	expect(header_profit != null and header_profit.text == "本月盈餘", "monthly profit header is present")
 	expect(total != null and total.text == "紅利", "dividend total label is present")
 	if header_company != null:
-		expect_equal(header_company.get_rect().get_center(), Vector2(42, 118), "company header keeps source relative center")
+		# Source x18 is a left edge, not a center. Check its visible location;
+		# a translated parent must not conceal an incorrect local-rect contract.
+		var company_rect := header_company.get_global_rect()
+		expect_equal(Vector2(company_rect.position.x, company_rect.get_center().y), Vector2(42, 118), "company header keeps source left edge and row center")
 	if header_player != null:
 		expect_equal(header_player.get_rect().get_center(), Vector2(128, 106), "player header keeps source diagonal center")
 	if header_profit != null:

@@ -213,6 +213,9 @@ func _test_geometry_and_art(panel: Control, platform: Object) -> void:
 		_expect_equal((labels[index] as Label).text, SOURCE_LABELS[index], "source label %d retains source order" % index)
 		var expected_color := Color("#00f0f0") if index < 8 else Color("#f0f000")
 		_expect_equal((panel.get("key_labels")[index] as Label).get_theme_color("font_color"), expected_color, "slot %d uses source color" % index)
+	_expect_equal((panel.find_child("SourceHotkeysResetLabel", true, false) as Label).text, "原始設定", "source reset caption is preserved")
+	_expect_equal((panel.find_child("SourceHotkeysCancelLabel", true, false) as Label).text, "取 消", "source cancel caption is preserved")
+	_expect_equal((panel.find_child("SourceHotkeysAcceptLabel", true, false) as Label).text, "確 定", "source accept caption is preserved")
 	_expect(panel.find_child("SourceHotkeysPressed", true, false) == null, "idle state has no pressed overlay")
 	# Missing art is an explicit unavailable visual state while the logical
 	# presenter remains usable for isolated interaction tests.

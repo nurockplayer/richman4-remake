@@ -532,6 +532,7 @@ func _render() -> void:
 	if texture != null:
 		_add_art(source, "SourceHotkeysFrame", FRAME_ORIGIN, FRAME_SIZE)
 	_draw_labels()
+	_draw_footer_labels()
 	if _pressed_action.begins_with("slot:"):
 		var pressed_slot := int(_pressed_action.trim_prefix("slot:"))
 		if pressed_slot >= 0 and pressed_slot < SLOT_COUNT:
@@ -555,8 +556,9 @@ func _render() -> void:
 func _draw_labels() -> void:
 	for index in range(SLOT_COUNT):
 		var center := _key_center(index)
+		var pressed_offset := Vector2(1.0, 1.0) if _pressed_action == "slot:%d" % index else Vector2.ZERO
 		var label := _make_label("SourceHotkeysKeyLabel%d" % index, _system.key_name(int(_draft_bindings[index])), 12, SOURCE_CYAN if index < FIXED_SLOT_COUNT else SOURCE_YELLOW)
-		label.position = FRAME_ORIGIN + center - Vector2(26.5, 7.0)
+		label.position = FRAME_ORIGIN + center - Vector2(26.5, 7.0) + pressed_offset
 		if _editing_slot == index:
 			label.visible = false
 		label.size = Vector2(53.0, 14.0)
@@ -564,16 +566,32 @@ func _draw_labels() -> void:
 		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		label.set_meta("source_slot", index)
 		label.set_meta("source_center", center)
+		label.set_meta("source_press_offset", pressed_offset)
 		label.set_meta("source_column", 0 if index < 15 else 1)
 		key_labels.append(label)
 		var title_center := _title_center(index)
 		var title := _make_label("SourceHotkeysTitleLabel%d" % index, SOURCE_LABELS[index], 12, SOURCE_WHITE)
-		title.position = FRAME_ORIGIN + title_center - Vector2(36.0, 7.0)
+		title.position = FRAME_ORIGIN + title_center - Vector2(36.0, 7.0) + pressed_offset
 		title.size = Vector2(72.0, 14.0)
 		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		title.set_meta("source_slot", index)
 		title_labels.append(title)
+
+
+func _draw_footer_labels() -> void:
+	var entries := [
+		["SourceHotkeysResetLabel", "原始設定", Vector2(52.0, 296.0)],
+		["SourceHotkeysCancelLabel", "取 消", Vector2(165.0, 296.0)],
+		["SourceHotkeysAcceptLabel", "確 定", Vector2(278.0, 296.0)],
+	]
+	for entry in entries:
+		var label := _make_label(str(entry[0]), str(entry[1]), 15, SOURCE_WHITE)
+		var center: Vector2 = entry[2]
+		label.position = FRAME_ORIGIN + center - Vector2(36.0, 8.0)
+		label.size = Vector2(72.0, 16.0)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 
 
 func _draw_pressed_effect(slot: int) -> void:

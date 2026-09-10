@@ -62,6 +62,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_rende
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_lifecycle.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_focus.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_money.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_final.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_deferred.gd

@@ -30,6 +30,10 @@ const INTEREST_ANCHORS := {
 const VALID_EDITIONS := ["Game", "MultiverseJourney"]
 const MAX_PLAYERS := 4
 const MAX_COMPANIES := 12
+const MONEY_LIMIT := 1000000000000
+# Per-company earnings are signed money. The producer caps credited totals at
+# one account ceiling, but can emit aggregate losses before bankruptcy.
+const MIN_DIVIDEND_TOTAL := -MONEY_LIMIT * MAX_COMPANIES
 const SOURCE_DARK := Color("#101010")
 const SOURCE_WHITE := Color("#ffffff")
 const SOURCE_SHADOW := Color("#101010")
@@ -723,13 +727,13 @@ func _validate_model(value: Dictionary) -> bool:
 				return false
 			if not _is_integer(company_value.get("company_id", null)) or not _valid_name(company_value.get("name", null)):
 				return false
-			if not _is_integer(company_value.get("monthly_profit", null)):
+			if not _money(company_value.get("monthly_profit", null), -MONEY_LIMIT):
 				return false
 			var payouts_value: Variant = company_value.get("payouts", null)
 			if not payouts_value is Array or payouts_value.size() != players_value.size():
 				return false
 			for payout in payouts_value:
-				if not _is_integer(payout):
+				if not _money(payout, -MONEY_LIMIT):
 					return false
 			var company_id := int(company_value["company_id"])
 			if company_id in company_ids:
@@ -755,12 +759,12 @@ func _valid_players(value: Variant, kind: String) -> bool:
 		ids.append(player_id)
 		characters.append(character_id)
 		if kind == "dividend":
-			if not _is_integer(player_value.get("total", null)):
+			if not _money(player_value.get("total", null), MIN_DIVIDEND_TOTAL):
 				return false
 		else:
-			if not _is_integer(player_value.get("deposit_before", null)) or not _is_integer(player_value.get("interest", null)):
+			if not _money(player_value.get("deposit_before", null), 0) or not _money(player_value.get("interest", null), 0):
 				return false
-			if int(player_value["interest"]) < 0 or typeof(player_value.get("loan_active", null)) != TYPE_BOOL:
+			if typeof(player_value.get("loan_active", null)) != TYPE_BOOL:
 				return false
 	return true
 
@@ -776,6 +780,10 @@ func _valid_date(value: Variant) -> bool:
 
 func _valid_name(value: Variant) -> bool:
 	return typeof(value) == TYPE_STRING and not str(value).strip_edges().is_empty()
+
+
+func _money(value: Variant, minimum: int) -> bool:
+	return _is_integer(value) and value >= minimum and value <= MONEY_LIMIT
 
 
 func _is_integer(value: Variant) -> bool:

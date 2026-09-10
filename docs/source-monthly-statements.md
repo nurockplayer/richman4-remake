@@ -102,3 +102,23 @@ Presenter 現在於建立時讀取本應用程式視窗的焦點，並在 applic
 deferred-news 10、final-overlay 7，全數零失敗／零 Godot error。
 本修正只改 presenter 的焦點／Timer 與 runner；核心與繪圖／素材路徑未變，
 沿用上述核心完整 regression 與十二張對照畫面，另交 fresh exact-head review。
+
+## 金額界線與目前原生 gate
+
+第二輪 Sol 對 `bf27bd2` 提出 P2：純 presenter 只驗證整數型別，接受超過既有金額
+上限的公司盈餘／payout。Immutable `3ba143d` 以有效模型重現 33／19；目前修正後
+headless／native 33／0。每公司盈餘與 payout 限 ±10^12，存款／利息限 0..10^12；
+正紅利合計受核心入帳預檢限制為 10^12，虧損合計則保留最多 12 公司乘以單公司上限。
+測試用經 save validator 通過的兩家公司 fixture，經公開 end_turn 產生 -2×10^12
+報表，確認沒有把真實破產前虧損誤拒為無效。既有 presenter 134、核心 51、native
+MainUI 16 皆通過，沒有改動結算核心或繪圖。
+
+但 native focus 測試再次出現 11／2：重新取得焦點後沒有在期限內觀察到關閉，
+第二個 once-only failure 為同一未關閉狀態的延伸。新增 trace 的同序列重播 11／0
+沒有重現；不能因此說明失敗原因。唯讀 Sol arbiter 判定 **native focus gate HOLD**，
+要求分辨 SceneTree 收到的 OS 焦點通知與測試注入通知，並記錄 Timer 的 paused／
+stopped／time_left、timeout／continued 與等待期限 snapshot。
+`e27f433` 保留全部既有斷言，加入最多 64 筆、僅失敗時輸出的紀錄；一次單獨 native
+診斷為 11／0，仍不足以解釋先前未記錄狀態的 11／2。沒有增加等待上限、壓制 OS
+通知或宣稱修正這個尚未查明的問題。金額修正待新的 exact-head review；原生 focus、
+一般 OS 操作與套件驗收仍 HOLD／REVIEW_INCOMPLETE，不得以其他 green 取代。

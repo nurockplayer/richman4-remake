@@ -72,6 +72,7 @@ var _movement_index := 0
 var _movement_elapsed := 0.0
 var _movement_step_seconds := 0.16
 var _player_directions: Dictionary = {}
+var _active_sprite_kind := ""
 
 func _process(delta: float) -> void:
 	_advance_movement(delta)
@@ -554,7 +555,9 @@ func _draw_original_board() -> void:
 		return a.get("center", Vector2.ZERO).y < b.get("center", Vector2.ZERO).y
 	)
 	for job in _scene_draws:
-		var painted := _draw_sprite(job.frame, job.center, _map_scale() * map_zoom, str(job.get("kind", "")))
+		_active_sprite_kind = str(job.get("kind", ""))
+		var painted := _draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
+		_active_sprite_kind = ""
 		if not painted:
 			_draw_scene_fallback(job)
 		if painted and job.has("color"):
@@ -979,7 +982,7 @@ func _draw_style_box(rect: Rect2, background: Color, border: Color, radius: floa
 	style.set_corner_radius_all(int(radius))
 	draw_style_box(style, rect)
 
-func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float, kind := "") -> bool:
+func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bool:
 	var sprite: Texture2D = visuals.texture(frame)
 	if sprite == null:
 		return false
@@ -991,7 +994,7 @@ func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float, kind 
 	# The map/background is ground and rotates through its projected position.
 	# Extracted road, house, scenery, and character frames are billboard
 	# overlays: rotate their world position, but keep the source sprite upright.
-	draw_set_transform(center, _sprite_rotation(kind), Vector2(scale_factor, scale_factor))
+	draw_set_transform(center, _sprite_rotation(_active_sprite_kind), Vector2(scale_factor, scale_factor))
 	draw_texture_rect(sprite, local_rect, false)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	return true

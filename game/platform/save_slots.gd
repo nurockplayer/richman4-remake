@@ -36,6 +36,16 @@ class FileSystemIO extends RefCounted:
 	func make_directory(path: String) -> int:
 		return DirAccess.make_dir_recursive_absolute(path)
 
+	# mkdir is an atomic ownership operation shared by processes. Never
+	# remove a lock we did not create, including an orphan from a crashed app.
+	func acquire_write_lock(destination: String) -> Dictionary:
+		var lock_path := destination + ".write-lock"
+		var error := DirAccess.make_dir_absolute(lock_path)
+		return {"ok": error == OK, "path": lock_path, "io_error": error}
+
+	func release_write_lock(lock_path: String) -> int:
+		return DirAccess.remove_absolute(lock_path)
+
 	func file_exists(path: String) -> bool:
 		return FileAccess.file_exists(path)
 
@@ -208,16 +218,6 @@ func write(slot_id: Variant, payload: Variant, expected_fingerprint: Variant = n
 		}
 
 	var destination := str(resolved.path)
-	var fingerprint_result := _current_fingerprint(destination)
-	if expected_fingerprint != null:
-		var current_fingerprint := str(fingerprint_result.get("fingerprint", ""))
-		var current_readable := bool(fingerprint_result.get("ok", false))
-		var destination_exists := bool(fingerprint_result.get("exists", false))
-		if not current_readable and destination_exists:
-			return _stale_result(slot, destination, str(expected_fingerprint), "destination_unreadable")
-		if current_fingerprint != str(expected_fingerprint):
-			return _stale_result(slot, destination, str(expected_fingerprint), "destination_changed")
-
 	var directory_error := _ensure_slot_directory()
 	if directory_error != OK:
 		return {
@@ -228,6 +228,33 @@ func write(slot_id: Variant, payload: Variant, expected_fingerprint: Variant = n
 			"slot": slot,
 			"path": destination,
 		}
+
+	var lock := _io_call("acquire_write_lock", [destination])
+	if not bool(lock.get("ok", false)):
+		return {
+			"ok": false, "status": STATUS_ERROR, "error": "slot_write_busy",
+			"io_error": lock.get("io_error", ERR_CANT_CREATE),
+			"slot": slot, "path": destination,
+		}
+	var result := _write_locked(slot, destination, snapshot, expected_fingerprint)
+	var release_error := int(_io_call_value("release_write_lock", [str(lock.path)], ERR_CANT_CREATE))
+	if release_error != OK:
+		# A successful rename remains a successful save. Surface the cleanup
+		# failure without pretending that the committed destination was lost.
+		result["lock_cleanup_error"] = release_error
+	return result
+
+
+func _write_locked(slot: int, destination: String, snapshot: Dictionary, expected_fingerprint: Variant) -> Dictionary:
+	var fingerprint_result := _current_fingerprint(destination)
+	if expected_fingerprint != null:
+		var current_fingerprint := str(fingerprint_result.get("fingerprint", ""))
+		var current_readable := bool(fingerprint_result.get("ok", false))
+		var destination_exists := bool(fingerprint_result.get("exists", false))
+		if not current_readable and destination_exists:
+			return _stale_result(slot, destination, str(expected_fingerprint), "destination_unreadable")
+		if current_fingerprint != str(expected_fingerprint):
+			return _stale_result(slot, destination, str(expected_fingerprint), "destination_changed")
 
 	var json_text := JSON.stringify(snapshot)
 	var bytes := json_text.to_utf8_buffer()
@@ -580,7 +607,7 @@ func _ensure_slot_directory() -> int:
 func _temporary_path(destination: String) -> String:
 	for _attempt in range(100):
 		_temporary_sequence += 1
-		var candidate := "%s.tmp.%d" % [destination, _temporary_sequence]
+		var candidate := "%s.tmp.%d.%d.%d" % [destination, OS.get_process_id(), get_instance_id(), _temporary_sequence]
 		if not bool(_io_call_value("file_exists", [candidate], false)):
 			return candidate
 	return ""

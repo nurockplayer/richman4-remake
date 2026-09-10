@@ -12,7 +12,7 @@ var _slot_directory := ""
 var _default_path := ""
 
 
-class FaultIO extends RefCounted:
+class FaultIO extends SaveSlotsScript.FileSystemIO:
 	var mode := ""
 
 	func make_directory(path: String) -> int:
@@ -383,18 +383,21 @@ func _test_failure_preserves_existing_bytes() -> void:
 	var write_failed: Dictionary = _store(write_fault).write(1, new_payload, expected)
 	expect(not bool(write_failed.get("ok", true)), "injected temporary write failure is returned")
 	expect_equal(_bytes(baseline.slot_path(1)), old_bytes, "temporary write failure preserves old bytes")
+	expect(DirAccess.get_directories_at(_slot_directory).is_empty(), "failed transaction releases its owned write lock")
 
 	var readback_fault := FaultIO.new()
 	readback_fault.mode = "readback"
 	var readback_failed: Dictionary = _store(readback_fault).write(1, new_payload, expected)
 	expect(not bool(readback_failed.get("ok", true)), "injected temporary readback failure is returned")
 	expect_equal(_bytes(baseline.slot_path(1)), old_bytes, "temporary readback failure preserves old bytes")
+	expect(DirAccess.get_directories_at(_slot_directory).is_empty(), "failed transaction releases its owned write lock")
 
 	var rename_fault := FaultIO.new()
 	rename_fault.mode = "rename"
 	var rename_failed: Dictionary = _store(rename_fault).write(1, new_payload, expected)
 	expect(not bool(rename_failed.get("ok", true)), "injected atomic rename failure is returned")
 	expect_equal(_bytes(baseline.slot_path(1)), old_bytes, "atomic rename failure preserves old bytes")
+	expect(DirAccess.get_directories_at(_slot_directory).is_empty(), "failed transaction releases its owned write lock")
 	var slot_dir := DirAccess.open(_slot_directory)
 	if slot_dir != null:
 		for file_name in slot_dir.get_files():

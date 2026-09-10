@@ -32,6 +32,22 @@ const STATUS_UNREADABLE := "unreadable"
 const STATUS_ERROR := "error"
 const SOURCE_PORTRAIT_RESOURCE := 2
 const SOURCE_PORTRAIT_CHUNK_COUNT := 12
+const SOURCE_MAP_PREVIEW_START_CHUNK := 2
+const SOURCE_MAP_PREVIEW_COUNT := {
+	"Game": 4,
+	"MultiverseJourney": 8,
+}
+const SOURCE_SLOT_LABEL_CHUNK := {
+	"Game": 6,
+	"MultiverseJourney": 10,
+}
+const SOURCE_DATE_X := 165.0
+const SOURCE_MAP_X := 209.0
+const SOURCE_PORTRAIT_X := 289.0
+const SOURCE_ROW_X := 129.0
+const SOURCE_ROW_WIDTH := 448.0
+const SOURCE_ROW_HEIGHT := 72.0
+const SOURCE_THUMBNAIL_SIZE := Vector2(72.0, 72.0)
 
 const SOURCE_PANEL := Color("#8daea7")
 const SOURCE_PANEL_DARK := Color("#6f9791")
@@ -84,6 +100,7 @@ var overwrite_cancel_button: Button
 var row_buttons: Dictionary = {}
 var row_content: Dictionary = {}
 var row_rects: Dictionary = {}
+var row_visuals: Dictionary = {}
 
 var _selected_slot := -1
 var _overwrite_open := false
@@ -248,6 +265,21 @@ func get_row_rect(slot_id: int) -> Rect2:
 
 func row_rect(slot_id: int) -> Rect2:
 	return get_row_rect(slot_id)
+
+
+## Return a dynamic source visual rectangle in the reference canvas.  The
+## `visual_name` keys are `slot_label`, `date_year`, `date_month_day`, `map`,
+## and `portrait_0` through `portrait_3`; an unavailable optional visual
+## returns an empty rectangle.
+func get_row_visual_rect(slot_id: int, visual_name: String) -> Rect2:
+	var row := get_row_rect(slot_id)
+	var visuals_for_row: Variant = row_visuals.get(slot_id, {})
+	if not visuals_for_row is Dictionary:
+		return Rect2()
+	var node: Variant = visuals_for_row.get(visual_name, null)
+	if not node is Control or not is_instance_valid(node):
+		return Rect2()
+	return Rect2(row.position + node.position, node.size)
 
 
 func get_source_geometry() -> Dictionary:
@@ -504,10 +536,11 @@ func _render_source_art() -> void:
 		if texture_value is Texture2D:
 			source_image = TextureRect.new()
 			source_image.name = "SourceSaveImage"
+			source_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			source_image.custom_minimum_size = Vector2.ZERO
 			source_image.texture = texture_value
 			source_image.position = image_position
 			source_image.size = image_size
-			source_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			source_image.stretch_mode = TextureRect.STRETCH_KEEP
 			source_image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 			source_image.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -581,17 +614,15 @@ func _create_row(slot_id: int, preview: Dictionary, rect: Rect2) -> void:
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row_button.add_child(content)
 	row_content[slot_id] = content
-	var numeral := _source_label(str(slot_id), 10, SOURCE_TEXT)
-	numeral.name = "SlotNumber"
-	numeral.position = Vector2(-54.0, 25.0)
-	numeral.size = Vector2(34.0, 20.0)
-	numeral.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	content.add_child(numeral)
+	# Data479/Data520's frame already contains the source slot number at the
+	# left edge.  Do not add a second numeral outside the callback bounds.
+	row_visuals[slot_id] = {}
+	_render_slot_label_background(content, slot_id)
 	if mode == MODE_LOAD and slot_id == 0:
-		var legacy := _source_label("原有存檔", 9, SOURCE_TEXT)
+		var legacy := _source_label("AUTO", 9, SOURCE_TEXT)
 		legacy.name = "OriginalSaveLabel"
-		legacy.position = Vector2(-20.0, 47.0)
-		legacy.size = Vector2(92.0, 20.0)
+		legacy.position = Vector2(SOURCE_DATE_X - rect.position.x, 15.0)
+		legacy.size = Vector2(44.0, 18.0)
 		legacy.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		content.add_child(legacy)
 	_render_row_content(content, slot_id, preview)
@@ -600,36 +631,122 @@ func _create_row(slot_id: int, preview: Dictionary, rect: Rect2) -> void:
 func _render_row_content(content: Control, slot_id: int, preview: Dictionary) -> void:
 	var status := str(preview.get("status", STATUS_ERROR)).to_lower()
 	var metadata: Dictionary = preview.get("metadata", {}).duplicate(true) if preview.get("metadata", {}) is Dictionary else {}
-	var date_text := str(metadata.get("date_text", ""))
-	var map_text := str(metadata.get("map_name", metadata.get("map", metadata.get("map_id", ""))))
-	var names := _metadata_names(metadata)
-	var state_text := _status_text(status)
-	var details := ""
-	if status == STATUS_VALID:
-		var first_line := " · ".join(_non_empty_strings([date_text, map_text]))
-		var second_line := "、".join(names)
-		details = first_line
-		if not second_line.is_empty():
-			details += "\n" if not details.is_empty() else ""
-			details += second_line
-		if details.is_empty():
-			details = "存檔有效"
-	else:
-		details = state_text
-		var error_text := str(preview.get("error", ""))
-		if not error_text.is_empty() and status in [STATUS_CORRUPT, STATUS_INVALID, STATUS_UNREADABLE, STATUS_ERROR]:
-			details += "\n" + error_text
-	var details_label := _source_label(details, 9, SOURCE_TEXT if status == STATUS_VALID else SOURCE_MUTED)
+	if not row_visuals.has(slot_id):
+		row_visuals[slot_id] = {}
+	if status != STATUS_VALID:
+		_render_status(content, preview, status)
+		return
+	# The source callback writes these values into fixed columns after drawing
+	# the row background.  Keep each visual in its source coordinate rather than
+	# replacing the composed row with a generic summary label.
+	_render_date(content, slot_id, metadata, preview)
+	_render_map_preview(content, slot_id, metadata, preview)
+	_render_portraits(content, metadata, preview, slot_id)
+
+
+func _render_status(content: Control, preview: Dictionary, status: String) -> void:
+	var details := _status_text(status)
+	var error_text := str(preview.get("error", ""))
+	if not error_text.is_empty() and status in [STATUS_CORRUPT, STATUS_INVALID, STATUS_UNREADABLE, STATUS_ERROR]:
+		details += "\n" + error_text
+	var details_label := _source_label(details, 9, SOURCE_MUTED)
 	details_label.name = "SlotDetails"
-	details_label.position = Vector2(4.0, 13.0)
-	details_label.size = Vector2(300.0, 47.0)
+	details_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 13.0)
+	details_label.size = Vector2(136.0, 47.0)
 	details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	details_label.clip_text = true
 	content.add_child(details_label)
-	_render_portraits(content, metadata, preview)
 
 
-func _render_portraits(content: Control, metadata: Dictionary, preview: Dictionary) -> void:
+func _render_date(content: Control, slot_id: int, metadata: Dictionary, preview: Dictionary) -> void:
+	var date: Dictionary = metadata.get("date", {}).duplicate(true) if metadata.get("date", {}) is Dictionary else {}
+	var date_text := str(metadata.get("date_text", preview.get("date_text", "")))
+	var year_text := ""
+	var month_day_text := ""
+	if date.has("year"):
+		year_text = str(int(date.get("year", 0)))
+	if date.has("month") and date.has("day"):
+		month_day_text = "%d/%d" % [int(date.get("month", 0)), int(date.get("day", 0))]
+	if year_text.is_empty() or month_day_text.is_empty():
+		var parsed := _parse_date_text(date_text)
+		if year_text.is_empty():
+			year_text = str(parsed.get("year", ""))
+		if month_day_text.is_empty():
+			month_day_text = str(parsed.get("month_day", ""))
+	if not year_text.is_empty():
+		var year_label := _source_label(year_text, 9, SOURCE_TEXT)
+		year_label.name = "SlotDateYear"
+		year_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 36.0)
+		year_label.size = Vector2(44.0, 17.0)
+		year_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		content.add_child(year_label)
+		row_visuals[slot_id]["date_year"] = year_label
+	if not month_day_text.is_empty():
+		var month_day_label := _source_label(month_day_text, 9, SOURCE_TEXT)
+		month_day_label.name = "SlotDateMonthDay"
+		month_day_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 57.0)
+		month_day_label.size = Vector2(44.0, 17.0)
+		month_day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		content.add_child(month_day_label)
+		row_visuals[slot_id]["date_month_day"] = month_day_label
+
+
+func _parse_date_text(date_text: String) -> Dictionary:
+	if date_text.is_empty():
+		return {}
+	var separators := ["-", "/"]
+	for separator in separators:
+		var parts := date_text.split(separator, false)
+		if parts.size() == 3 and parts[0].is_valid_int() and parts[1].is_valid_int() and parts[2].is_valid_int():
+			return {"year": parts[0], "month_day": "%d/%d" % [int(parts[1]), int(parts[2])]}
+		if parts.size() == 2 and parts[0].is_valid_int() and parts[1].is_valid_int():
+			return {"month_day": "%d/%d" % [int(parts[0]), int(parts[1])]}
+	return {}
+
+
+func _render_map_preview(content: Control, slot_id: int, metadata: Dictionary, preview: Dictionary) -> void:
+	var frame := _source_map_frame(metadata, preview)
+	if frame.is_empty() or visuals == null or not visuals.has_method("texture"):
+		return
+	var texture_value: Variant = visuals.call("texture", frame)
+	if not texture_value is Texture2D:
+		return
+	var image := TextureRect.new()
+	image.name = "MapPreview"
+	image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	image.custom_minimum_size = Vector2.ZERO
+	image.texture = texture_value
+	image.position = Vector2(SOURCE_MAP_X - SOURCE_ROW_X, 0.0)
+	image.size = SOURCE_THUMBNAIL_SIZE
+	image.stretch_mode = TextureRect.STRETCH_KEEP
+	image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(image)
+	row_visuals[slot_id]["map"] = image
+
+
+func _render_slot_label_background(content: Control, slot_id: int) -> void:
+	var frame := _source_slot_label_frame()
+	if frame.is_empty() or visuals == null or not visuals.has_method("texture"):
+		return
+	var texture_value: Variant = visuals.call("texture", frame)
+	if not texture_value is Texture2D:
+		return
+	var image := TextureRect.new()
+	image.name = "SlotLabelBackground"
+	image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	image.custom_minimum_size = Vector2.ZERO
+	image.texture = texture_value
+	image.position = Vector2.ZERO
+	image.size = SOURCE_THUMBNAIL_SIZE
+	image.stretch_mode = TextureRect.STRETCH_KEEP
+	image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(image)
+	row_visuals[slot_id]["slot_label"] = image
+
+
+func _render_portraits(content: Control, metadata: Dictionary, preview: Dictionary, slot_id: int) -> void:
 	var portrait_chunks := _portrait_chunks(metadata, preview)
 	if portrait_chunks.is_empty():
 		return
@@ -643,14 +760,16 @@ func _render_portraits(content: Control, metadata: Dictionary, preview: Dictiona
 			continue
 		var image := TextureRect.new()
 		image.name = "Portrait_%d" % index
-		image.texture = texture_value
-		image.position = Vector2(402.0 + float(index) * 31.0, 9.0)
-		image.size = Vector2(28.0, 28.0)
 		image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		image.custom_minimum_size = Vector2.ZERO
+		image.texture = texture_value
+		image.position = Vector2(SOURCE_PORTRAIT_X - SOURCE_ROW_X + float(index) * SOURCE_THUMBNAIL_SIZE.x, 0.0)
+		image.size = SOURCE_THUMBNAIL_SIZE
+		image.stretch_mode = TextureRect.STRETCH_KEEP
 		image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		image.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		content.add_child(image)
+		row_visuals[slot_id]["portrait_%d" % index] = image
 
 
 func _build_overwrite_text() -> void:
@@ -696,6 +815,7 @@ func _clear_rows() -> void:
 	row_buttons.clear()
 	row_content.clear()
 	row_rects.clear()
+	row_visuals.clear()
 	if rows_root == null:
 		return
 	for child in rows_root.get_children():
@@ -708,10 +828,10 @@ func _source_row_rect(slot_id: int) -> Rect2:
 	var image_position := SAVE_IMAGE_POSITION if mode == MODE_SAVE else LOAD_IMAGE_POSITION
 	# Source callback bounds are x > 0x81 && x < 0x241 and y > 0x18
 	# && y < 0x1c8 for load; save uses y > 0x39 && y < 0x1a1.
-	var x := 129.0
+	var x := SOURCE_ROW_X
 	var y := 24.0 + float(index) * 72.0 if mode == MODE_LOAD else 57.0 + float(index) * 72.0
-	var width := 448.0
-	var height := 72.0
+	var width := SOURCE_ROW_WIDTH
+	var height := SOURCE_ROW_HEIGHT
 	# Keep image placement explicit in this method so a geometry test can catch
 	# an accidental shift of the source frame independently of row selection.
 	if image_position.x < 0.0 or image_position.y < 0.0:
@@ -865,6 +985,55 @@ func _source_ui_frame() -> Dictionary:
 	var resource := int(SOURCE_DATA_RESOURCE.get(edition, SOURCE_DATA_RESOURCE["Game"]))
 	var frame_value: Variant = visuals.call("ui", edition, "Data", resource, 0 if mode == MODE_LOAD else 1)
 	return frame_value if frame_value is Dictionary else {}
+
+
+func _source_slot_label_frame() -> Dictionary:
+	if visuals == null or not visuals.has_method("ui"):
+		return {}
+	var resource := int(SOURCE_DATA_RESOURCE.get(edition, SOURCE_DATA_RESOURCE["Game"]))
+	var chunk := int(SOURCE_SLOT_LABEL_CHUNK.get(edition, -1))
+	if chunk < 0:
+		return {}
+	var frame_value: Variant = visuals.call("ui", edition, "Data", resource, chunk)
+	return frame_value if frame_value is Dictionary else {}
+
+
+func _source_map_frame(metadata: Dictionary, preview: Dictionary) -> Dictionary:
+	if visuals == null or not visuals.has_method("ui"):
+		return {}
+	var chunk := _map_preview_chunk(metadata, preview)
+	if chunk < SOURCE_MAP_PREVIEW_START_CHUNK:
+		return {}
+	var resource := int(SOURCE_DATA_RESOURCE.get(edition, SOURCE_DATA_RESOURCE["Game"]))
+	var frame_value: Variant = visuals.call("ui", edition, "Data", resource, chunk)
+	return frame_value if frame_value is Dictionary else {}
+
+
+func _map_preview_chunk(metadata: Dictionary, preview: Dictionary) -> int:
+	var raw_chunk: Variant = metadata.get("map_preview_chunk", preview.get("map_preview_chunk", null))
+	if typeof(raw_chunk) == TYPE_INT and _valid_map_chunk(int(raw_chunk)):
+		return int(raw_chunk)
+	var raw_number: Variant = metadata.get("map_number", preview.get("map_number", null))
+	var number := -1
+	if typeof(raw_number) == TYPE_INT:
+		number = int(raw_number)
+	var raw_source: Variant = metadata.get("map_source", preview.get("map_source", {}))
+	if raw_source is Dictionary and typeof(raw_source.get("map_number", null)) == TYPE_INT:
+		number = int(raw_source.get("map_number"))
+	if number < 1:
+		var map_id := str(metadata.get("map_id", preview.get("map_id", "")))
+		var map_id_parts := map_id.split(":", false, 1)
+		if map_id_parts.size() == 2 and str(map_id_parts[0]) == edition and str(map_id_parts[1]).is_valid_int():
+			number = int(map_id_parts[1])
+	if number < 1:
+		return -1
+	var candidate := number + 1
+	return candidate if _valid_map_chunk(candidate) else -1
+
+
+func _valid_map_chunk(chunk: int) -> bool:
+	var count := int(SOURCE_MAP_PREVIEW_COUNT.get(edition, 0))
+	return chunk >= SOURCE_MAP_PREVIEW_START_CHUNK and chunk < SOURCE_MAP_PREVIEW_START_CHUNK + count
 
 
 func _source_portrait_frame(chunk: int) -> Dictionary:

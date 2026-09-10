@@ -433,9 +433,32 @@ func _metadata(snapshot: Dictionary) -> Dictionary:
 	# snapshot is only called after GameState validation/from_dict approval.
 	var players: Array = snapshot.get("players", []) if snapshot.get("players", []) is Array else []
 	var names: Array = []
+	var player_character_ids: Array = []
 	for player_value in players:
 		if player_value is Dictionary:
 			names.append(str(player_value.get("name", "")))
+	# Setup saves persist this ordered list at the top level.  Older/base saves
+	# only carry the optional per-player field, so retain it when available
+	# without guessing a portrait from the player's array position.
+	var raw_character_ids: Variant = snapshot.get("character_ids", null)
+	if raw_character_ids is Array and raw_character_ids.size() == players.size():
+		for character_id in raw_character_ids:
+			var parsed_character_id := _metadata_int(character_id, 0, 11)
+			if parsed_character_id < 0:
+				player_character_ids.clear()
+				break
+			player_character_ids.append(parsed_character_id)
+	if player_character_ids.is_empty():
+		for player_value in players:
+			if not player_value is Dictionary:
+				player_character_ids.clear()
+				break
+			var character_id_value: Variant = player_value.get("character_id", null)
+			var parsed_character_id := _metadata_int(character_id_value, 0, 11)
+			if parsed_character_id < 0:
+				player_character_ids.clear()
+				break
+			player_character_ids.append(parsed_character_id)
 	var date_value: Variant = snapshot.get("date", null)
 	var date: Dictionary = date_value.duplicate(true) if date_value is Dictionary else {}
 	if date.is_empty() and snapshot.has("day_of_month") and snapshot.has("month"):
@@ -447,16 +470,61 @@ func _metadata(snapshot: Dictionary) -> Dictionary:
 			date["weekday"] = int(snapshot.get("weekday", 0))
 	var map_id := str(snapshot.get("map_id", ""))
 	var map_name := str(snapshot.get("map_name", ""))
+	var map_source_value: Variant = snapshot.get("map_source", {})
+	var map_source: Dictionary = map_source_value.duplicate(true) if map_source_value is Dictionary else {}
+	var map_edition := str(map_source.get("edition", ""))
+	var map_number := -1
+	var map_number_value: Variant = map_source.get("map_number", snapshot.get("map_number", null))
+	var parsed_map_number := _metadata_int(map_number_value, 1, 99)
+	if parsed_map_number >= 1:
+		map_number = parsed_map_number
+	if map_edition.is_empty() and map_id.contains(":"):
+		var map_id_parts := map_id.split(":", false, 1)
+		if map_id_parts.size() == 2:
+			map_edition = str(map_id_parts[0])
+	if map_number < 0 and map_id.contains(":"):
+		var map_id_parts := map_id.split(":", false, 1)
+		if map_id_parts.size() == 2 and str(map_id_parts[1]).is_valid_int():
+			var parsed_map_id_number := int(map_id_parts[1])
+			if parsed_map_id_number >= 1 and parsed_map_id_number <= 99:
+				map_number = parsed_map_id_number
+	var map_preview_chunk := -1
+	if map_number >= 1 and map_edition in ["Game", "MultiverseJourney"]:
+		var map_count := 4 if map_edition == "Game" else 8
+		if map_number <= map_count:
+			# The source map_number is one-based; Data479/Data520 previews begin
+			# at chunk two, matching the original save/load draw path.
+			map_preview_chunk = map_number + 1
 	return {
 		"date": date,
 		"date_text": _date_text(date),
 		"map_id": map_id,
 		"map_name": map_name,
 		"map": map_name if not map_name.is_empty() else map_id,
+		"map_source": map_source,
+		"map_edition": map_edition,
+		"map_number": map_number,
+		"map_preview_chunk": map_preview_chunk,
 		"board_mode": str(snapshot.get("board_mode", "")),
 		"player_count": players.size(),
 		"player_names": names,
+		"player_character_ids": player_character_ids,
 	}
+
+
+func _metadata_int(value: Variant, minimum: int, maximum: int) -> int:
+	var kind := typeof(value)
+	var number := 0
+	if kind == TYPE_INT:
+		number = int(value)
+	elif kind == TYPE_FLOAT:
+		var float_value := float(value)
+		if not is_finite(float_value) or floor(float_value) != float_value:
+			return -1
+		number = int(float_value)
+	else:
+		return -1
+	return number if number >= minimum and number <= maximum else -1
 
 
 func _date_text(date: Dictionary) -> String:

@@ -39,8 +39,12 @@ var storage := SaveSlots.new("user://richman4-save-slots", "user://richman4_save
 | `error` | row id 或 I/O 呼叫本身格式錯誤 | `false` |
 
 有效 preview 會回傳 `slot`、canonical `path`、64 字元 SHA-256
-`fingerprint` 與 `metadata`（`date`、`map_id`／`map_name`、`player_count`、
-`player_names`）。`read()` 另外回傳通過驗證的 `snapshot`。empty row 的
+`fingerprint` 與 `metadata`（`date`、`map_id`／`map_name`、`map_source`、
+`map_number`／`map_preview_chunk`、`player_count`、`player_names`、
+`player_character_ids`）。`map_number` 以來源的 1 起始編號保存，對應
+`Data479`／`Data520` 的預覽 chunk 為 `map_number + 1`；缺少來源地圖身分時
+會以 `-1` 表示未知，不猜測縮圖。`player_character_ids` 只保留驗證後
+snapshot 明確提供的角色身分。`read()` 另外回傳通過驗證的 `snapshot`。empty row 的
 fingerprint 是空字串；corrupt／invalid row 仍會以原始 bytes 產生 fingerprint，
 unreadable row 則沒有可用 fingerprint。
 
@@ -92,7 +96,13 @@ filesystem-backed accessor。Game 使用 Data resource `479`，
 MultiverseJourney 使用 `520`；load 使用 chunk `0`（555×451），save 使用 chunk
 `1`（555×381）。save frame 的來源位置是 `(40,48)`，load frame 與 callback 對齊
 於 `(40,15)`；load rows 是 slot `0..5`，save rows 是 `1..5`，每列 72px，source
-callback 的 hit geometry 為 x `129..577`。
+callback 的 hit geometry 為 x `129..577`。來源 frame 已含檔位數字；panel 會另外
+以 Game chunk `6` 或 MultiverseJourney chunk `10` 畫出檔位背景，並在每列以
+來源座標畫動態資料：日期年／月日的 x `165`、y `row+36`／`row+57`，地圖縮圖
+的 x `209`、y `row`、尺寸 `72×72`，以及 Data resource `2` 肖像的
+x `289 + 72*i`、y `row`、尺寸 `72×72`。地圖縮圖只依明確的
+`map_number`／`map_preview_chunk` 對應來源 chunk `2..5`（Game）或 `2..9`
+（MultiverseJourney）。
 
 ```gdscript
 picker.slot_selected.connect(_on_slot_selected)

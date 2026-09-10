@@ -1,6 +1,8 @@
 extends SceneTree
 
 const SourceSavePanelScript = preload("res://game/ui/source_save_panel.gd")
+const SaveSlotsScript = preload("res://game/platform/save_slots.gd")
+const GameStateScript = preload("res://game/core/game_state.gd")
 
 var checks := 0
 var failures := 0
@@ -50,6 +52,7 @@ func run() -> void:
 	await _test_load_rows_and_geometry()
 	await _test_save_selection_and_overwrite()
 	await _test_no_io_and_payload_isolation()
+	await _test_real_scan_consumer_and_source_atlas()
 	print("Source save panel checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -70,7 +73,9 @@ func _valid_preview(slot_id: int, fingerprint: String = "") -> Dictionary:
 		"fingerprint": fingerprint if not fingerprint.is_empty() else ("%x" % slot_id).repeat(64).substr(0, 64),
 		"metadata": {
 			"date_text": "1998-01-01",
+			"date": {"year": 1998, "month": 1, "day": 1},
 			"map_name": "臺北市",
+			"map_number": 2,
 			"player_names": ["約翰喬", "沙隆巴斯"],
 			"player_character_ids": [0, 1],
 		},
@@ -116,7 +121,18 @@ func _test_load_rows_and_geometry() -> void:
 	expect(panel.select_slot(0), "valid load row can be selected")
 	expect_equal(panel.selected_fingerprint(), "c".repeat(64), "selection retains preview fingerprint")
 	expect(visuals.ui_calls.size() > 0 and visuals.ui_calls[0].resource == 479 and visuals.ui_calls[0].chunk == 0, "Game load uses mapped Data479 chunk zero")
+	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 6), "Game load uses mapped Data479 slot label chunk")
+	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 3), "Game load maps source map number two to Data479 chunk three")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 2 and call.chunk == 0), "portrait uses the existing mapped Data2 accessor")
+	expect_equal(panel.get_row_visual_rect(0, "slot_label"), Rect2(129, 24, 72, 72), "slot label atlas is drawn at source row origin")
+	# Label keeps the theme's 23px line box; the source callback alignment is
+	# asserted by the absolute position, while the line box remains unclipped.
+	expect_equal(panel.get_row_visual_rect(0, "date_year"), Rect2(165, 60, 44, 23), "date year uses source absolute x and y offset")
+	expect_equal(panel.get_row_visual_rect(0, "date_month_day"), Rect2(165, 81, 44, 23), "date month/day uses source absolute x and y offset")
+	expect_equal(panel.get_row_visual_rect(0, "map"), Rect2(209, 24, 72, 72), "map thumbnail uses source absolute row geometry")
+	expect_equal(panel.get_row_visual_rect(0, "portrait_0"), Rect2(289, 24, 72, 72), "portrait zero uses source absolute row geometry")
+	expect_equal(panel.get_row_visual_rect(0, "portrait_1"), Rect2(361, 24, 72, 72), "portrait one advances by source 72px")
+	expect(panel.row_content[0].find_child("SlotNumber", true, false) == null, "source frame slot number is not duplicated by a child label")
 	panel.size = Vector2(700.0, 600.0)
 	await process_frame
 	expect(is_equal_approx(panel.reference_canvas.scale.x, minf(700.0 / 640.0, 600.0 / 480.0)), "reference canvas uses contain scaling on resize")
@@ -191,3 +207,62 @@ func _test_no_io_and_payload_isolation() -> void:
 	# the only source lookup is the optional accessor and it was null here.
 	expect(panel.visuals == null, "panel has no default filesystem-backed visual accessor")
 	panel.queue_free()
+
+
+func _test_real_scan_consumer_and_source_atlas() -> void:
+	var temp_base := OS.get_environment("TMPDIR")
+	if temp_base.is_empty():
+		temp_base = "/tmp"
+	var root_path := temp_base.path_join("richman4-source-panel-%d-%d" % [Time.get_ticks_usec(), OS.get_process_id()])
+	var slots_path := root_path.path_join("slots")
+	var default_path := root_path.path_join("default.json")
+	expect(DirAccess.make_dir_recursive_absolute(root_path) == OK, "integration test creates an isolated save root")
+	var store := SaveSlotsScript.new(slots_path, default_path)
+	var game: Object = GameStateScript.new_game(11704, 4)
+	expect(game != null, "integration fixture creates a four-player state")
+	if game == null:
+		return
+	var payload: Dictionary = game.to_dict()
+	var fixture_players: Array = payload.get("players", []).duplicate(true)
+	for index in range(4):
+		var fixture_player: Dictionary = fixture_players[index].duplicate(true)
+		fixture_player["character_id"] = index
+		fixture_player["name"] = ["約翰喬", "沙隆巴斯", "忍太郎", "錢夫人"][index]
+		fixture_players[index] = fixture_player
+	payload["players"] = fixture_players
+	payload["map_id"] = "Game:2"
+	payload["map_name"] = "臺北市"
+	payload["map_source"] = {"edition": "Game", "map_number": 2}
+	var write_result: Dictionary = store.write(1, payload, "")
+	expect(bool(write_result.get("ok", false)), "integration fixture writes through SaveSlots")
+	if not bool(write_result.get("ok", false)):
+		DirAccess.remove_absolute(root_path)
+		return
+	var scan: Dictionary = store.scan()
+	expect(bool(scan.get("ok", false)), "integration consumer receives a successful scan")
+	var row: Dictionary = scan.get("slots", [])[1]
+	expect_equal(row.get("status"), SaveSlotsScript.STATUS_VALID, "integration scan row is valid")
+	expect_equal(row.get("metadata", {}).get("player_character_ids"), [0, 1, 2, 3], "metadata preserves all four explicit character ids")
+	expect_equal(row.get("metadata", {}).get("map_number"), 2, "metadata preserves source map number")
+	expect_equal(row.get("metadata", {}).get("map_preview_chunk"), 3, "metadata maps source map number to the atlas chunk")
+	var panel := _panel()
+	var visuals := FakeVisuals.new()
+	panel.configure("Game", "load", scan, visuals)
+	await process_frame
+	expect(panel.select_slot(1), "panel selects the real scanned valid row")
+	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 3), "panel requests the real Game map preview chunk")
+	for chunk in range(4):
+		expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 2 and call.chunk == chunk), "panel requests source portrait chunk %d" % chunk)
+	# The provisional v1 fixture stores month/day only, so year stays absent
+	# rather than being invented in the preview.
+	expect_equal(panel.get_row_visual_rect(1, "date_year"), Rect2(), "integrated date year stays unavailable without source metadata")
+	expect_equal(panel.get_row_visual_rect(1, "date_month_day"), Rect2(165, 153, 44, 23), "integrated date month/day remains source aligned")
+	expect_equal(panel.get_row_visual_rect(1, "map"), Rect2(209, 96, 72, 72), "integrated map preview remains source aligned")
+	for index in range(4):
+		expect_equal(panel.get_row_visual_rect(1, "portrait_%d" % index), Rect2(289 + index * 72, 96, 72, 72), "integrated portrait %d remains source aligned" % index)
+	expect(panel.row_content[1].find_child("SlotNumber", true, false) == null, "integrated row does not duplicate source slot number")
+	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "integrated footer remains outside the final row hit region")
+	panel.queue_free()
+	DirAccess.remove_absolute(store.slot_path(1))
+	DirAccess.remove_absolute(slots_path)
+	DirAccess.remove_absolute(root_path)

@@ -22,6 +22,7 @@ const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
+const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -67,6 +68,7 @@ var state: Dictionary = {}
 var board_view: Control
 var source_shell: Control
 var source_stock_panel: Control
+var source_save_menu: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -249,10 +251,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_on_new_game_pressed()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_S and event.ctrl_pressed:
-			_save_game()
+			_on_source_save_requested()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_L and event.ctrl_pressed:
-			_load_game()
+			_on_source_load_requested()
 			get_viewport().set_input_as_handled()
 
 func _build_interface() -> void:
@@ -327,6 +329,7 @@ func _build_source_shell() -> void:
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
 	_build_source_stock_panel()
+	_build_source_save_menu()
 	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
 	if setup_panel != null:
 		setup_panel.confirmed.connect(_on_source_setup_confirmed)
@@ -427,11 +430,73 @@ func _on_source_setup_cancelled() -> void:
 		source_shell.call("show_title")
 	_source_setup_return_to_game = false
 
+func _build_source_save_menu() -> void:
+	var menu := SourceSaveMenu.new()
+	menu.name = "SourceSaveMenu"
+	menu.z_index = 30
+	menu.hide()
+	source_shell.add_child(menu)
+	menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu.operation_guard = _source_save_operation_allowed
+	menu.load_ready.connect(_on_source_slot_load_ready)
+	menu.closed.connect(func() -> void: _ai_pending = false)
+	menu.saved.connect(func(slot_id: int) -> void:
+		_append_local_log("已安全儲存至檔位 %d。" % slot_id)
+		_refresh_log_only())
+	source_save_menu = menu
+
+func _source_save_operation_allowed() -> bool:
+	if _load_blocked_by_presentation() or _legacy_save_modal_open():
+		return false
+	if source_shell != null and (source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()):
+		return false
+	if source_stock_panel != null and source_stock_panel.visible:
+		return false
+	for popup in [new_game_popup, bank_popup, cards_popup, facility_popup, shop_popup, stocks_popup, company_popup, trap_popup, financial_popup, research_popup, map_catalog_file_dialog, audio_folder_dialog, content_error_dialog]:
+		if popup != null and popup.visible:
+			return false
+	return true
+
+func _open_source_save_menu(mode: String) -> void:
+	if source_save_menu == null or source_save_menu.visible or not _source_save_operation_allowed():
+		return
+	var snapshot: Dictionary = {}
+	if mode == "save":
+		if game_state == null or not game_state.has_method("to_dict"):
+			return
+		# Serialization is a read, not a player action. The action adapter adds
+		# presentation metadata and rejects AI turns; neither belongs in saves.
+		var candidate: Variant = game_state.call("to_dict")
+		var state_script: Variant = load("res://game/core/game_state.gd")
+		if not candidate is Dictionary or not state_script.validate_save(candidate).get("ok", false):
+			_show_content_error("儲存失敗：目前棋局未通過驗證，原有存檔保持不變。")
+			return
+		snapshot = candidate
+	var edition := str(source_shell.get("_source_edition"))
+	if not source_shell.is_title_visible():
+		edition = str(_active_map_definition.get("source", {}).get("edition", edition))
+	_cancel_presentation()
+	source_save_menu.open(mode, edition, source_shell.get("_visuals"), snapshot)
+
+func _on_source_slot_load_ready(snapshot: Dictionary) -> void:
+	if source_save_menu == null or not source_save_menu.visible:
+		return
+	if not _source_save_operation_allowed():
+		source_save_menu.resolve_load(false)
+		return
+	var state_script: Variant = load("res://game/core/game_state.gd")
+	var restored: Variant = state_script.from_dict(snapshot)
+	if restored == null:
+		source_save_menu.resolve_load(false)
+		_show_content_error("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
+		return
+	_consider_loaded_snapshot(restored, snapshot)
+
 func _on_source_load_requested() -> void:
-	_load_game()
+	_open_source_save_menu("load")
 
 func _on_source_save_requested() -> void:
-	_save_game()
+	_open_source_save_menu("save")
 
 func _on_source_option_requested() -> void:
 	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
@@ -1993,7 +2058,8 @@ func _source_modal_open() -> bool:
 	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or setup_open or stocks_open or inspect_open
+	var save_open: bool = source_save_menu != null and source_save_menu.visible
+	return title_open or setup_open or stocks_open or inspect_open or save_open
 
 func _load_blocked_by_presentation() -> bool:
 	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
@@ -2035,6 +2101,9 @@ func _load_game_from_path(path: String) -> void:
 		_append_local_log("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
 		_refresh_log_only()
 		return
+	_consider_loaded_snapshot(restored, parsed)
+
+func _consider_loaded_snapshot(restored: Object, parsed: Dictionary) -> void:
 	if _is_legacy_market_snapshot(parsed):
 		_pending_legacy_load_snapshot = parsed.duplicate(true)
 		_pending_legacy_load_state = restored
@@ -2045,6 +2114,8 @@ func _load_game_from_path(path: String) -> void:
 func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: bool) -> void:
 	if restored == null:
 		return
+	if source_save_menu != null and source_save_menu.visible:
+		source_save_menu.resolve_load(true)
 	_cancel_presentation()
 	game_state = restored
 	_adopt_map_from_snapshot(parsed)
@@ -2096,6 +2167,8 @@ func _cancel_legacy_save_load() -> void:
 	_cancel_presentation()
 	if legacy_save_dialog != null:
 		legacy_save_dialog.hide()
+	if source_save_menu != null and source_save_menu.visible:
+		source_save_menu.resolve_load(false)
 	_append_local_log("已取消讀取舊版存檔；目前棋局保持不變。")
 	_refresh_log_only()
 

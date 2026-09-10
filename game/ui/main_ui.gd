@@ -95,6 +95,7 @@ var load_button: Button
 var bank_popup: PopupPanel
 var bank_loan_button: Button
 var bank_loan_status: Label
+var bank_transfer_status: Label
 var news_popup: PopupPanel
 var fate_popup: PopupPanel
 var bank_deposit_button: Button
@@ -654,6 +655,10 @@ func _build_popups() -> void:
 	var bank_balance := _make_label("", 14, TEXT_GOLD)
 	bank_balance.name = "Balance"
 	bank_box.add_child(bank_balance)
+	bank_transfer_status = _make_label("", 10, TEXT_MUTED)
+	bank_transfer_status.name = "TransferStatus"
+	bank_transfer_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bank_box.add_child(bank_transfer_status)
 	var deposit_input_row := HBoxContainer.new()
 	deposit_input_row.add_theme_constant_override("separation", 8)
 	bank_box.add_child(deposit_input_row)
@@ -1735,7 +1740,7 @@ func _on_withdraw_pressed() -> void:
 	_handle_result(result)
 
 func _on_deposit_all_pressed() -> void:
-	var amount := maxi(0, int(_current_player().get("cash", 0)))
+	var amount := _bank_deposit_limit()
 	if amount <= 0:
 		return
 	var result := _invoke_game("choose_action", ["deposit", {"amount": amount}])
@@ -1808,14 +1813,17 @@ func _on_bank_pressed() -> void:
 	_update_bank_popup()
 	bank_popup.popup_centered()
 
+func _bank_transfer_limit(action: String) -> int:
+	if game_state == null or not game_state.has_method("bank_transfer_limit"):
+		return 0
+	var value: Variant = game_state.call("bank_transfer_limit", action)
+	return int(value) if typeof(value) == TYPE_INT and int(value) >= 0 else 0
+
 func _bank_deposit_limit() -> int:
-	return maxi(0, int(_current_player().get("cash", 0)))
+	return _bank_transfer_limit("deposit")
 
 func _bank_withdraw_limit() -> int:
-	var player_limit := maxi(0, int(_current_player().get("deposit", 0)))
-	var bank_value: Variant = state.get("bank", {})
-	var bank_cash := maxi(0, int(bank_value.get("cash", 0))) if bank_value is Dictionary else 0
-	return mini(player_limit, bank_cash)
+	return _bank_transfer_limit("withdraw")
 
 func _bank_deposit_input_amount() -> int:
 	return _bank_input_amount(bank_deposit_amount, _bank_deposit_limit())
@@ -1840,12 +1848,16 @@ func _update_bank_popup() -> void:
 	var options: Array = _as_array(state.get("action_options", []))
 	var deposit_limit := _bank_deposit_limit()
 	var withdraw_limit := _bank_withdraw_limit()
+	if bank_transfer_status != null:
+		bank_transfer_status.text = "目前可存入 %s　·　可提取 %s" % [_format_money(deposit_limit), _format_money(withdraw_limit)]
 	if bank_deposit_amount != null:
-		bank_deposit_amount.max_value = max(1, deposit_limit)
-		bank_deposit_amount.value = mini(500, deposit_limit) if deposit_limit > 0 else 1
+		bank_deposit_amount.min_value = 0 if deposit_limit <= 0 else 1
+		bank_deposit_amount.max_value = deposit_limit
+		bank_deposit_amount.value = mini(500, deposit_limit) if deposit_limit > 0 else 0
 	if bank_withdraw_amount != null:
-		bank_withdraw_amount.max_value = max(1, withdraw_limit)
-		bank_withdraw_amount.value = mini(500, withdraw_limit) if withdraw_limit > 0 else 1
+		bank_withdraw_amount.min_value = 0 if withdraw_limit <= 0 else 1
+		bank_withdraw_amount.max_value = withdraw_limit
+		bank_withdraw_amount.value = mini(500, withdraw_limit) if withdraw_limit > 0 else 0
 	var deposit_input := int(bank_deposit_amount.value) if bank_deposit_amount != null else 0
 	var withdraw_input := int(bank_withdraw_amount.value) if bank_withdraw_amount != null else 0
 	bank_deposit_button.text = "存入 %s" % _format_money(deposit_input)

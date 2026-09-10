@@ -33,7 +33,7 @@ const CHARACTER_NAMES := [
 const MAP_NAMES := ["TAIWAN", "CHINA", "JAPAN", "U.S.A"]
 const MJ_MAP_NAMES := ["STAR", "ANCIENT", "DINOSAUR", "ISLAND"]
 const SOURCE_MAP_LABEL_RECT := Rect2(475.0, 34.0, 126.0, 30.0)
-const SOURCE_MAP_CHECK_POSITION := Vector2(611.0, 43.0)
+const SOURCE_MAP_CHECK_POSITION := Vector2(595.0, 34.0)
 const SOURCE_SETTING_LABELS := ["遊戲人數", "總資金", "行進方式", "土地權限", "遊戲時間", "勝利條件"]
 const FUNDS := [300000, 200000, 100000, 50000, 30000, 10000]
 const DAYS := [0, 730, 365, 182, 91, 30]
@@ -249,7 +249,7 @@ func _build_surface() -> void:
 		var map_check := TextureRect.new()
 		map_check.name = "MapChoiceCheck_%d" % index
 		map_check.position = SOURCE_MAP_CHECK_POSITION + Vector2(0.0, float(index) * 32.0)
-		map_check.size = Vector2(16.0, 16.0)
+		map_check.size = Vector2(27.0, 25.0)
 		map_check.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		map_check.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		map_check.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -596,7 +596,7 @@ func _refresh_source_art() -> void:
 	_setup_top_art.visible = _setup_top_art.texture != null
 	_setup_side_art.visible = _setup_side_art.texture != null
 	_has_setup_atlas = _setup_top_art.visible and _setup_side_art.visible
-	var map_check_frame := _ui_frame(int(SETUP_RESOURCE.get(_edition, 4)), 7)
+	var map_check_frame := _ui_frame(int(SETUP_RESOURCE.get(_edition, 4)), 8)
 	var map_check_texture := _visuals.texture(map_check_frame)
 	for map_check in _map_checks:
 		map_check.texture = map_check_texture

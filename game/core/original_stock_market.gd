@@ -72,6 +72,18 @@ static func next_price(previous: float, rate: float) -> float:
 	var price: float = previous + (floor(change) if change >= 0.0 else ceil(change)) * tick
 	return snappedf(clampf(price, 1.0, 9999.0), 0.01)
 
+
+static func limit_state(previous: float, current: float) -> int:
+	# The source classifier first determines the quote direction.  Only a
+	# rising quote at or above the tick-adjusted upper step is state 1, and only
+	# a falling quote at or below the lower step is state 3.  An unchanged quote
+	# is state 4, including when either source price clamp has been reached.
+	if current > previous:
+		return 1 if current >= next_price(previous, 10.0) else 0
+	if current < previous:
+		return 3 if current <= next_price(previous, -10.0) else 0
+	return 4
+
 static func reset_turn_supply(market: Dictionary, rng: RandomNumberGenerator) -> void:
 	for stock_symbol in symbols():
 		var row: Dictionary = market.rows[stock_symbol]

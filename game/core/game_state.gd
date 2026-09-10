@@ -22,6 +22,7 @@ const REMODEL_SAVE_VERSION = 11
 const RESEARCH_SAVE_VERSION = 12
 const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
+const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -1172,6 +1173,7 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 		player["insurance_status"] = 0
 		for stock_symbol in get_stock_symbols():
 			player.stocks[stock_symbol] = 0
+		StockAccounting.initialize_player(player, get_stock_symbols())
 	OriginalStockMarket.reset_turn_supply(state.market, _rng)
 	_sync_state()
 	_set_action_options(0)
@@ -1191,6 +1193,12 @@ func get_company_at(node_id: int) -> Dictionary:
 
 func _update_company_owners() -> void:
 	if not _is_companies(): return
+	# Keep source-test fixtures that stage holdings directly saveable without
+	# changing the legacy-save rule: a player without cost metadata remains
+	# unknown until that position is closed.
+	for player in _players():
+		for stock_symbol in get_stock_symbols():
+			StockAccounting.reconcile_implicit_holding(player, stock_symbol, get_stock_symbols())
 	for company in state.get("companies", []):
 		var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
 		var old_owner := int(company.get("owner", -1))
@@ -1222,15 +1230,21 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 	var quantity := int(quantity_value)
 	var row: Dictionary = state.market.rows[stock_symbol]
 	if int(row.suspension) > 0: return _error("這檔股票暫停交易")
+	var limit_state := OriginalStockMarket.limit_state(float(row.previous_price), float(row.price))
+	if action == "buy_stock" and limit_state == 1: return _error("漲停無法買入")
+	if action == "sell_stock" and limit_state == 3: return _error("跌停無法賣出")
 	var amount := OriginalStockMarket.quote(float(row.price), quantity)
 	if action == "buy_stock":
 		if quantity > int(row.market_supply) or quantity > int(row.turn_supply): return _error("本回合可購買股數不足")
+		var affordable_quantity := floori(float(player.deposit) / float(row.price))
+		if quantity > affordable_quantity: return _error("銀行存款不足")
 		if int(player.deposit) < amount: return _error("銀行存款不足")
 		player.deposit = int(player.deposit) - amount
 		state.bank.deposits = int(state.bank.deposits) - amount
 		row.market_supply = int(row.market_supply) - quantity
 		row.turn_supply = int(row.turn_supply) - quantity
 		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+		StockAccounting.record_purchase(player, stock_symbol, quantity, amount, get_stock_symbols())
 	else:
 		if int(player.stocks[stock_symbol]) < quantity: return _error("持股不足")
 		if int(player.deposit) > 1000000000000 - amount or int(state.bank.deposits) > 1000000000000 - amount: return _error("存款超出上限")
@@ -1239,6 +1253,7 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 		row.market_supply = int(row.market_supply) + quantity
 		row.turn_supply = int(row.turn_supply) + quantity
 		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) - quantity
+		StockAccounting.record_sale(player, stock_symbol, quantity, get_stock_symbols())
 	_update_company_owners()
 	_record_event("stock_bought" if action == "buy_stock" else "stock_sold", {"player_id":player_id,"symbol":stock_symbol,"stock_name":str(row.name),"quantity":quantity,"price":float(row.price),"amount":amount,"account":"deposit"})
 	_set_action_options(player_id)
@@ -1259,6 +1274,7 @@ func _buy_company_stock(player_id: int, params: Dictionary) -> Dictionary:
 	var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
 	player.cash = int(player.cash) - amount
 	player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+	StockAccounting.record_purchase(player, stock_symbol, quantity, amount, get_stock_symbols())
 	company.treasury = int(company.treasury) - quantity
 	state.company_purchase_remaining = int(state.company_purchase_remaining) - quantity
 	_update_company_owners()
@@ -5114,6 +5130,7 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 			row.turn_supply = int(row.turn_supply) + quantity
 			state.jackpot = int(state.jackpot) + OriginalStockMarket.quote(float(row.price), quantity)
 			debtor.stocks[stock_symbol] = 0
+		StockAccounting.clear_player(debtor, get_stock_symbols())
 		_update_company_owners()
 	else:
 		debtor["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
@@ -8989,6 +9006,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				for symbol in stocks.keys():
 					if not stock_symbols.has(symbol):
 						errors.append("player %d unknown stock" % index)
+			if companies_save:
+				errors.append_array(StockAccounting.validate_player(player, stock_symbols))
 			var cards: Variant = player.get("cards", null)
 			if typeof(cards) != TYPE_ARRAY or cards.size() > 15:
 				errors.append("player %d cards invalid" % index)
@@ -9467,6 +9486,9 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		game.state = _canonicalize_json_numbers(game.state)
 	if game._is_companies():
 		OriginalStockMarket.normalize_numbers(game.state.market)
+		for player in game.state.get("players", []):
+			if typeof(player) == TYPE_DICTIONARY:
+				StockAccounting.normalize_player(player, OriginalStockMarket.symbols())
 		OriginalStockMarket.normalize_price_events(game.state.event_log)
 		OriginalStockMarket.normalize_price_events(game.state.last_event)
 		if not bool(validate_save(game.state).get("ok", false)): return null

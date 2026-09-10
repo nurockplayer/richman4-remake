@@ -785,8 +785,6 @@ func set_toolbar_enabled(key: String, enabled: bool) -> void:
 		(toolbar_buttons[key] as Button).disabled = not enabled
 	if key == "load" and title_load_button != null:
 		title_load_button.disabled = not enabled
-	if key == "options" and title_option_button != null:
-		title_option_button.disabled = not enabled
 
 
 func _render_hud() -> void:

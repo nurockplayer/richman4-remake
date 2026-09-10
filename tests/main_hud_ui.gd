@@ -101,7 +101,7 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	for key in ["help", "options", "ai", "tools", "cards", "sale"]:
 		var pending_control: Button = shell.toolbar_buttons.get(key) as Button
 		_expect(pending_control != null and pending_control.visible and pending_control.disabled, "source %s command stays visibly pending" % key)
-	_expect(shell.title_option_button.disabled, "source title options stays visibly pending")
+	_expect(not shell.title_option_button.disabled, "source title OPTION retains its independent S35 entry")
 	_expect(shell.action_strip.get_parent() == shell.game_screen, "context actions live on the board screen")
 	_expect(shell.roll_button.get_parent() == shell.action_strip and shell.roll_button.get_parent() != shell.hud_panel, "roll is a board-context action")
 	_expect(shell.buy_button.get_parent() == shell.action_strip and shell.upgrade_button.get_parent() == shell.action_strip and shell.end_turn_button.get_parent() == shell.action_strip, "landing actions share the board context strip")

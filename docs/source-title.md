@@ -25,6 +25,8 @@
 
 原 tests-only155a638 使用實際 Button pointer dispatch，在合格 synthetic／實際十二圖 catalog 都重現20 checks／6 failures：缺少 EXIT／NEW STAGE、版本未更新及 START 誤沿用 stage1。實作後同一測試29／0；增加的執行次數來自原本缺失入口現在可達，沒有移除 assertions。Component85／0，affected setup52／factory18／save-menu48／HUD153／market82／active24，actual catalog title29／0。Runner 執行兩套 title tests。既有 Ctrl+S/L 修復已正常 merge；沒有替換 owner 檔案或寫入偏好。
 
-S01 尚未完成：同 HEAD 原生隔離組件圖與新獨立審查進行中，普通實體輸入與目前 package 入口仍未驗證。OPTION 目前傳達 S35 入口與明確未完成訊息，不宣稱設定介面已還原。EXIT 的測試覆寫 host quit intent，避免測試真的結束玩家程式；正式主選單會由 host 關閉程式。
+S01 尚未完成：同 HEAD 原生隔離組件圖與新獨立審查進行中，普通實體輸入與目前 package 入口仍未驗證。OPTION 目前傳達 S35 入口並留下開發記錄，不宣稱設定介面已還原。EXIT 的測試覆寫 host quit intent，避免測試真的結束玩家程式；正式主選單會由 host 關閉程式。
 
 Primary rich4_ui_main.asm callback 明確以 WM_LBUTTONDOWN(0x201)啟動選中的入口。新增 tests-only6ed295b 保留85 assertions並在五個入口檢查按下尚未放開時已收到 intent，RED90/5；Button action_mode修復後90/0，release不重複發送。
+
+整合審查找出 toolbar options 的 disabled 狀態誤同步至 title OPTION。Tests-onlyb424f6f 以普通入口真實 pointer 重現31/1；移除這個錯誤耦合後31/0。HUD 原 title-disabled assertion 依 Issue133 的明示入口契約更新，其他 assertions 保留；S35 的設定內頁仍未實作。

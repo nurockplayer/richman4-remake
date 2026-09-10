@@ -370,7 +370,13 @@ func _on_source_start_requested() -> void:
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
 		return
-	_source_setup_return_to_game = game_state != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable"
+	# MainUI builds the ordinary game state before showing the source title.
+	# Entry intent therefore comes from the visible shell surface, rather than
+	# from the presence of an initialized state behind the title.
+	var title_visible := false
+	if source_shell.has_method("is_title_visible"):
+		title_visible = bool(source_shell.call("is_title_visible"))
+	_source_setup_return_to_game = not title_visible and game_state != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable"
 	var selected := _active_map_definition.duplicate(true)
 	if selected.is_empty():
 		selected = _selected_map_definition.duplicate(true)

@@ -55,6 +55,8 @@ func _test_self_sale(player_id: int, phase: String) -> void:
 
 func _test_last_survivor() -> void:
 	var game: Object = financed_actor(0)
+	balances(game, 2, 0, 0)
+	balances(game, 3, 0, 0)
 	game._declare_bankruptcy(2, -1, 1, "actor_fixture")
 	game._declare_bankruptcy(3, -1, 1, "actor_fixture")
 	game._set_action_options(0)

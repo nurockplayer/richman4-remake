@@ -40,8 +40,8 @@ UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
 # the setup atlas follows them, then 36 SPR resources form twelve groups of
 # walking/motorcycle/car previews.  Keep these ranges explicit because the
 # source setup code indexes the edition's jump archive directly.  ``None``
-# means all chunks in the one explicitly selected resource; save/load only
-# needs its source-confirmed LOAD and SAVE chunks.
+# means all chunks in the one explicitly selected resource, including the
+# save/load map thumbnails and slot background.
 JUMP_RESOURCE_RANGES = {
     "Game": {
         "map_backgrounds": tuple(range(0, 4)),
@@ -68,14 +68,14 @@ def _jump_resource_indices(edition: str) -> tuple[int, ...]:
 EDITION_UI_RESOURCES = {
     "Game": {
         "jump": {index: None for index in _jump_resource_indices("Game")},
-        "Data": {479: (0, 1), 560: (0,)},
+        "Data": {479: None, 560: (0,)},
         "help": {0: None},
     },
     "MultiverseJourney": {
         "jump": {
             index: None for index in _jump_resource_indices("MultiverseJourney")
         },
-        "Data": {520: (0, 1), 601: (0,)},
+        "Data": {520: None, 601: (0,)},
         "help": {0: None},
     },
 }
@@ -99,6 +99,10 @@ RAW_RGB555_WIDTH = 640
 RAW_RGB555_HEIGHT = 480
 RAW_RGB555_BYTES = RAW_RGB555_WIDTH * RAW_RGB555_HEIGHT * 2
 RAW_RGB555_SIGNATURE = "RAW-RGB555"
+REQUIRED_UI_CHUNKS = {
+    ("Game", "Data", 479): (0, 1),
+    ("MultiverseJourney", "Data", 520): (0, 1),
+}
 
 
 def _canonical_edition(edition: str) -> str:
@@ -215,8 +219,9 @@ def _export_resource(
         for chunk_index in chunks
         if chunk_index in available
     )
-    missing = () if chunks is None else tuple(
-        chunk_index for chunk_index in chunks if chunk_index not in available
+    required = REQUIRED_UI_CHUNKS.get(binding, ()) if chunks is None else chunks
+    missing = tuple(
+        chunk_index for chunk_index in required if chunk_index not in available
     )
     if missing:
         raise FormatError(

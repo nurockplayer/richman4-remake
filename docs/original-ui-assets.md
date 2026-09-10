@@ -19,8 +19,8 @@
 | MultiverseJourney jump / 8 | 新局設定 atlas（全部 bounded chunks） | MJ edition 固定索引；chunk 0/1 與 Game setup atlas 對位，另保留 MJ 的 edition-specific setup chunks；不借用 Game 的 jump / 4 |
 | Game jump / 5–40 | 角色／車輛預覽 | 36 個 SPR，按 `5 + character_id*3 + vehicle_index` 分組；`character_id=0..11`，`vehicle_index=0/1/2` 依序為步行、機車、汽車，每個 resource 的全部方向 chunks 都保留 |
 | MultiverseJourney jump / 9–44 | 角色／車輛預覽 | 與 Game 相同的 12×3 SPR 分組，但 base index 是 9：`9 + character_id*3 + vehicle_index`；不可套用 Game 的 base 5，也不可因 MJ 有八張背景而截斷預覽 |
-| Game Data / 479 / chunk 0–1 | 存讀檔 LOAD／SAVE 構圖 | chunk 0 為 555×451 六列 LOAD，chunk 1 為 555×381 五列 SAVE；Data / 520 是 MJ 索引，不套用到 Game |
-| MultiverseJourney Data / 520 / chunk 0–1 | 存讀檔 LOAD／SAVE 構圖 | 與 Game 對應 PNG 逐位元相同，但保留 MJ 的來源 archive／resource 身分 |
+| Game Data / 479 / 全7 chunks | 存讀檔 LOAD／SAVE 構圖 | chunk 0 為 555×451 六列 LOAD，chunk 1 為 555×381 五列 SAVE；2–5 為72×72地圖預覽，6為檔位底板；Data / 520 是 MJ 索引，不套用到 Game |
+| MultiverseJourney Data / 520 / 全11 chunks | 存讀檔 LOAD／SAVE 構圖 | 0/1 與 Game 對應 PNG 逐位元相同，2–9 為兩組地圖預覽，10為檔位底板；保留 MJ 的來源 archive／resource 身分 |
 | Game Data / 560 | Loading 畫面 | headerless 640×480 RGB555；零值保持不透明黑底；不當作 SMP/SPR header 解析 |
 | MultiverseJourney Data / 601 | Loading 畫面 | headerless 640×480 RGB555；與 Game Data / 560 的 PNG 逐位元相同；固定 MJ 索引 |
 | Game／MultiverseJourney help / 0 | 說明 frame 與 bounded icons（全部 chunks） | 400×400 frame 及 help source 使用的 icons；頁面文字與 section 順序仍由 runtime 繪製／核對 |

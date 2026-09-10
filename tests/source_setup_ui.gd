@@ -99,7 +99,7 @@ func _run() -> void:
 			_expect(not bool(shell.call("is_title_visible")), "in-game restart then EXIT returns to the visible source game")
 		ui._on_source_start_requested()
 		await process_frame
-		var confirmed_options: Dictionary = ui._default_setup_options(3, ui._active_map_definition)
+		var confirmed_options: Dictionary = ui._default_setup_options(3, ui._selected_map_definition)
 		confirmed_options["character_ids"] = [0, 1, 2]
 		confirmed_options["human_flags"] = [true, true, false]
 		confirmed_options["initial_vehicle"] = "car"
@@ -116,19 +116,19 @@ func _run() -> void:
 			_expect(int(ui.state.get("bank", {}).get("deposits", -1)) == int(players[0].get("deposit", 0)) + int(players[1].get("deposit", 0)) + int(players[2].get("deposit", 0)), "source setup confirmation keeps bank deposits authoritative")
 			var restart_options: Dictionary = ui._setup_options_from_state()
 			_expect(restart_options.get("human_flags", []) == [true, true, false] and restart_options.get("initial_vehicle", "") == "car", "restart setup defaults preserve the selected source controls")
-	var ordered_options := ui._default_setup_options(4, ui._active_map_definition)
+	var ordered_options := ui._default_setup_options(4, ui._selected_map_definition)
 	ordered_options.erase("character_ids")
 	ordered_options.erase("human_flags")
 	ordered_options["human_character_ids"] = [4,6]
 	ordered_options["player_count"] = 4
 	ordered_options["initial_vehicle"] = "walking"
 	ordered_options["land_tenure_months"] = 3
-	_expect(ui._new_game(115, 4, ui._active_map_definition, ordered_options), "source human selection enters the validated factory")
+	_expect(ui._new_game(115, 4, ui._selected_map_definition, ordered_options), "source human selection enters the validated factory")
 	_expect(ui.state.get("character_ids", []).slice(0,2) == [4,6] and ui.state.get("initial_human_flags", []) == [true,true,false,false], "factory preserves humans then fills computer identities")
 	_expect(ui.state.get("land_tenure_months", -1) == 3 and ui._setup_options_from_state().get("land_tenure_months", -1) == 3, "land tenure survives source setup and restart defaults")
 	_expect(ui.state.players.all(func(player: Dictionary) -> bool: return player.vehicle == "walking" and player.dice_count == 1), "car-to-walking restart resets every vehicle")
 	var exact_state: String = ui.game_state.to_json()
-	_expect(ui._new_game(115, 4, ui._active_map_definition, ordered_options) and ui.game_state.to_json() == exact_state, "fixed setup seed reproduces AI choice and full initial state")
+	_expect(ui._new_game(115, 4, ui._selected_map_definition, ordered_options) and ui.game_state.to_json() == exact_state, "fixed setup seed reproduces AI choice and full initial state")
 	var setup_script := load("res://game/ui/source_setup_panel.gd")
 	var map_probe: Control = setup_script.new()
 	root.add_child(map_probe)

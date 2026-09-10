@@ -380,6 +380,7 @@ func _on_source_start_requested() -> void:
 	var selected := _active_map_definition.duplicate(true)
 	if selected.is_empty():
 		selected = _selected_map_definition.duplicate(true)
+	selected = _source_setup_definition(selected)
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		player_count = PLAYER_COUNT
@@ -390,14 +391,29 @@ func _on_source_start_requested() -> void:
 	var catalog: Array = _map_catalog.duplicate(true)
 	source_shell.call("show_setup", catalog, selected, defaults)
 
+func _source_setup_definition(identity: Dictionary) -> Dictionary:
+	# Current board geometry is a display snapshot, not an initial map. Match
+	# the pinned source identity to regain its capabilities and market data.
+	for value in _map_catalog:
+		if value is Dictionary and str(value.get("id", "")) == str(identity.get("id", "")) and _map_source_matches(value.get("source", {}), identity.get("source", {}), true):
+			return value.duplicate(true)
+	return identity.duplicate(true)
+
 func _on_source_setup_confirmed(options: Dictionary, map_definition: Dictionary) -> void:
 	var character_ids: Variant = options.get("character_ids", [])
 	var requested_count := int(options.get("player_count", character_ids.size() if character_ids is Array else 0))
 	if requested_count < 2 or requested_count > 4:
 		return
+	var source_definition := _source_setup_definition(map_definition)
+	var effective_options := _default_setup_options(requested_count, source_definition)
+	# The source panel supplies player choices. Ruleset capabilities always
+	# come from the validated initial catalog, never from presentation fields.
+	for key in ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "human_character_ids", "player_count"]:
+		if options.has(key):
+			effective_options[key] = options[key]
 	var before_game := game_state
 	var before_seed := int(state.get("seed", MIN_SEED - 1))
-	if _new_game(null, requested_count, map_definition, options):
+	if _new_game(null, requested_count, source_definition, effective_options):
 		_source_setup_return_to_game = false
 	elif game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
 		_refresh_log_only()

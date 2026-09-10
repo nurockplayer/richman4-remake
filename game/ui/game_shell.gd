@@ -510,10 +510,10 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	upgrade_button.disabled = upgrade_disabled
 	end_turn_button.disabled = end_disabled
 	action_hint_label.text = hint
-	roll_button.visible = not roll_disabled
-	buy_button.visible = not buy_disabled
-	upgrade_button.visible = not upgrade_disabled
-	end_turn_button.visible = not end_disabled
+	roll_button.visible = true
+	buy_button.visible = true
+	upgrade_button.visible = true
+	end_turn_button.visible = true
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()
@@ -524,12 +524,18 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
 	route_buttons.visible = not routes.is_empty()
-	action_strip.visible = not roll_disabled or not buy_disabled or not upgrade_disabled or not end_disabled or not routes.is_empty()
+	# Keep the board-context controls mounted while a movement or event
+	# presentation is running.  Their disabled state is the visible gate, so
+	# the source surface cannot appear to lose the active turn controls while
+	# the legacy adapter is temporarily blocked.
+	action_strip.visible = true
 
 
 func set_toolbar_enabled(key: String, enabled: bool) -> void:
 	if toolbar_buttons.has(key):
 		(toolbar_buttons[key] as Button).disabled = not enabled
+	if key == "load" and title_load_button != null:
+		title_load_button.disabled = not enabled
 
 
 func _render_hud() -> void:

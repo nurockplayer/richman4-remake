@@ -139,6 +139,46 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 		_expect(view.map_pan != before_pan, "minimap click pans the board view")
 
 
+func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
+	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
+	var definition: Dictionary = normalized.get("definition", {})
+	var started: bool = ui._new_game(1, 2, definition)
+	_expect(started, "source roll fixture starts through the public new-game path")
+	ui.set_process(false)
+	ui.board_view.set_process(false)
+	var game: Object = ui.game_state
+	for player_id in range(2):
+		game.set_player_ai(player_id, false)
+		game.state.players[player_id].position = 0
+		game.state.players[player_id].previous_position = -1
+	game.state.current_player = 0
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	var source_load: Button = shell.toolbar_buttons.get("load") as Button
+	_expect(shell.roll_button.visible and not shell.roll_button.disabled, "visible source roll is enabled before the turn")
+	_expect(source_load != null and not source_load.disabled, "visible source load is enabled before movement")
+	_expect(not shell.title_load_button.disabled, "source title load follows the open load gate")
+	shell.roll_button.pressed.emit()
+	_expect(ui.get("_presentation_busy") == true, "source roll starts the movement presentation")
+	_expect(shell.action_strip.visible, "source action strip stays visible during movement")
+	_expect(shell.roll_button.visible and shell.roll_button.disabled, "visible source roll is disabled during movement")
+	_expect(source_load != null and source_load.disabled, "visible source load is disabled during movement")
+	_expect(ui.load_button.disabled, "legacy load adapter shares the movement gate")
+	_expect(shell.title_load_button.disabled, "source title load shares the movement gate")
+	var board: Node = ui.board_view
+	if board.has_method("_advance_movement"):
+		board._advance_movement(100.0)
+	_expect(ui.get("_presentation_busy") == false, "source movement finish clears the presentation lock")
+	_expect(source_load != null and not source_load.disabled, "visible source load re-enables after movement")
+	_expect(shell.roll_button.visible and shell.roll_button.disabled, "source roll remains visible and disabled while awaiting route")
+	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() > 0, "visible source route choices appear after movement")
+	if shell.route_buttons.get_child_count() > 0:
+		var route: Button = shell.route_buttons.get_child(0) as Button
+		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
+
+
 func _run() -> void:
 	var ui: Control = MainScene.instantiate()
 	root.add_child(ui)
@@ -153,6 +193,7 @@ func _run() -> void:
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
 	_test_hud_tabs_and_actions(ui, shell, game)
+	_test_source_roll_presentation_gate(ui, shell)
 	_test_minimap_input(ui, shell, game)
 	_test_stock_names(shell)
 	ui.queue_free()

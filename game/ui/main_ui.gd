@@ -210,7 +210,7 @@ func _ready() -> void:
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
 	else:
-	_enter_unavailable_content_state()
+		_enter_unavailable_content_state()
 	if source_shell != null and source_shell.has_method("show_title"):
 		source_shell.call("show_title")
 
@@ -2519,8 +2519,11 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 	_last_rendered_phase = phase
 
 func _update_load_gate() -> void:
+	var enabled := not _load_blocked_by_presentation()
 	if load_button != null:
-		load_button.disabled = _load_blocked_by_presentation()
+		load_button.disabled = not enabled
+	if source_shell != null and source_shell.has_method("set_toolbar_enabled"):
+		source_shell.call("set_toolbar_enabled", "load", enabled)
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))

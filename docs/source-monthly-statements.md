@@ -47,6 +47,9 @@ event-log overlap 檢查，並防止同一 action 重複交付。一般 refresh�
   場景就啟動 timer；獨立 `source_monthly_lifecycle.gd` 保留 `9028911` 原始案例，
   `9a91c85` 補足啟動 frame／計時裕量後仍為 5／2。`0659bc4` 先掛入場景再設定模型，
   同一案例 headless／native 5／0，MainUI 16／0 且沒有 timer error。
+- 新聞先顯示時，報表會等待新聞關閉。有效新聞／十四日 fixture 的 `c371e1d` 重現
+  9／1：新聞關閉後沒有新 action 觸發報表。修正 visibility callback 後 headless／native
+  10／0；訊息關閉只恢復佇列，不改已結算帳務或 RNG。
 - Panel25／76 的新 synthetic importer suite 為 4／0。兩版實際資源已在既有 bounded UI cache
   匯入 83／1 chunks；原有資源及所有非 UI manifest 欄位逐項保持相同。未更新 FULL lane。
 - 實際原生畫面已揭露 fallback 遮住利息背景、JSON logical metadata 被誤拒而使角色偏移，

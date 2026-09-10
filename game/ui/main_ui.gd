@@ -2839,6 +2839,11 @@ func _update_load_gate() -> void:
 		load_button.disabled = not enabled
 	if source_shell != null and source_shell.has_method("set_toolbar_enabled"):
 		source_shell.call("set_toolbar_enabled", "load", enabled)
+	# News/fate/auction visibility changes reach this hook. A queued monthly
+	# report blocks new actions, so it must resume when that overlay closes.
+	# Defer until any enclosing snapshot refresh has finished its other gates.
+	if _source_monthly_modal_open():
+		_sync_source_monthly.call_deferred()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))

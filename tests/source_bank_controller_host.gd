@@ -320,10 +320,11 @@ func _test_core_replacement_clears_input_and_invalidates_callback() -> void:
 	_sync(new_core, snapshot.duplicate(true))
 	_expect(bool(_controller.call("is_open")), "same token on a replacement core reopens the modal")
 	_expect(int(panel.call("current_amount")) == 0, "replacement clears old amount input")
+	var replacement_summary_calls := _calls_for(new_core, "bank_account_summary").size()
 	await process_frame
 	await process_frame
 	_expect(_handled.is_empty(), "old deferred callback does not reach the replacement host")
-	_expect(_calls_for(new_core, "bank_account_summary").is_empty(), "old deferred callback does not query replacement summary")
+	_expect(_calls_for(new_core, "bank_account_summary").size() == replacement_summary_calls, "old deferred callback does not query replacement summary")
 
 
 func _test_token_change_reopens_same_lifecycle() -> void:

@@ -140,6 +140,20 @@ func _test_load_rows_and_geometry() -> void:
 	expect_equal(panel.get_row_visual_rect(0, "map"), Rect2(209, 24, 72, 72), "map thumbnail uses source absolute row geometry")
 	expect_equal(panel.get_row_visual_rect(0, "portrait_0"), Rect2(289, 24, 72, 72), "portrait zero uses source absolute row geometry")
 	expect_equal(panel.get_row_visual_rect(0, "portrait_1"), Rect2(361, 24, 72, 72), "portrait one advances by source 72px")
+	var original_label_node: Node = panel.row_content[0].find_child("OriginalSaveLabel", true, false)
+	expect(original_label_node is Label, "row zero has a visible existing-save label")
+	if original_label_node is Label:
+		var original_label: Label = original_label_node
+		expect_equal(original_label.text, "原有存檔", "row zero is explicitly labelled as the existing save")
+		var row_zero_rect: Rect2 = panel.get_row_rect(0)
+		var label_rect: Rect2 = Rect2(row_zero_rect.position + original_label.position, original_label.size)
+		var year_rect: Rect2 = panel.get_row_visual_rect(0, "date_year")
+		var month_day_rect: Rect2 = panel.get_row_visual_rect(0, "date_month_day")
+		expect(label_rect.position.x >= row_zero_rect.position.x, "existing-save label stays inside row bounds horizontally")
+		expect(label_rect.end.x <= row_zero_rect.end.x, "existing-save label does not overflow the row bounds")
+		expect(label_rect.end.y <= year_rect.position.y, "existing-save label stays above the source date")
+		expect(not label_rect.intersects(year_rect), "existing-save label does not intrude into the date year")
+		expect(not label_rect.intersects(month_day_rect), "existing-save label does not intrude into the date month/day")
 	expect(panel.row_content[0].find_child("SlotNumber", true, false) == null, "source frame slot number is not duplicated by a child label")
 	panel.size = Vector2(700.0, 600.0)
 	await process_frame

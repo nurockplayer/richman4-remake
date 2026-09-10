@@ -87,6 +87,7 @@ func _initialize() -> void:
 	_test_readonly_default()
 	_test_malformed_ids_and_payloads()
 	_test_stale_fingerprint_protection()
+	_test_read_expected_fingerprint_protection()
 	_test_failure_preserves_existing_bytes()
 	_test_preview_and_read_do_not_mutate_game()
 	_cleanup()
@@ -273,6 +274,44 @@ func _test_stale_fingerprint_protection() -> void:
 	expect(not bool(stale_existing.get("ok", true)), "old existing preview cannot overwrite changed slot")
 	expect_equal(stale_existing.get("status"), SaveSlotsScript.STATUS_STALE, "changed existing slot reports stale status")
 	expect_equal(store.read(1).get("snapshot", {}).get("seed"), 12003, "stale existing write preserves newer bytes")
+
+
+func _test_read_expected_fingerprint_protection() -> void:
+	_clear_slots()
+	var store := _store()
+	var payload_a: Dictionary = _game(12011).to_dict()
+	var payload_b: Dictionary = _game(12012).to_dict()
+	expect(bool(store.write(1, payload_a, "").get("ok", false)), "read fingerprint fixture writes snapshot A")
+	var preview_a: Dictionary = store.preview(1)
+	var expected_a := str(preview_a.get("fingerprint", ""))
+	expect_equal(expected_a.length(), 64, "read fingerprint fixture captures snapshot A fingerprint")
+
+	var same_fingerprint := _read_with_expected(store, 1, expected_a)
+	expect(bool(same_fingerprint.get("ok", false)), "matching read fingerprint succeeds")
+	expect_equal(same_fingerprint.get("status"), SaveSlotsScript.STATUS_VALID, "matching read fingerprint remains valid")
+	expect_equal(same_fingerprint.get("snapshot", {}).get("seed"), payload_a.get("seed"), "matching read returns snapshot A")
+
+	expect(bool(store.write(1, payload_b).get("ok", false)), "read fingerprint fixture replaces snapshot with valid B")
+	var stale_read := _read_with_expected(store, 1, expected_a)
+	expect(not bool(stale_read.get("ok", true)), "read rejects a replaced valid snapshot")
+	expect_equal(stale_read.get("status"), SaveSlotsScript.STATUS_STALE, "replaced valid snapshot reports stale status")
+	expect(not stale_read.has("snapshot"), "stale read never exposes a replacement snapshot")
+	expect_equal(stale_read.get("error"), "stale_destination", "stale read exposes the stable destination error")
+	var current_read: Dictionary = store.read(1)
+	expect(bool(current_read.get("ok", false)), "raw read still succeeds for the current snapshot")
+	expect_equal(current_read.get("status"), SaveSlotsScript.STATUS_VALID, "raw read remains valid after replacement")
+	expect_equal(current_read.get("snapshot", {}).get("seed"), payload_b.get("seed"), "raw read returns snapshot B only when explicitly requested")
+
+	var invalid_expected := _read_with_expected(store, 1, "not-a-sha256")
+	expect(not bool(invalid_expected.get("ok", true)), "malformed expected read fingerprint is rejected")
+	expect_equal(invalid_expected.get("status"), SaveSlotsScript.STATUS_ERROR, "malformed expected read fingerprint reports error")
+	expect_equal(invalid_expected.get("error"), "invalid_expected_fingerprint", "malformed expected read fingerprint exposes stable error")
+	expect(not invalid_expected.has("snapshot"), "invalid expected fingerprint never exposes a snapshot")
+
+
+func _read_with_expected(store: Object, slot_id: int, expected_fingerprint: Variant) -> Dictionary:
+	var result: Variant = store.callv("read", [slot_id, expected_fingerprint])
+	return result if result is Dictionary else {}
 
 
 func _test_failure_preserves_existing_bytes() -> void:

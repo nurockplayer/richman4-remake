@@ -104,6 +104,17 @@ func run() -> void:
 	expect(panel.current_screen() == "detail", "selecting the same row opens company detail")
 	expect(panel.find_child("StockDetailChart", true, false) != null, "detail owns a real history chart")
 	expect(panel.find_child("DetailCompanyName", true, false).text == "股票 1", "detail company title comes from source row")
+	var company_button: Button = panel.find_child("StockCompanyInfo", true, false)
+	company_button.pressed.emit()
+	expect(panel.current_screen() == "overview", "company info button returns from detail to overview")
+	panel.select_symbol("s01")
+	var detail_pad_button: Button = panel.find_child("StockBuy", true, false)
+	detail_pad_button.pressed.emit()
+	await process_frame
+	var detail_pad: Node = panel.find_child("SourceQuantityPad", true, false)
+	expect(panel.current_screen() == "overview" and detail_pad != null and detail_pad.visible, "buy from detail refreshes the overview below quantity pad")
+	if detail_pad != null:
+		detail_pad.cancel()
 	var statistics := StockPanel.history_statistics(original_snapshot.market.history.s01)
 	expect(int(statistics.sample_count) == 144, "history keeps the existing 144 samples")
 	expect(statistics.weekly_mean != null and is_equal_approx(float(statistics.weekly_mean), 119.583333), "weekly mean uses latest six samples")

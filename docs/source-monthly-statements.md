@@ -80,3 +80,45 @@ event-log overlap 檢查，並防止同一 action 重複交付。一般 refresh�
 
 原生 SubViewport 不等於普通 OS 輸入；獨立審查、普通操作與目前套件 gate 均另行驗收。
 本文件不宣稱 S17／S18 或 Mission 完成。
+
+## 活動視窗計時修正
+
+獨立 Sol 審查 `f70f1f0` 找到 P2：切換應用程式後，分紅倒數仍會關閉報表。
+來源 `rich4_ui_stock.asm` 的 `0042b4db` 先檢查 application-active 旗標，再累計三次
+timer ticks。Immutable `e2db98b` 的真實 presenter 測試以 Node application-focus
+通知重現 headless／native 10／4，包含顯示期間失焦及原本失焦時才建立報表兩種情況。
+這是原生通知邊界重播，沒有冒稱為實際 OS 切換應用程式。
+
+Presenter 現在於建立時讀取本應用程式視窗的焦點，並在 application-focus 通知時暫停／
+恢復 Timer，保留剩餘時間。Headless 不提供視窗焦點，採活動狀態供無頭執行；通知仍有效。
+來源按秒累計與這裡保留連續剩餘時間的次秒差異屬明示的低影響計時偏離。
+原生首次重播的 trace 證明：macOS 啟動焦點事件晚於初始兩個場景 frame，會覆蓋
+測試注入的失焦通知。`491ccb3` 先等實際啟動焦點；一次固定恢復等待仍未觀察到關閉，
+追加 trace 已確認 Timer 正確恢復並關閉。`d822016` 保留全部失焦／資料／單次關閉斷言，
+以兩秒上限等待實際關閉結果，避免用另一個 Timer 的先後順序判定結果。
+同一 immutable 測試對 `f70f1f0` 的隔離原生重播為 11／4；修正後 headless／native
+均 11／0。新測試與先前版本均保留，未把 setup／等待工具修正當作產品修復。
+原生 affected checks：lifecycle 5、presenter 134、MainUI 16、controller 19、
+deferred-news 10、final-overlay 7，全數零失敗／零 Godot error。
+本修正只改 presenter 的焦點／Timer 與 runner；核心與繪圖／素材路徑未變，
+沿用上述核心完整 regression 與十二張對照畫面，另交 fresh exact-head review。
+
+## 金額界線與目前原生 gate
+
+第二輪 Sol 對 `bf27bd2` 提出 P2：純 presenter 只驗證整數型別，接受超過既有金額
+上限的公司盈餘／payout。Immutable `3ba143d` 以有效模型重現 33／19；目前修正後
+headless／native 33／0。每公司盈餘與 payout 限 ±10^12，存款／利息限 0..10^12；
+正紅利合計受核心入帳預檢限制為 10^12，虧損合計則保留最多 12 公司乘以單公司上限。
+測試用經 save validator 通過的兩家公司 fixture，經公開 end_turn 產生 -2×10^12
+報表，確認沒有把真實破產前虧損誤拒為無效。既有 presenter 134、核心 51、native
+MainUI 16 皆通過，沒有改動結算核心或繪圖。
+
+但 native focus 測試再次出現 11／2：重新取得焦點後沒有在期限內觀察到關閉，
+第二個 once-only failure 為同一未關閉狀態的延伸。新增 trace 的同序列重播 11／0
+沒有重現；不能因此說明失敗原因。唯讀 Sol arbiter 判定 **native focus gate HOLD**，
+要求分辨 SceneTree 收到的 OS 焦點通知與測試注入通知，並記錄 Timer 的 paused／
+stopped／time_left、timeout／continued 與等待期限 snapshot。
+`e27f433` 保留全部既有斷言，加入最多 64 筆、僅失敗時輸出的紀錄；一次單獨 native
+診斷為 11／0，仍不足以解釋先前未記錄狀態的 11／2。沒有增加等待上限、壓制 OS
+通知或宣稱修正這個尚未查明的問題。金額修正待新的 exact-head review；原生 focus、
+一般 OS 操作與套件驗收仍 HOLD／REVIEW_INCOMPLETE，不得以其他 green 取代。

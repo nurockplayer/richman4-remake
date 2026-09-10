@@ -199,12 +199,15 @@ func _valid_ingress(token: Dictionary, snapshot: Dictionary) -> bool:
 		var movement: Variant = snapshot.get("pending_movement", null)
 		if typeof(movement) != TYPE_DICTIONARY:
 			return false
+		if typeof(movement.get("player_id", null)) != TYPE_INT or typeof(movement.get("current_node", null)) != TYPE_INT:
+			return false
 		if int(movement.get("player_id", -1)) != actor or int(movement.get("current_node", -1)) != node_id:
 			return false
 		if typeof(snapshot.get("route_options", [])) != TYPE_ARRAY or not snapshot.get("route_options", []).is_empty():
 			return false
 	else:
-		if int(snapshot.get("remaining_steps", -1)) != 0:
+		var landing_remaining: Variant = snapshot.get("remaining_steps", null)
+		if typeof(landing_remaining) != TYPE_INT or int(landing_remaining) != 0:
 			return false
 		if typeof(snapshot.get("pending_movement", null)) != TYPE_DICTIONARY or not snapshot.get("pending_movement", {}).is_empty():
 			return false
@@ -217,11 +220,14 @@ func _player_record(snapshot: Dictionary, player_id: int) -> Dictionary:
 		var players: Array = players_value
 		if player_id >= 0 and player_id < players.size() and typeof(players[player_id]) == TYPE_DICTIONARY:
 			var indexed: Dictionary = players[player_id]
-			if int(indexed.get("id", player_id)) == player_id:
+			var indexed_id: Variant = indexed.get("id", player_id)
+			if typeof(indexed_id) == TYPE_INT and int(indexed_id) == player_id:
 				return indexed
 		for value in players:
-			if typeof(value) == TYPE_DICTIONARY and int(value.get("id", -1)) == player_id:
-				return value
+			if typeof(value) == TYPE_DICTIONARY:
+				var value_id: Variant = value.get("id", null)
+				if typeof(value_id) == TYPE_INT and int(value_id) == player_id:
+					return value
 	elif typeof(players_value) == TYPE_DICTIONARY:
 		var players_map: Dictionary = players_value
 		var direct: Variant = players_map.get(str(player_id), players_map.get(player_id, null))
@@ -405,6 +411,10 @@ func _on_panel_closed() -> void:
 
 func _show_landing_front(generation: int) -> void:
 	if generation != _generation or not _open or _entry_kind != "landing":
+		return
+	var live_token := _read_pending_token(_core)
+	if live_token != _active_token or not _valid_ingress(live_token, _snapshot):
+		_cancel_local()
 		return
 	_panel_mode = "loan"
 	var model := _build_model(_active_token, _snapshot, true)

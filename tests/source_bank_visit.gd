@@ -358,6 +358,8 @@ func _test_bank_transaction_limits_and_atomicity() -> void:
 	_expect(game.state.bank.cash == 80, "withdraw decreases bank cash exactly")
 	for amount in [0, -1, 1, "1", true, 1.5, NAN, INF, {}, []]:
 		_expect_atomic_rejection(game, "withdraw", {"amount": amount}, "invalid withdraw %s" % str(amount))
+	# The preceding withdrawal restored cash; explicitly prepare the zero-cash case.
+	_set_bank_balances(game, 0, 0, 80)
 	_expect_atomic_rejection(game, "deposit", {"amount": 1}, "empty-cash deposit rejects")
 
 

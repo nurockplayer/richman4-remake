@@ -462,9 +462,11 @@ func _open_source_save_menu(mode: String) -> void:
 		return
 	var snapshot: Dictionary = {}
 	if mode == "save":
-		if game_state == null:
+		if game_state == null or not game_state.has_method("to_dict"):
 			return
-		var candidate: Variant = _invoke_game("to_dict")
+		# Serialization is a read, not a player action. The action adapter adds
+		# presentation metadata and rejects AI turns; neither belongs in saves.
+		var candidate: Variant = game_state.call("to_dict")
 		var state_script: Variant = load("res://game/core/game_state.gd")
 		if not candidate is Dictionary or not state_script.validate_save(candidate).get("ok", false):
 			_show_content_error("儲存失敗：目前棋局未通過驗證，原有存檔保持不變。")

@@ -25,7 +25,8 @@ menu.open("load", "Game", visuals)
 公開的 `picker`、`loading_overlay`、`message_label` 可供 host 或隔離測試檢查。
 `storage` 預設為 `SaveSlots.new()`，但建構與建立節點不會掃描或讀寫 owner 的檔案；
 測試可以在 `open()` 前替換成隔離儲存器。`operation_guard` 為空時允許操作，設置
-後必須在掃描、寫入，以及兩次 `process_frame` 後的讀取前後通過。拒絕時選單保持
+後必須在掃描、寫入，以及兩次 `process_frame` 後的讀取前通過。MainUI 在採用候選
+之前也會重新檢查 presentation guard。拒絕時選單保持
 可見並顯示理由，不進行存檔 I/O。
 
 `open(mode, edition, visuals, payload)` 會深拷貝 SAVE 用的已驗證 payload、顯示
@@ -49,3 +50,31 @@ LOAD 確認後控制器進入 busy，將來源 Loading frame 置於最上層、�
 `logical.height` 保持自然尺寸並置中於來源畫布。若 accessor 缺少有效 texture，只顯示
 「讀取中」，不把 fallback 稱作來源畫面。讀取完成會隱藏 Loading；在 host 尚未完成
 legacy/adoption 決策前仍維持 busy，因此重複 confirmed 不會觸發第二次 I/O。
+
+## MainUI 與驗證
+
+標題 LOAD 與 HUD LOAD／SAVE 均開啟來源檔位選單。選單保留原本的 title／board
+可見狀態；取消與錯誤不另開新局。MainUI 的 modal／AI timer guard 包含此選單，
+開啟時也使先前排隊的 callback 失效。SAVE 直接深拷貝核心 `to_dict()`，不走
+會加入呈現 metadata、限制人類回合的遊戲指令 adapter，因此穩定的 AI 回合亦可存檔。
+
+LOAD 只採用 `read(slot, selected_fingerprint)` 回傳的已驗證候選，不重新開啟 path。
+舊三股市候選仍走原有 continue／cancel；取消恢復 picker，確認沿用記憶體中的
+同一候選。移動、事件與其他 modal 期間拒絕開啟，延後讀取前再檢查一次。
+
+Tests-only `685013d` 在未接線版本從實際 title button signal 重現直接讀 default path、
+未開 picker：3 checks／2 failures。較早草稿的不存在資料夾 cleanup 錯誤不列入 RED。
+後續測試的外部替換 fixture 改由正式 factory 建立，避免手改 seed 破壞 seed_text／RNG
+契約；先前四項連帶失敗屬 fixture 問題，不冒稱產品修復。
+
+Tests-only `8eb0ab5` 在接線初版重現 SAVE 混入呈現 metadata、AI 回合無法存檔：
+39 checks／2 failures，沒有 script／invocation error。改為直接取得核心快照後，同一
+測試在 synthetic 與實際十二地圖 catalog 都為42／0。完整棋局比較使用核心 canonical
+serializer，避免測試用 JSON 浮點 round-trip 誤判大型 RNG 整數；早先此誤判不算產品 RED。
+測試亦涵蓋 slot stale、覆寫確認／取消、default 唯讀、legacy 候選、排隊讀取取消、
+presentation 重查，以及選單期間的 AI callback 阻擋。
+
+相關 source setup52／factory18、market entry82／active presentation24、HUD153、
+storage248／panel121、save shapes126、simulation454 全部通過。新測試已列入
+`tools/check.sh`。這些 signal／headless evidence 不等於實體輸入；來源 Loading
+實際呈現、一般原生互動與打包 gate 仍待核對，S34 維持 UNACCEPTED。

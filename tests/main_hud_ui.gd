@@ -98,9 +98,11 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	game._sync_state()
 	ui._refresh_from_state()
 	_expect(not shell.is_title_visible(), "new game enters the source board screen")
-	for key in ["help", "options", "ai", "tools", "cards", "sale"]:
+	for key in ["options", "ai", "tools", "cards", "sale"]:
 		var pending_control: Button = shell.toolbar_buttons.get(key) as Button
 		_expect(pending_control != null and pending_control.visible and pending_control.disabled, "source %s command stays visibly pending" % key)
+	var help_control: Button = shell.toolbar_buttons.get("help") as Button
+	_expect(help_control != null and help_control.visible and not help_control.disabled, "source help command is available on the active board")
 	_expect(not shell.title_option_button.disabled, "source title OPTION retains its independent S35 entry")
 	_expect(shell.action_strip.get_parent() == shell.game_screen, "context actions live on the board screen")
 	_expect(shell.roll_button.get_parent() == shell.action_strip and shell.roll_button.get_parent() != shell.hud_panel, "roll is a board-context action")

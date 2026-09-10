@@ -15,7 +15,7 @@ Bundle schema::
     edition {"schema": "richman4.help-edition/v1", "edition", "archive_sha256",
              "sections": [{"id", "label", "topics": [...]}]}
     topic   {"resource_index", "title", "payload_sha256",
-             "pages": [[<line>, ...], ...]}
+             "source_payload_sha256", "pages": [[<line>, ...], ...]}
 
 Source text rules: each resource is NUL separated and NUL terminated.  The
 final terminator is not an extra blank line; interior empty lines are real
@@ -25,6 +25,13 @@ each explicit group is then split into pages of at most 14 lines.
 
 ``payload_sha256`` is the sha256 of the UTF-8 bytes of
 ``json.dumps(pages, ensure_ascii=False, separators=(",", ":"))``.
+
+``source_payload_sha256`` is the sha256 of the exact decoded original resource
+bytes, taken before NUL splitting, CP950 decoding or page grouping.  It proves
+raw-byte provenance independently of the canonical page digest; the loader
+enforces it structurally and ``validate(source_root=...)`` recomputes it from
+the original ``help.mkf`` so a bundle can be shown to reproduce the source
+exactly.
 
 Output is written into a new, disjoint, private destination only.  A failed
 export removes the destination it created and never touches the source or a
@@ -366,6 +373,7 @@ def _build_edition(edition: str, archive: Any, archive_sha: str) -> dict[str, An
                     "resource_index": resource_index,
                     "title": title,
                     "payload_sha256": payload_sha256(pages),
+                    "source_payload_sha256": hashlib.sha256(decoded).hexdigest(),
                     "pages": pages,
                 }
             )
@@ -501,6 +509,10 @@ def _validate_edition_document(
             digest = _hex64(
                 topic.get("payload_sha256"), context=f"{context} payload_sha256"
             )
+            _hex64(
+                topic.get("source_payload_sha256"),
+                context=f"{context} source_payload_sha256",
+            )
             pages = _validate_pages(topic.get("pages"), context=context)
             if payload_sha256(pages) != digest:
                 raise FormatError(f"{context}: payload digest mismatch")
@@ -508,6 +520,27 @@ def _validate_edition_document(
     if expected_resource - 1 != EXPECTED_TOPIC_COUNT:
         raise FormatError(f"help edition {edition}: topic count mismatch")
     return document
+
+
+def _validate_source_equality(document: dict[str, Any], archive: Any, *, edition: str) -> None:
+    """Prove the exported topics reproduce the exact decoded source resources."""
+
+    resource_index = 1
+    for section in document["sections"]:
+        for topic in section["topics"]:
+            if resource_index >= len(archive.entries):
+                raise FormatError(
+                    f"help edition {edition} resource {resource_index}: missing source resource"
+                )
+            decoded = decode_entry(archive, archive.entries[resource_index])
+            if hashlib.sha256(decoded).hexdigest() != topic["source_payload_sha256"]:
+                raise FormatError(
+                    f"help edition {edition} resource {resource_index}: "
+                    "source payload digest does not match the original"
+                )
+            resource_index += 1
+    if resource_index - 1 != EXPECTED_TOPIC_COUNT:
+        raise FormatError(f"help edition {edition}: unexpected topic count")
 
 
 def validate(
@@ -573,15 +606,19 @@ def validate(
         _validate_edition_document(document, edition=edition, archive_sha=archive_sha)
         if source_directories is not None:
             archive_path = _find_help_archive(source_directories[edition])
-            actual = hashlib.sha256(
-                _read_bounded(
-                    archive_path, 64 * 1024 * 1024, context=f"{edition} help archive"
-                )
-            ).hexdigest()
+            archive_bytes = _read_bounded(
+                archive_path, 64 * 1024 * 1024, context=f"{edition} help archive"
+            )
+            actual = hashlib.sha256(archive_bytes).hexdigest()
             if actual != archive_sha:
                 raise FormatError(
                     f"help edition {edition}: archive digest does not match the source"
                 )
+            _validate_source_equality(
+                document,
+                parse_mkf(archive_path, archive_bytes),
+                edition=edition,
+            )
         referenced.append(relative)
     return manifest, referenced
 

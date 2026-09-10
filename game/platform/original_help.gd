@@ -8,6 +8,8 @@ extends RefCounted
 ## returns detached copies.  A missing or invalid edition never borrows the
 ## other edition's content.  The whole-file digest from the index covers
 ## content integrity; per-topic payload digests are checked structurally.
+## ``source_payload_sha256`` records the exact decoded original resource bytes
+## and is enforced here; the pure presenter does not need it.
 
 const SCHEMA_INDEX := "richman4.help/v1"
 const SCHEMA_EDITION := "richman4.help-edition/v1"
@@ -171,6 +173,8 @@ func _validate_edition(document: Dictionary, edition: String, archive_sha: Strin
 				return "%s: resource %d title is missing" % [edition, expected_resource]
 			if not _is_hex64(topic_map.get("payload_sha256")):
 				return "%s: resource %d payload digest is invalid" % [edition, expected_resource]
+			if not _is_hex64(topic_map.get("source_payload_sha256")):
+				return "%s: resource %d source digest is invalid" % [edition, expected_resource]
 			var problem := _validate_pages(topic_map.get("pages"), edition, expected_resource)
 			if not problem.is_empty():
 				return problem

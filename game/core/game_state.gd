@@ -6896,8 +6896,9 @@ func _ai_action(player_id: int) -> void:
 				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
 				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
-		choose_action("deposit", {"amount": int(player.get("cash", 0)) / 4})
-		return
+		var deposit_amount := mini(int(player.get("cash", 0)) / 4, bank_transfer_limit("deposit", player_id))
+		if deposit_amount > 0 and bool(choose_action("deposit", {"amount": deposit_amount}).get("ok", false)):
+			return
 	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
 		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]

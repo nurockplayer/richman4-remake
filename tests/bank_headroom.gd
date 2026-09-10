@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_deposit_source_and_destination_caps()
 	_test_withdraw_source_and_destination_caps()
 	_test_zero_headroom_is_rejected_atomically()
+	_test_ai_continues_after_deposit_headroom()
 	print("Bank headroom checks: %d, failures: %d, qualified_red: %d" % [checks, failures, qualified_red])
 	quit(1 if failures else 0)
 
@@ -201,3 +202,23 @@ func _test_zero_headroom_is_rejected_atomically() -> void:
 		_assert_limit_query(withdraw, "withdraw", 0, "withdraw zero destination headroom")
 		_expect(not withdraw.state.get("action_options", []).has("withdraw"), "withdraw zero destination headroom hides the unavailable action")
 		_assert_rejected_atomic(withdraw, "withdraw", 1, "withdraw zero destination headroom")
+
+
+func _test_ai_continues_after_deposit_headroom() -> void:
+	for remaining in [250, 0]:
+		var game := _new_game(10440 + remaining)
+		if game == null:
+			continue
+		_prepare_action(game, 8000, MAX_BALANCE - remaining, 0, MAX_BALANCE - remaining)
+		game.state.players[0].is_ai = true
+		game.state.players[0].is_human = false
+		var label := "AI deposit headroom %d" % remaining
+		if not _valid_save(game, label):
+			continue
+		var result: Dictionary = game.run_ai_turn()
+		_expect(bool(result.get("ok", false)), label + " completes its public turn")
+		_expect_equal(int(game.state.players[0].deposit), MAX_BALANCE, label + " deposits only the available headroom")
+		_expect(int(game.state.players[0].stocks.get("tech", 0)) > 0, label + " continues to its legal stock action")
+		_expect_equal(int(game.state.current_player), 1, label + " returns control to the next player")
+		var after_validation: Dictionary = Game.validate_save(game.to_dict())
+		_expect(bool(after_validation.get("ok", false)), label + " remains saveable: " + str(after_validation.get("errors", [])))

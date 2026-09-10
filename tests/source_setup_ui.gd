@@ -1,6 +1,20 @@
 extends SceneTree
 
-const MainScene = preload("res://game/main.tscn")
+# Keep audio/owner preferences outside this setup test. CI uses a validated
+# synthetic company catalog; an explicit local catalog uses the normal loader.
+class SetupTestUI extends "res://game/ui/main_ui.gd":
+	func _setup_audio() -> void: pass
+	func _load_map_catalog(path: String = "", _allow_development_fallback: bool = false) -> void:
+		if not OS.get_environment("RICHMAN4_MAP_CATALOG").is_empty():
+			super._load_map_catalog(path)
+			return
+		var fixture = preload("res://tests/fixtures/company_fixture.gd")
+		_map_catalog = [fixture.definition()]
+		_map_catalog_complete = _catalog_has_complete_original_content(_map_catalog)
+		_map_catalog_ok = _map_catalog_complete
+		_selected_map_definition = _map_catalog[0].duplicate(true)
+		_update_map_selector()
+
 
 var checks := 0
 var failures := 0
@@ -15,7 +29,7 @@ func _expect(condition: bool, message: String) -> void:
 		push_error("FAIL: " + message)
 
 func _run() -> void:
-	var ui := MainScene.instantiate()
+	var ui := SetupTestUI.new()
 	root.add_child(ui)
 	await process_frame
 	await process_frame
@@ -43,8 +57,8 @@ func _run() -> void:
 		_expect(setup.has_method("cancel"), "source setup has an explicit cancel path")
 		_expect(setup.find_child("CharacterPortrait_0", true, false) != null, "source setup shows the first character portrait")
 		_expect(setup.find_child("CharacterPortrait_11", true, false) != null, "source setup shows all twelve character portraits")
-		_expect(setup.find_child("PlayerType_0", true, false) != null, "source setup exposes human or AI for player one")
-		_expect(setup.find_child("PlayerType_3", true, false) != null, "source setup exposes human or AI for player four")
+		_expect(setup.find_child("PlayerType_0", true, false) == null, "source selects humans by portraits without an extra player-type control")
+		_expect(setup.find_child("PlayerType_3", true, false) == null, "AI is filled on confirmation without invented slots")
 		_expect(setup.find_child("MapChoice_0", true, false) != null, "source setup exposes the first source map choice")
 		_expect(setup.find_child("MapChoice_3", true, false) != null, "source setup exposes the fourth source map choice")
 		_expect(setup.find_child("InitialFund", true, false) != null, "source setup keeps the initial fund selector")
@@ -52,20 +66,20 @@ func _run() -> void:
 		_expect(setup.find_child("WealthTarget", true, false) != null, "source setup keeps the victory target selector")
 		_expect(setup.find_child("InitialVehicle", true, false) != null, "source setup exposes the initial vehicle selector")
 		_expect(setup.find_child("LandTenure", true, false) != null, "source setup exposes the bounded land-tenure status")
-		_expect(setup.find_child("MapStage", true, false) != null, "source setup exposes the MJ stage selector")
+		_expect(setup.find_child("MapStage", true, false) == null, "stage choice belongs to the upstream title menu")
 		_expect(setup.find_child("MapChoiceLabel_0", true, false) != null and setup.find_child("MapChoiceCheck_0", true, false) != null, "source setup keeps visible map labels and selection markers")
 		_expect(setup.find_child("SourceSettingLabel_0", true, false) != null and setup.find_child("SourceSettingLabel_5", true, false) != null, "source setup keeps visible labels for all six source settings")
 		var source_frame := setup.find_child("SourcePortraitFrame", true, false) as TextureRect
 		var settings_frame := setup.find_child("SourceSettingsFrame", true, false) as TextureRect
-		_expect(source_frame != null and source_frame.position == Vector2(8, 8) and source_frame.size == Vector2(440, 155), "source setup keeps the source portrait frame geometry")
-		_expect(settings_frame != null and settings_frame.position == Vector2(448, 8) and settings_frame.size == Vector2(192, 461), "source setup keeps the source settings strip geometry")
+		_expect(source_frame != null and source_frame.position == Vector2(4, 10) and source_frame.size == Vector2(440, 155), "source setup keeps the source portrait frame geometry")
+		_expect(settings_frame != null and settings_frame.position == Vector2(445, 10) and settings_frame.size == Vector2(192, 461), "source setup keeps the source settings strip geometry")
 		_expect(setup.find_child("OK", true, false) != null and setup.find_child("EXIT", true, false) != null, "source setup has OK and EXIT controls")
 		var land_tenure := setup.find_child("LandTenure", true, false) as OptionButton
-		_expect(land_tenure != null and land_tenure.get_popup().is_item_disabled(1), "unsupported nonzero land tenure choices are visibly disabled")
+		_expect(land_tenure != null and not land_tenure.get_popup().is_item_disabled(1), "reviewed nonzero land tenure choices are available")
 		if land_tenure != null:
 			land_tenure.select(1)
 			var blocked_tenure: Dictionary = setup.call("collect_options")
-			_expect(not bool(blocked_tenure.get("ok", false)), "unsupported nonzero land tenure cannot be silently discarded")
+			_expect(bool(blocked_tenure.get("ok", false)) and blocked_tenure.get("options", {}).get("land_tenure_months", -1) == 1, "source land tenure is retained for the factory")
 			land_tenure.select(0)
 		var before_cancel: String = ui.game_state.to_json() if ui.game_state != null else JSON.stringify(ui.state)
 		setup.call("cancel")
@@ -102,6 +116,19 @@ func _run() -> void:
 			_expect(int(ui.state.get("bank", {}).get("deposits", -1)) == int(players[0].get("deposit", 0)) + int(players[1].get("deposit", 0)) + int(players[2].get("deposit", 0)), "source setup confirmation keeps bank deposits authoritative")
 			var restart_options: Dictionary = ui._setup_options_from_state()
 			_expect(restart_options.get("human_flags", []) == [true, true, false] and restart_options.get("initial_vehicle", "") == "car", "restart setup defaults preserve the selected source controls")
+	var ordered_options := ui._default_setup_options(4, ui._active_map_definition)
+	ordered_options.erase("character_ids")
+	ordered_options.erase("human_flags")
+	ordered_options["human_character_ids"] = [4,6]
+	ordered_options["player_count"] = 4
+	ordered_options["initial_vehicle"] = "walking"
+	ordered_options["land_tenure_months"] = 3
+	_expect(ui._new_game(115, 4, ui._active_map_definition, ordered_options), "source human selection enters the validated factory")
+	_expect(ui.state.get("character_ids", []).slice(0,2) == [4,6] and ui.state.get("initial_human_flags", []) == [true,true,false,false], "factory preserves humans then fills computer identities")
+	_expect(ui.state.get("land_tenure_months", -1) == 3 and ui._setup_options_from_state().get("land_tenure_months", -1) == 3, "land tenure survives source setup and restart defaults")
+	_expect(ui.state.players.all(func(player: Dictionary) -> bool: return player.vehicle == "walking" and player.dice_count == 1), "car-to-walking restart resets every vehicle")
+	var exact_state: String = ui.game_state.to_json()
+	_expect(ui._new_game(115, 4, ui._active_map_definition, ordered_options) and ui.game_state.to_json() == exact_state, "fixed setup seed reproduces AI choice and full initial state")
 	var setup_script := load("res://game/ui/source_setup_panel.gd")
 	var map_probe: Control = setup_script.new()
 	root.add_child(map_probe)
@@ -111,7 +138,7 @@ func _run() -> void:
 		map_definitions.append({"id": "mj:%d" % map_number, "source": {"edition": "MultiverseJourney", "map_number": map_number}})
 	map_probe.call("set_catalog", map_definitions, map_definitions[0], {})
 	_expect(int(map_probe.call("get_map_background_resource")) == 0, "MJ stage one starts at jump background resource zero")
-	map_probe.call("_select_stage", 1)
+	map_probe.call("set_catalog", map_definitions, map_definitions[4], {})
 	_expect(int(map_probe.call("get_setup_atlas_offset")) == 21, "MJ stage two keeps the source setup atlas offset 21")
 	_expect(int(map_probe.call("get_map_background_resource")) == 4, "MJ stage two starts at jump background resource four")
 	map_probe.call("_select_map", 3)

@@ -392,11 +392,12 @@ func _on_source_start_requested() -> void:
 
 func _on_source_setup_confirmed(options: Dictionary, map_definition: Dictionary) -> void:
 	var character_ids: Variant = options.get("character_ids", [])
-	if not character_ids is Array or character_ids.size() < 2 or character_ids.size() > 4:
+	var requested_count := int(options.get("player_count", character_ids.size() if character_ids is Array else 0))
+	if requested_count < 2 or requested_count > 4:
 		return
 	var before_game := game_state
 	var before_seed := int(state.get("seed", MIN_SEED - 1))
-	if _new_game(null, character_ids.size(), map_definition, options):
+	if _new_game(null, requested_count, map_definition, options):
 		_source_setup_return_to_game = false
 	elif game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
 		_refresh_log_only()
@@ -1305,6 +1306,8 @@ func _setup_options_from_state() -> Dictionary:
 	var initial_vehicle: Variant = state.get("initial_vehicle", null)
 	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
 		options["initial_vehicle"] = initial_vehicle
+	if state.has("land_tenure_months"):
+		options["land_tenure_months"] = int(state.land_tenure_months)
 	return options
 
 func _populate_setup_controls() -> void:
@@ -1829,16 +1832,14 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	var effective_setup := setup_options.duplicate(true)
 	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
 		effective_setup = _default_setup_options(resolved_players, selected_definition)
-	if effective_setup.has("land_tenure_months") and int(effective_setup.get("land_tenure_months", 0)) != 0:
-		_append_local_log("土地期限功能尚未由核心支援；請選擇無限期。")
-		_refresh_log_only()
-		return false
+	if effective_setup.has("human_character_ids"):
+		var selection_script: Variant = load("res://game/ui/source_setup_panel.gd")
+		effective_setup = selection_script.resolve_players(effective_setup, resolved_players, resolved_seed)
+		if effective_setup.is_empty():
+			_append_local_log("真人角色選擇無效；目前棋局保持不變。")
+			return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var engine_setup := effective_setup.duplicate(true)
-	# Land tenure is displayed as a bounded pending option until the core
-	# contract lands. Zero is the current infinite-tenure default and is omitted
-	# explicitly so the strict factory does not mistake it for implemented input.
-	engine_setup.erase("land_tenure_months")
 	var candidate: Variant = null
 	if state_script != null:
 		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):

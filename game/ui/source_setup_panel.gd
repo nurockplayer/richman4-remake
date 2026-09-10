@@ -13,17 +13,18 @@ const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
-const SOURCE_TOP_RECT := Rect2(8.0, 8.0, 440.0, 155.0)
-const SOURCE_SIDE_RECT := Rect2(448.0, 8.0, 192.0, 461.0)
-const SOURCE_MAP_RECT := Rect2(14.0, 173.0, 436.0, 321.0)
-const SOURCE_PORTRAIT_ORIGIN := Vector2(14.0, 20.0)
-const SOURCE_MAP_BUTTON_RECT := Rect2(461.0, 35.0, 171.0, 33.0)
-const SOURCE_OK_RECT := Rect2(462.0, 182.0, 76.0, 38.0)
-const SOURCE_EXIT_RECT := Rect2(547.0, 182.0, 82.0, 38.0)
+const SOURCE_TOP_RECT := Rect2(4.0, 10.0, 440.0, 155.0)
+const SOURCE_SIDE_RECT := Rect2(445.0, 10.0, 192.0, 461.0)
+const SOURCE_MAP_RECT := Rect2(4.0, 173.0, 440.0, 307.0)
+const SOURCE_PORTRAIT_ORIGIN := Vector2(8.0, 15.0)
+const SOURCE_MAP_BUTTON_RECT := Rect2(457.0, 31.0, 168.0, 32.0)
+const SOURCE_OK_RECT := Rect2(456.0, 176.0, 80.0, 40.0)
+const SOURCE_EXIT_RECT := Rect2(544.0, 176.0, 80.0, 40.0)
 const SOURCE_SETTING_X := 534.0
 const SOURCE_SETTING_WIDTH := 93.0
 const SOURCE_SETTING_Y := [228.0, 263.0, 298.0, 333.0, 368.0, 403.0]
-const SOURCE_PREVIEW_ANCHOR := Vector2(414.0, 464.0)
+const SOURCE_PREVIEW_X := {2:[330,110], 3:[366,220,74], 4:[385,275,165,55]}
+const SOURCE_PREVIEW_Y := 440.0
 
 const CHARACTER_NAMES := [
 	"約翰喬", "沙隆巴斯", "忍太郎", "錢夫人", "阿土伯", "莎拉公主",
@@ -50,16 +51,11 @@ var _visuals = OriginalVisuals.new()
 var _catalog: Array = []
 var _selected_map: Dictionary = {}
 var _map_buttons: Array[Button] = []
-var _edition_buttons: Array[Button] = []
 var _portrait_buttons: Array[Button] = []
-var _player_slot_buttons: Array[Button] = []
-var _player_type_buttons: Array[Button] = []
 var _map_labels: Array[Label] = []
 var _map_checks: Array[TextureRect] = []
 var _setting_labels: Array[Label] = []
-var _character_ids: Array = [0, 1, 2, 3]
-var _player_ai: Array = [false, true, true, true]
-var _active_player := 0
+var _human_character_ids: Array = [0]
 var _player_count := 4
 var _edition := "Game"
 var _stage := 0
@@ -68,10 +64,9 @@ var _setup_atlas_offset := 1
 var _map_background: TextureRect
 var _setup_top_art: TextureRect
 var _setup_side_art: TextureRect
-var _character_preview: TextureRect
+var _character_previews: Array[TextureRect] = []
 var _map_preview: TextureRect
 var _map_caption: Label
-var _stage_option: OptionButton
 var _error: Label
 var _funds: OptionButton
 var _days: OptionButton
@@ -114,7 +109,7 @@ func set_catalog(catalog: Array, selected_definition: Dictionary = {}, defaults:
 func collect_options() -> Dictionary:
 	if _count == null:
 		return {"ok": false, "message": "開局設定尚未載入。"}
-	var ids: Array = _character_ids.slice(0, _player_count)
+	var ids: Array = _human_character_ids.duplicate()
 	var seen: Dictionary = {}
 	for value in ids:
 		if seen.has(int(value)):
@@ -123,14 +118,8 @@ func collect_options() -> Dictionary:
 	var date := {"year": int(_year.value), "month": int(_month.value), "day": int(_day.value)}
 	if not GameCalendar.is_valid(date):
 		return {"ok": false, "message": "起始日期不存在，請檢查年月日。"}
-	var humans := 0
-	for index in range(_player_count):
-		if not bool(_player_ai[index]):
-			humans += 1
-	if humans == 0:
-		return {"ok": false, "message": "至少需要一位真人玩家。"}
-	if _land_tenure != null and _land_tenure.get_selected_id() != 0:
-		return {"ok": false, "message": "土地期限功能尚未由核心支援；請選擇無限期。"}
+	if ids.is_empty() or ids.size() > _player_count:
+		return {"ok": false, "message": "請選擇一位以上真人，且不超過遊戲人數。"}
 	if _selected_map.is_empty():
 		return {"ok": false, "message": "尚未選擇可用地圖。"}
 	return {"ok": true, "options": {
@@ -138,11 +127,38 @@ func collect_options() -> Dictionary:
 		"day_limit": _days.get_selected_id(),
 		"wealth_multiplier": _wealth.get_selected_id(),
 		"start_date": date,
-		"character_ids": ids,
-		"human_flags": _human_flags(),
+		"human_character_ids": ids,
+		"player_count": _player_count,
 		"initial_vehicle": VEHICLES[_vehicle.selected] if _vehicle != null and _vehicle.selected >= 0 and _vehicle.selected < VEHICLES.size() else "walking",
 		"land_tenure_months": _land_tenure.get_selected_id() if _land_tenure != null else 0,
 	}}
+
+static func resolve_players(options: Dictionary, player_count: int, seed_value: int) -> Dictionary:
+	var selected: Variant = options.get("human_character_ids", null)
+	if not selected is Array or selected.is_empty() or selected.size() > player_count or player_count < 2 or player_count > 4:
+		return {}
+	var ids: Array = []
+	var flags: Array = []
+	var available: Array = range(12)
+	for value in selected:
+		if typeof(value) != TYPE_INT or not available.has(value):
+			return {}
+		ids.append(value)
+		flags.append(true)
+		available.erase(value)
+	var selection_rng := RandomNumberGenerator.new()
+	selection_rng.seed = seed_value
+	while ids.size() < player_count:
+		var index := selection_rng.randi_range(0, available.size() - 1)
+		ids.append(available[index])
+		flags.append(false)
+		available.remove_at(index)
+	var resolved := options.duplicate(true)
+	resolved.erase("human_character_ids")
+	resolved.erase("player_count")
+	resolved["character_ids"] = ids
+	resolved["human_flags"] = flags
+	return resolved
 
 func cancel() -> void:
 	cancelled.emit()
@@ -187,13 +203,10 @@ func _build_surface() -> void:
 	_map_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_map_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_map_preview)
-	_character_preview = TextureRect.new()
-	_character_preview.name = "SourceCharacterVehiclePreview"
-	_character_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_character_preview.stretch_mode = TextureRect.STRETCH_SCALE
-	_character_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_character_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_character_preview)
+	for index in range(4):
+		var preview := _art("SourceCharacterVehiclePreview_%d" % index, Rect2())
+		add_child(preview)
+		_character_previews.append(preview)
 
 	_setup_top_art = _art("SourcePortraitFrame", SOURCE_TOP_RECT)
 	_setup_side_art = _art("SourceSettingsFrame", SOURCE_SIDE_RECT)
@@ -215,62 +228,16 @@ func _build_surface() -> void:
 		portraits.add_child(button)
 		_portrait_buttons.append(button)
 
-	# PlayerSlot is a source-compatible transparent hit area over each portrait.
-	# The source frame has no extra row of labels; state remains available via
-	# tooltips and the setup API instead of an invented panel.
-	var players := Control.new()
-	players.name = "PlayerSlots"
-	players.position = Vector2.ZERO
-	players.size = SOURCE_TOP_RECT.size
-	players.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(players)
-	for index in range(4):
-		var slot := _hit_button("PlayerSlot_%d" % index)
-		slot.position = Vector2(14.0 + float(index) * 106.0, 458.0)
-		slot.size = Vector2(96.0, 17.0)
-		slot.tooltip_text = "玩家 %d：點擊選取，PlayerType 可切換真人／AI" % (index + 1)
-		slot.pressed.connect(_select_player.bind(index))
-		players.add_child(slot)
-		_player_slot_buttons.append(slot)
-		var type_button := _hit_button("PlayerType_%d" % index)
-		type_button.position = Vector2(14.0 + float(index) * 106.0, 477.0)
-		type_button.size = Vector2(96.0, 10.0)
-		type_button.tooltip_text = "玩家 %d：真人" % (index + 1)
-		type_button.pressed.connect(_toggle_player_type.bind(index))
-		players.add_child(type_button)
-		_player_type_buttons.append(type_button)
-
-	# Edition and map buttons sit on the baked right-side map list. Their text
-	# is only visible when the private source frame is unavailable.
-	for index in range(2):
-		var edition_button := _hit_button("MapEdition_Game" if index == 0 else "MapEdition_MJ")
-		edition_button.position = Vector2(458.0, 9.0 + float(index) * 18.0)
-		edition_button.size = Vector2(86.0, 17.0)
-		edition_button.tooltip_text = "Game" if index == 0 else "MultiverseJourney"
-		edition_button.pressed.connect(_select_edition.bind("Game" if index == 0 else "MultiverseJourney"))
-		add_child(edition_button)
-		_edition_buttons.append(edition_button)
-
-	# MJ has two four-map stages. This compact selector uses an otherwise quiet
-	# edge of the side frame while the map list remains four source labels.
-	_stage_option = _source_option("MapStage", Vector2(548.0, 9.0), Vector2(82.0, 17.0))
-	_stage_option.add_item("STAGE 1", 0)
-	_stage_option.add_item("STAGE 2", 1)
-	_stage_option.item_selected.connect(func(_i: int) -> void:
-		_select_stage(_stage_option.get_selected_id())
-	)
-	_stage_option.tooltip_text = "MultiverseJourney stage"
-
 	for index in range(4):
 		var button := _hit_button("MapChoice_%d" % index)
-		button.position = Vector2(SOURCE_MAP_BUTTON_RECT.position.x, SOURCE_MAP_BUTTON_RECT.position.y + float(index) * 34.0)
+		button.position = Vector2(SOURCE_MAP_BUTTON_RECT.position.x, SOURCE_MAP_BUTTON_RECT.position.y + float(index) * 32.0)
 		button.size = SOURCE_MAP_BUTTON_RECT.size
 		button.pressed.connect(_select_map.bind(index))
 		add_child(button)
 		_map_buttons.append(button)
 		var map_label := _label("", 17, Color("#d73550"))
 		map_label.name = "MapChoiceLabel_%d" % index
-		map_label.position = SOURCE_MAP_LABEL_RECT.position + Vector2(0.0, float(index) * 34.0)
+		map_label.position = SOURCE_MAP_LABEL_RECT.position + Vector2(0.0, float(index) * 32.0)
 		map_label.size = SOURCE_MAP_LABEL_RECT.size
 		map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		map_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -281,7 +248,7 @@ func _build_surface() -> void:
 		_map_labels.append(map_label)
 		var map_check := TextureRect.new()
 		map_check.name = "MapChoiceCheck_%d" % index
-		map_check.position = SOURCE_MAP_CHECK_POSITION + Vector2(0.0, float(index) * 34.0)
+		map_check.position = SOURCE_MAP_CHECK_POSITION + Vector2(0.0, float(index) * 32.0)
 		map_check.size = Vector2(16.0, 16.0)
 		map_check.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		map_check.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -325,18 +292,18 @@ func _build_surface() -> void:
 	_vehicle = _source_option("InitialVehicle", Vector2(SOURCE_SETTING_X, SOURCE_SETTING_Y[2]), Vector2(SOURCE_SETTING_WIDTH, 30.0))
 	for index in range(VEHICLES.size()):
 		_vehicle.add_item(["步行", "機車", "汽車"][index], index)
+	_vehicle.item_selected.connect(func(_index: int) -> void: _update_character_preview())
 	_land_tenure = _source_option("LandTenure", Vector2(SOURCE_SETTING_X, SOURCE_SETTING_Y[3]), Vector2(SOURCE_SETTING_WIDTH, 30.0))
 	_land_tenure.add_item("無限期", 0)
 	for index in range(1, LAND_TENURE.size()):
 		_land_tenure.add_item("%d月" % LAND_TENURE[index], LAND_TENURE[index])
-		_land_tenure.set_item_disabled(index, true)
-	_land_tenure.tooltip_text = "土地期限：核心功能待接入，目前僅支援無限期。"
+	_land_tenure.tooltip_text = "到期時收回土地所有權。"
 	_count = _source_option("PlayerCount", Vector2(SOURCE_SETTING_X, SOURCE_SETTING_Y[0]), Vector2(SOURCE_SETTING_WIDTH, 30.0))
 	for value in [2, 3, 4]:
 		_count.add_item("%d人" % value, value)
 	_count.item_selected.connect(func(_i: int) -> void:
 		_player_count = _count.get_selected_id()
-		_active_player = clampi(_active_player, 0, _player_count - 1)
+		_human_character_ids = _human_character_ids.slice(0, _player_count)
 		_update_portraits()
 		_update_character_preview()
 	)
@@ -387,9 +354,9 @@ func _hit_button(node_name: String) -> Button:
 	button.flat = true
 	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	button.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.0))
-	button.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 0.0))
-	button.add_theme_color_override("font_pressed_color", Color(1.0, 1.0, 1.0, 0.0))
+	button.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	button.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 1.0))
+	button.add_theme_color_override("font_pressed_color", Color(1.0, 1.0, 1.0, 1.0))
 	button.add_theme_stylebox_override("normal", _empty_style())
 	button.add_theme_stylebox_override("hover", _empty_style())
 	button.add_theme_stylebox_override("pressed", _empty_style())
@@ -468,14 +435,13 @@ func _apply_defaults(defaults: Dictionary) -> void:
 	var count := int(defaults.get("player_count", defaults.get("character_ids", []).size()))
 	if count >= 2 and count <= 4:
 		_player_count = count
-	var ids: Variant = defaults.get("character_ids", [])
-	if ids is Array:
-		for index in range(mini(ids.size(), 4)):
-			_character_ids[index] = clampi(int(ids[index]), 0, 11)
-	var types: Variant = defaults.get("human_flags", [])
-	if types is Array:
-		for index in range(mini(types.size(), 4)):
-			_player_ai[index] = not bool(types[index])
+	_human_character_ids = []
+	var ids: Variant = defaults.get("character_ids", [0])
+	var flags: Variant = defaults.get("human_flags", [true])
+	if ids is Array and flags is Array:
+		for index in range(mini(mini(ids.size(), flags.size()), _player_count)):
+			if bool(flags[index]) and typeof(ids[index]) == TYPE_INT and int(ids[index]) >= 0 and int(ids[index]) < 12 and not _human_character_ids.has(ids[index]):
+				_human_character_ids.append(ids[index])
 	if _count != null:
 		_select_option(_count, _player_count)
 	if _funds != null:
@@ -549,21 +515,16 @@ func _rebuild_maps() -> void:
 			var names := MJ_MAP_NAMES if _edition == "MultiverseJourney" else MAP_NAMES
 			button.text = names[index]
 			button.tooltip_text = ""
-	for index in range(_edition_buttons.size()):
-		_edition_buttons[index].disabled = (_edition == "Game" and index == 0) or (_edition == "MultiverseJourney" and index == 1)
-	if _stage_option != null:
-		_stage_option.disabled = _edition != "MultiverseJourney"
-		_stage_option.visible = _edition == "MultiverseJourney" or not _has_setup_atlas
-		_stage_option.select(_stage)
 	_update_fallback_text()
 
 func _map_name(definition: Dictionary, index: int) -> String:
+	var named := str(definition.get("name", definition.get("display_name", "")))
+	if not named.is_empty():
+		return named
 	var number := _definition_map_number(definition)
-	var names := MJ_MAP_NAMES if _definition_edition(definition) == "MultiverseJourney" else MAP_NAMES
-	var local_index := number - 1
-	if _edition == "MultiverseJourney":
-		local_index = posmod(number - 1, 4)
-	return names[clampi(local_index if number > 0 else index, 0, names.size() - 1)]
+	if _definition_edition(definition) == "Game":
+		return MAP_NAMES[clampi(number - 1 if number > 0 else index, 0, 3)]
+	return "關卡%d" % (number if number > 0 else _stage * 4 + index + 1)
 
 func _select_map(index: int) -> void:
 	var valid := _edition_maps()
@@ -574,54 +535,15 @@ func _select_map(index: int) -> void:
 	_refresh_source_art()
 	_update_character_preview()
 
-func _select_edition(edition: String) -> void:
-	if edition not in EDITIONS:
-		return
-	_edition = edition
-	if edition == "Game":
-		_stage = 0
-	else:
-		_set_stage_from_definition(_selected_map)
-	_rebuild_maps()
-	_refresh_source_art()
-	_update_portraits()
-	_update_character_preview()
-
-func _select_stage(stage: int) -> void:
-	_stage = clampi(stage, 0, 1)
-	_setup_atlas_offset = _stage * 20 + 1
-	_rebuild_maps()
-	_refresh_source_art()
-
-func _select_player(index: int) -> void:
-	if index < 0 or index >= _player_count:
-		return
-	_active_player = index
-	_update_portraits()
-	_update_character_preview()
-
 func _select_character(index: int) -> void:
-	if _active_player >= _player_count or index < 0 or index >= CHARACTER_NAMES.size():
+	if index < 0 or index >= CHARACTER_NAMES.size():
 		return
-	if _character_ids.slice(0, _player_count).has(index):
-		for player in range(_player_count):
-			if _character_ids[player] == index:
-				_character_ids[player] = _character_ids[_active_player]
-	_character_ids[_active_player] = index
+	if _human_character_ids.has(index):
+		_human_character_ids.erase(index)
+	elif _human_character_ids.size() < _player_count:
+		_human_character_ids.append(index)
 	_update_portraits()
 	_update_character_preview()
-
-func _toggle_player_type(index: int) -> void:
-	if index < 0 or index >= _player_count:
-		return
-	_player_ai[index] = not _player_ai[index]
-	_update_portraits()
-
-func _human_flags() -> Array:
-	var result: Array = []
-	for index in range(_player_count):
-		result.append(not _player_ai[index])
-	return result
 
 func _ui_frame(resource: int, chunk: int) -> Dictionary:
 	return _visuals.ui(_edition, "jump", resource, chunk)
@@ -659,6 +581,7 @@ func _refresh_source_art() -> void:
 	var map_texture := _visuals.texture(map_frame)
 	_map_background.texture = map_texture
 	_map_background.visible = map_texture != null
+	get_node("SourceMapFallback").visible = map_texture == null
 	if map_texture == null:
 		var scene := _visuals.scene_for(_selected_map)
 		_map_preview.texture = _visuals.texture(scene.get("image", {})) if not scene.is_empty() else null
@@ -690,7 +613,7 @@ func _rebuild_maps_text_only() -> void:
 		if index < valid.size():
 			_map_buttons[index].text = "" if _has_setup_atlas else _map_name(valid[index], index)
 			_map_labels[index].text = _map_name(valid[index], index)
-			_map_labels[index].visible = _has_setup_atlas
+			_map_labels[index].visible = false
 			_map_checks[index].visible = _has_setup_atlas and str(valid[index].get("id", "")) == str(_selected_map.get("id", ""))
 		else:
 			var names := MJ_MAP_NAMES if _edition == "MultiverseJourney" else MAP_NAMES
@@ -706,8 +629,8 @@ func _rebuild_maps_text_only() -> void:
 		exit.text = "" if _setup_side_art.visible else "EXIT"
 
 func _update_fallback_text() -> void:
-	if _stage_option != null:
-		_stage_option.text = "STAGE %d" % (_stage + 1) if _edition == "MultiverseJourney" else ""
+	for label in _setting_labels:
+		label.visible = true
 	if _map_caption != null:
 		_map_caption.text = _map_name(_selected_map, 0) if not _selected_map.is_empty() else ""
 
@@ -719,40 +642,32 @@ func _update_portraits() -> void:
 		# The setup atlas supplies the coloured portrait slots; Data/2 supplies
 		# the character sprite that sits inside each slot.
 		button.icon = texture
-		var player_number := _character_ids.find(index) + 1 if index in _character_ids.slice(0, _player_count) else 0
-		button.tooltip_text = "%s · 玩家 %d%s" % [CHARACTER_NAMES[index], player_number, "（目前選取）" if index == _character_ids[_active_player] else ""]
+		var selected_index := _human_character_ids.find(index)
+		button.tooltip_text = CHARACTER_NAMES[index] + (" · 真人%d（再點一次移除）" % (selected_index + 1) if selected_index >= 0 else " · 點選加入真人")
+		button.self_modulate = Color(0.5,0.5,0.5) if selected_index >= 0 else Color.WHITE
 		button.disabled = false
-	for index in range(_player_slot_buttons.size()):
-		_player_slot_buttons[index].disabled = index >= _player_count
-	for index in range(_player_type_buttons.size()):
-		var button := _player_type_buttons[index]
-		button.disabled = index >= _player_count
-		button.tooltip_text = "玩家 %d：%s" % [index + 1, "AI" if _player_ai[index] else "真人"]
 
 func _update_character_preview() -> void:
-	if _character_preview == null:
-		return
-	var character_id := clampi(int(_character_ids[_active_player]), 0, 11)
 	var vehicle_index := _vehicle.selected if _vehicle != null else 0
 	var base := int(PREVIEW_RESOURCE_BASE.get(_edition, 5))
-	var resource := base + character_id * 3 + clampi(vehicle_index, 0, 2)
-	var frame := _ui_frame(resource, 0)
-	var texture := _visuals.texture(frame)
-	if texture != null:
+	var anchors: Array = SOURCE_PREVIEW_X[_player_count]
+	for index in range(_character_previews.size()):
+		var preview := _character_previews[index]
+		preview.visible = false
+		preview.texture = null
+		if index >= _human_character_ids.size():
+			continue
+		var character_id := int(_human_character_ids[index])
+		var resource := base + character_id * 3 + clampi(vehicle_index, 0, 2)
+		var frame := _ui_frame(resource, 0)
+		var texture := _visuals.texture(frame)
+		if texture == null:
+			continue
 		var logical: Dictionary = frame.get("logical", {})
-		_character_preview.texture = texture
-		_character_preview.position = SOURCE_PREVIEW_ANCHOR - Vector2(float(logical.get("anchor_x", 0)), float(logical.get("anchor_y", 0)))
-		_character_preview.size = Vector2(float(logical.get("width", texture.get_width())), float(logical.get("height", texture.get_height())))
-		_character_preview.visible = true
-		return
-	var fallback_frame := _visuals.character(_edition, character_id, 0)
-	var fallback_texture := _visuals.texture(fallback_frame)
-	_character_preview.texture = fallback_texture
-	if fallback_texture != null:
-		var logical: Dictionary = fallback_frame.get("logical", {})
-		_character_preview.position = SOURCE_PREVIEW_ANCHOR - Vector2(float(logical.get("anchor_x", 0)), float(logical.get("anchor_y", 0)))
-		_character_preview.size = Vector2(float(logical.get("width", fallback_texture.get_width())), float(logical.get("height", fallback_texture.get_height())))
-	_character_preview.visible = fallback_texture != null
+		preview.texture = texture
+		preview.position = Vector2(float(anchors[index]), SOURCE_PREVIEW_Y) - Vector2(float(logical.get("anchor_x", 0)), float(logical.get("anchor_y", 0)))
+		preview.size = Vector2(float(logical.get("width", texture.get_width())), float(logical.get("height", texture.get_height())))
+		preview.visible = true
 
 func _confirm() -> void:
 	var result := collect_options()

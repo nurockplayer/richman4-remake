@@ -454,6 +454,8 @@ func _clear_table() -> void:
 
 func _refresh_overview() -> void:
 	_add_headers(["股票名稱", "成交價", "漲跌", "交易量", "持有股數", "平均成本"], OVERVIEW_COLUMNS)
+	if _market_closed():
+		return
 	for index in range(_symbols.size()):
 		var symbol := str(_symbols[index])
 		_add_overview_row(symbol, index)
@@ -476,7 +478,7 @@ func _add_overview_row(symbol: String, index: int) -> void:
 		str(holdings),
 		holder_cost.get("text", ""),
 	]
-	var row_control := _make_row_control(symbol, index, limit_state)
+	var row_control := _make_row_control(symbol, index, limit_state, true)
 	for column in range(values.size()):
 		var label := _cell_label(str(values[column]), _overview_x(column), OVERVIEW_COLUMNS[column], TEXT_LIGHT)
 		if column == 0 and int(row.get("company_id", 0)) > 0:
@@ -516,7 +518,7 @@ func _refresh_holdings() -> void:
 		var previous := float(row.get("previous_price", row.get("price", 0.0)))
 		var price := float(row.get("price", 0.0))
 		var state := OriginalStockMarket.limit_state(previous, price) if previous > 0.0 and price > 0.0 else 0
-		var row_control := _make_row_control(symbol, index, state)
+		var row_control := _make_row_control(symbol, index, state, false)
 		var x := TABLE_LEFT
 		for column in range(values.size()):
 			var label := _cell_label(str(values[column]), x, widths[column], TEXT_LIGHT)
@@ -559,7 +561,7 @@ func _overview_x(column: int) -> float:
 	return x
 
 
-func _make_row_control(symbol: String, index: int, limit_state: int) -> Control:
+func _make_row_control(symbol: String, index: int, limit_state: int, tint_price_cell: bool) -> Control:
 	var row_control := Control.new()
 	row_control.name = "StockRow_" + symbol
 	row_control.position = Vector2(0, ROW_Y + ROW_HEIGHT * index)
@@ -567,9 +569,10 @@ func _make_row_control(symbol: String, index: int, limit_state: int) -> Control:
 	row_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var background := ColorRect.new()
 	background.name = "StockLimitBackground"
-	background.position = Vector2(TABLE_LEFT, 0)
-	background.size = Vector2(TABLE_WIDTH, ROW_HEIGHT)
+	background.position = Vector2(_overview_x(1), 0) if tint_price_cell else Vector2.ZERO
+	background.size = Vector2(OVERVIEW_COLUMNS[1], ROW_HEIGHT) if tint_price_cell else Vector2.ZERO
 	background.color = LIMIT_RED if limit_state == 1 else LIMIT_GREEN if limit_state == 3 else Color(0, 0, 0, 0)
+	background.visible = tint_price_cell and limit_state in [1, 3]
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row_control.add_child(background)
 	if _selected_symbol == symbol:
@@ -677,9 +680,12 @@ func _refresh_detail() -> void:
 func _refresh_closed_overlay() -> void:
 	if _closed_overlay == null:
 		return
+	_closed_overlay.visible = _market_closed() and _screen_mode != "detail"
+
+
+func _market_closed() -> bool:
 	var market: Variant = snapshot.get("market", {})
-	var closed: bool = market is Dictionary and ((market.has("open") and not bool(market.get("open", false))) or int(market.get("closed_days", 0)) > 0)
-	_closed_overlay.visible = closed and _screen_mode != "detail"
+	return market is Dictionary and ((market.has("open") and not bool(market.get("open", false))) or int(market.get("closed_days", 0)) > 0)
 
 
 func market_closed_overlay_visible() -> bool:
@@ -765,6 +771,10 @@ func _trade_gate(action: String, symbol: String) -> Dictionary:
 	var player := _snapshot_current_player(snapshot)
 	if player.is_empty() or not bool(player.get("alive", true)) or bool(player.get("is_ai", false)):
 		return {"ok": false, "maximum": 0, "error": "目前玩家無法交易"}
+	if str(snapshot.get("phase", "")) == "game_over":
+		return {"ok": false, "maximum": 0, "error": "遊戲已結束"}
+	if _pending_interaction_active(snapshot):
+		return {"ok": false, "maximum": 0, "error": "目前有待處理回應"}
 	var market: Dictionary = snapshot.get("market", {})
 	if (market.has("open") and not bool(market.get("open", false))) or int(market.get("closed_days", 0)) > 0:
 		return {"ok": false, "maximum": 0, "error": "本日休市"}
@@ -783,12 +793,24 @@ func _trade_gate(action: String, symbol: String) -> Dictionary:
 	if action == "sell_stock" and limit_state == 3:
 		return {"ok": false, "maximum": 0, "error": "跌停無法賣出"}
 	var options: Variant = snapshot.get("action_options", null)
-	if options is Array and not options.is_empty() and not options.has(action):
+	if options is Array and not options.has(action):
 		return {"ok": false, "maximum": 0, "error": "目前不是可交易行動階段"}
 	var maximum_value := buy_limit(snapshot, symbol) if action == "buy_stock" else sell_limit(snapshot, symbol)
 	if maximum_value <= 0:
 		return {"ok": false, "maximum": 0, "error": "目前沒有可交易股數"}
 	return {"ok": true, "maximum": maximum_value, "error": ""}
+
+
+static func _pending_interaction_active(snapshot_value: Dictionary) -> bool:
+	for key in ["pending_finance", "pending_auction", "pending_trap", "pending_movement", "pending_remote_dice"]:
+		var value: Variant = snapshot_value.get(key, {})
+		if value is Dictionary and not value.is_empty():
+			return true
+		if value is Array and not value.is_empty():
+			return true
+	if int(snapshot_value.get("company_service_pending", 0)) > 0:
+		return true
+	return false
 
 
 static func _snapshot_row(snapshot_value: Dictionary, symbol_value: String) -> Dictionary:

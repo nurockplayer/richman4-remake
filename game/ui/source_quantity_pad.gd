@@ -18,6 +18,7 @@ var price := 0.0
 var maximum := 0
 
 var input_field: LineEdit
+var quantity_slider: HSlider
 var amount_label: Label
 var limit_label: Label
 var error_label: Label
@@ -29,7 +30,7 @@ var _availability_message := ""
 
 func _init() -> void:
 	name = "SourceQuantityPad"
-	custom_minimum_size = Vector2(124.0, 206.0)
+	custom_minimum_size = Vector2(124.0, 240.0)
 	size = custom_minimum_size
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	focus_mode = Control.FOCUS_ALL
@@ -75,6 +76,20 @@ func _init() -> void:
 	input_field.text_changed.connect(_on_text_changed)
 	input_field.text_submitted.connect(func(_value: String) -> void: _submit())
 	column.add_child(input_field)
+
+	quantity_slider = HSlider.new()
+	quantity_slider.name = "QuantitySlider"
+	quantity_slider.min_value = 0.0
+	quantity_slider.max_value = 0.0
+	quantity_slider.step = 1.0
+	quantity_slider.custom_minimum_size.y = 14.0
+	quantity_slider.focus_mode = Control.FOCUS_ALL
+	quantity_slider.tooltip_text = "拖曳選擇股數"
+	quantity_slider.add_theme_stylebox_override("slider", _style(Color("#214749"), Color("#7fc5a9"), 1))
+	quantity_slider.add_theme_stylebox_override("grabber_area", _style(Color("#67d0ac"), Color("#d8ffe3"), 1))
+	quantity_slider.add_theme_stylebox_override("grabber_area_highlight", _style(Color("#7ae1b9"), Color("#f0ffe4"), 1))
+	quantity_slider.value_changed.connect(_on_slider_changed)
+	column.add_child(quantity_slider)
 
 	amount_label = Label.new()
 	amount_label.name = "QuantityAmount"
@@ -151,6 +166,8 @@ func configure(action_value: String, symbol_value: String, price_value: float, m
 	price = price_value
 	maximum = maxi(0, maximum_value)
 	input_field.text = ""
+	quantity_slider.max_value = float(maximum)
+	quantity_slider.set_value_no_signal(0.0)
 	_available = true
 	_availability_message = ""
 	if maximum <= 0:
@@ -231,6 +248,7 @@ func _fill_maximum() -> void:
 
 func _clear() -> void:
 	input_field.text = ""
+	quantity_slider.set_value_no_signal(0.0)
 	input_field.grab_focus()
 	_refresh_display()
 
@@ -247,10 +265,20 @@ func _on_text_changed(_value: String) -> void:
 	_refresh_display()
 
 
+func _on_slider_changed(value: float) -> void:
+	var quantity := clampi(roundi(value), 0, maximum)
+	var next_text := str(quantity) if quantity > 0 else ""
+	if input_field.text != next_text:
+		input_field.text = next_text
+		input_field.caret_column = input_field.text.length()
+	_refresh_display()
+
+
 func _refresh_display() -> void:
 	if input_field == null:
 		return
 	var parsed := parsed_quantity()
+	_sync_slider_from_input(parsed)
 	if bool(parsed.get("ok", false)) and is_finite(price):
 		amount_label.text = "金額 %d" % int(price * int(parsed.quantity))
 	else:
@@ -264,6 +292,18 @@ func _refresh_display() -> void:
 		error_label.text = str(parsed.get("reason", "股數無效"))
 	if submit_button != null:
 		submit_button.disabled = not _available
+	if quantity_slider != null:
+		quantity_slider.editable = _available
+
+
+func _sync_slider_from_input(parsed: Dictionary) -> void:
+	if quantity_slider == null:
+		return
+	var raw := input_field.text
+	if raw.is_empty() or raw == "0":
+		quantity_slider.set_value_no_signal(0.0)
+	elif bool(parsed.get("ok", false)):
+		quantity_slider.set_value_no_signal(float(parsed.get("quantity", 0)))
 
 
 func _show_error(message: String) -> void:

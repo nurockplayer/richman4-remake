@@ -122,6 +122,7 @@ func run() -> void:
 	await _test_game_geometry_and_input()
 	await _test_missing_art_fallback_and_invalid_edition()
 	await _test_multiverse_stage()
+	await _test_source_version_label()
 	print("Source title panel checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -269,4 +270,49 @@ func _test_multiverse_stage() -> void:
 	expect_equal(starts, [1], "NEW STAGE emits stage one")
 	panel.free()
 	viewport.free()
+	await process_frame
+
+
+func _test_source_version_label() -> void:
+	for next_edition in ["Game", "MultiverseJourney"]:
+		var viewport := _new_viewport()
+		var visuals := FakeVisuals.new()
+		var panel: Control = await _new_panel(viewport, next_edition, visuals)
+		var label_node: Node = panel.find_child("SourceTitleVersionLabel", true, false)
+		expect(label_node != null, "%s title adds the source version label node" % next_edition)
+		if label_node != null:
+			var version_label: Label = label_node
+			expect(version_label.visible, "%s source version is visible with a source background" % next_edition)
+			expect_equal(version_label.text, "V3.11", "%s source version text matches the captured title" % next_edition)
+			expect_equal(version_label.get_theme_font_size("font_size"), 16, "%s source version keeps the source font size" % next_edition)
+			expect_equal(version_label.get_theme_color("font_color"), Color("#f0f0f0"), "%s source version keeps the source foreground" % next_edition)
+			expect_equal(version_label.get_theme_color("font_shadow_color"), Color("#101010"), "%s source version keeps the minimal dark shadow" % next_edition)
+			expect_equal(version_label.get_theme_constant("shadow_offset_x"), 1, "%s source version shadow is offset one pixel horizontally" % next_edition)
+			expect_equal(version_label.get_theme_constant("shadow_offset_y"), 1, "%s source version shadow is offset one pixel vertically" % next_edition)
+			var version_rect := version_label.get_global_rect()
+			expect_equal(version_rect.end.x, 638.0, "%s source version is right-anchored at x638" % next_edition)
+			expect_equal(version_rect.position.y + version_rect.size.y * 0.5, 470.0, "%s source version is centered at y470" % next_edition)
+			expect(version_rect.position.x >= 0.0 and version_rect.position.y >= 0.0 and version_rect.end.x <= 640.0 and version_rect.end.y <= 480.0, "%s source version rect stays inside the 640x480 title" % next_edition)
+		panel.free()
+		viewport.free()
+		await process_frame
+
+	for fallback_edition in ["Game", "MultiverseJourney"]:
+		var fallback_viewport := _new_viewport()
+		var fallback_panel: Control = await _new_panel(fallback_viewport, fallback_edition, null)
+		var fallback_label: Label = fallback_panel.find_child("SourceTitleVersionLabel", true, false)
+		expect(fallback_label != null, "%s fallback retains the source version label node" % fallback_edition)
+		if fallback_label != null:
+			expect(not fallback_label.visible, "%s fallback hides the source version without source background" % fallback_edition)
+			expect(fallback_label.text.is_empty(), "%s fallback does not pretend to show original V3.11" % fallback_edition)
+		fallback_panel.free()
+		fallback_viewport.free()
+		await process_frame
+
+	var invalid_viewport := _new_viewport()
+	var invalid_panel: Control = await _new_panel(invalid_viewport, "UnknownEdition", FakeVisuals.new())
+	var invalid_label: Label = invalid_panel.find_child("SourceTitleVersionLabel", true, false)
+	expect(invalid_label != null and not invalid_label.visible, "invalid edition hides the source version label")
+	invalid_panel.free()
+	invalid_viewport.free()
 	await process_frame

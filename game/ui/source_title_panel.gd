@@ -49,6 +49,10 @@ const BUTTON_LABELS := {
 	"exit": "離開遊戲",
 	"new_stage": "新關卡",
 }
+const VERSION_TEXT := "V3.11"
+const VERSION_RECT := Rect2(548.0, 460.0, 90.0, 20.0)
+const VERSION_FOREGROUND := Color("#f0f0f0")
+const VERSION_SHADOW := Color("#101010")
 
 # Safe source metadata is retained when an optional frame record or its
 # texture is unavailable.  These dimensions describe hit regions in logical
@@ -74,6 +78,7 @@ var buttons: Dictionary = {}
 var background_art: TextureRect
 var hover_art: TextureRect
 var exit_normal_art: TextureRect
+var version_label: Label
 
 var edition := ""
 var visuals: Object = null
@@ -252,6 +257,22 @@ func _build() -> void:
 	hover_art.hide()
 	_surface.add_child(hover_art)
 
+	version_label = Label.new()
+	version_label.name = "SourceTitleVersionLabel"
+	version_label.position = VERSION_RECT.position
+	version_label.size = VERSION_RECT.size
+	version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	version_label.add_theme_font_size_override("font_size", 16)
+	version_label.add_theme_color_override("font_color", VERSION_FOREGROUND)
+	version_label.add_theme_color_override("font_shadow_color", VERSION_SHADOW)
+	version_label.add_theme_constant_override("shadow_offset_x", 1)
+	version_label.add_theme_constant_override("shadow_offset_y", 1)
+	version_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	version_label.z_index = 3
+	version_label.hide()
+	_surface.add_child(version_label)
+
 	for source_key in BUTTON_ORDER:
 		var button := Button.new()
 		button.name = str(BUTTON_NAMES[source_key])
@@ -303,6 +324,8 @@ func _render() -> void:
 
 	if not is_valid_edition():
 		_surface.hide()
+		version_label.text = ""
+		version_label.hide()
 		_set_new_stage_tree(false)
 		for source_key in BUTTON_ORDER:
 			var invalid_button: Button = buttons[source_key]
@@ -323,6 +346,12 @@ func _render() -> void:
 	_fallback_background.visible = background_texture == null
 	_fallback_title.visible = background_texture == null
 	_fallback_hint.visible = background_texture == null
+	version_label.text = VERSION_TEXT if background_texture != null else ""
+	version_label.position = VERSION_RECT.position
+	var draw_height := maxf(VERSION_RECT.size.y, version_label.get_minimum_size().y)
+	version_label.size = Vector2(VERSION_RECT.size.x, draw_height)
+	version_label.scale = Vector2(1.0, VERSION_RECT.size.y / draw_height)
+	version_label.visible = background_texture != null
 
 	# Data1 chunk 0 already contains normal START/LOAD/OPTION and, for MJ,
 	# normal NEW STAGE. EXIT is the one normal frame absent from that backdrop.

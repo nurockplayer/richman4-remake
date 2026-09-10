@@ -10,6 +10,7 @@ const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
+const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
 const TOOLBAR_WIDTH := 440.0
 const BOARD_RECT := Rect2(0.0, 40.0, 440.0, 440.0)
@@ -954,12 +955,17 @@ func _player_status_lines(player: Dictionary) -> Array[String]:
 	var bomb_steps := int(player.get("bomb_steps", 0))
 	if bomb_steps > 0:
 		lines.append("定時炸彈 · %d 步" % bomb_steps)
+	var hospital_or_prison_active := hospital_days > 0 or prison_days > 0
+	var sleep_status := SleepPresentation.status(player)
+	if not hospital_or_prison_active and not sleep_status.is_empty():
+		lines.append(SleepPresentation.label(sleep_status))
 	var insurance_status := int(player.get("insurance_status", 0))
 	if insurance_status > 0:
-		lines.append("保險 · %d 天" % insurance_status)
+		lines.append("保險 · 到期當日仍有效" if insurance_status == 128 else "保險 · %d 天" % insurance_status)
 	var alliance: Variant = player.get("alliance", {})
 	if alliance is Dictionary and not alliance.is_empty():
-		lines.append("同盟 · 剩餘 %d 回合" % int(alliance.get("turns", 0)))
+		var alliance_turns := int(alliance.get("turns", 0))
+		lines.append("同盟 · 下回合到期" if alliance_turns == 128 else "同盟 · 剩餘 %d 回合" % alliance_turns)
 	return _limit_lines(lines, 5)
 
 

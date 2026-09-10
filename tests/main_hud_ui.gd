@@ -189,6 +189,8 @@ func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -
 	player.stocks = {"s01": 3}
 	player.god_id = 1
 	player.hospital_days = 2
+	player.insurance_status = 3
+	player.alliance = {"partner_id": 1, "turns": 4}
 	snapshot.board[2].name = "東區大街"
 	snapshot.board[2].building_level = 2
 	snapshot.board[3].name = "西區大街"
@@ -206,6 +208,19 @@ func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -
 	_expect(shell.other_label.text.contains(OriginalGods.name_for(1)), "source other HUD lists the attached god")
 	_expect(shell.other_label.text.contains("5 天"), "source other HUD lists the attached god duration")
 	_expect(shell.other_label.text.contains("住院 · 2 天"), "source other HUD lists the active status duration")
+	_expect(shell.other_label.text.contains("保險 · 3 天"), "source other HUD lists an active insurance duration")
+	_expect(shell.other_label.text.contains("同盟 · 剩餘 4 回合"), "source other HUD lists an active alliance duration")
+	player.hospital_days = 0
+	player.winter_sleep_days = 128
+	player.insurance_status = 128
+	player.alliance = {"partner_id": 1, "turns": 128}
+	shell.sync_snapshot(snapshot, {}, 9999)
+	shell.select_tab("other")
+	_expect(shell.other_label.text.contains("待醒來"), "source other HUD uses sleep presentation copy for the 128 sentinel")
+	_expect(shell.other_label.text.contains("保險 · 到期當日仍有效"), "source other HUD explains the insurance 128 sentinel")
+	_expect(shell.other_label.text.contains("同盟 · 下回合到期"), "source other HUD explains the alliance 128 sentinel")
+	var sentinel_inspector: String = str(shell._player_inspection_text(0))
+	_expect(sentinel_inspector.contains("待醒來") and sentinel_inspector.contains("保險 · 到期當日仍有效") and sentinel_inspector.contains("同盟 · 下回合到期"), "player inspector shares the sentinel status presentation")
 	_expect(game.to_json() == before, "source HUD detail rendering leaves the live game object untouched")
 	ui._refresh_from_state()
 

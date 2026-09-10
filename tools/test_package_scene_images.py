@@ -1,4 +1,6 @@
 """Private packaging must not copy unrelated files or corrupt scene images."""
+from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path
@@ -16,13 +18,14 @@ from decode_original_images import (
     write_png,
 )
 from original_ui_assets import (
+    JUMP_RESOURCE_RANGES,
     RAW_RGB555_BYTES,
     RAW_RGB555_HEIGHT,
     RAW_RGB555_WIDTH,
     export_ui_resources,
     update_ui_manifest,
 )
-from test_decode_original_images import make_mkf, make_smp, read_png_rgba
+from test_decode_original_images import make_mkf, make_smp, make_spr, read_png_rgba
 from package_scene_images import validate
 
 
@@ -40,11 +43,37 @@ class PackageSceneTests(unittest.TestCase):
         return b"SMP\0" + struct.pack("<II", count, start_offset) + chunks + pixels
 
     @staticmethod
-    def _make_raw_rgb555() -> bytes:
+    def _make_raw_rgb555(*, zero: bool = False) -> bytes:
         pixels = bytearray(RAW_RGB555_BYTES)
-        struct.pack_into("<H", pixels, 0, 0x7C00)
-        struct.pack_into("<H", pixels, 2, 0x03E0)
+        if not zero:
+            struct.pack_into("<H", pixels, 0, 0x7C00)
+            struct.pack_into("<H", pixels, 2, 0x03E0)
         return bytes(pixels)
+
+    @classmethod
+    def _jump_archive(cls, edition: str, *, raw_override: bytes | None = None) -> bytes:
+        """Build the complete bounded jump index range for one edition."""
+
+        ranges = JUMP_RESOURCE_RANGES[edition]
+        raw = cls._make_raw_rgb555() if raw_override is None else raw_override
+        replacements = {
+            index: (raw, len(raw), 0, len(raw))
+            for index in ranges["map_backgrounds"]
+        }
+        if edition == "MultiverseJourney":
+            zero = cls._make_raw_rgb555(zero=True)
+            replacements[4] = (zero, len(zero), 0, len(zero))
+        setup = cls._make_smp_chunks(2)
+        setup_index = ranges["setup"][0]
+        replacements[setup_index] = (setup, len(setup), 12 + 2 * 12, 4)
+        sprite = make_spr()
+        replacements.update(
+            {
+                index: (sprite, len(sprite), 24, 512)
+                for index in ranges["character_previews"]
+            }
+        )
+        return cls._indexed_archive(max(replacements) + 1, replacements)
 
     @classmethod
     def _indexed_archive(
@@ -65,15 +94,10 @@ class PackageSceneTests(unittest.TestCase):
             mj = root / "MultiverseJourney"
             game.mkdir()
             mj.mkdir()
-            setup = self._make_smp_chunks(2)
             save_load = self._make_smp_chunks(2)
             raw = self._make_raw_rgb555()
-            game_jump = self._indexed_archive(
-                5, {4: (setup, len(setup), 12 + 2 * 12, 4)}
-            )
-            mj_jump = self._indexed_archive(
-                9, {8: (setup, len(setup), 12 + 2 * 12, 4)}
-            )
+            game_jump = self._jump_archive("Game")
+            mj_jump = self._jump_archive("MultiverseJourney")
             (game / "jump.mkf").write_bytes(game_jump)
             (mj / "jump.mkf").write_bytes(mj_jump)
             game_data = self._indexed_archive(
@@ -102,8 +126,50 @@ class PackageSceneTests(unittest.TestCase):
             game_group = export_ui_resources("Game", game, root / "game-stage")
             mj_group = export_ui_resources("MultiverseJourney", mj, root / "mj-stage")
 
-            self.assertEqual(set(game_group["jump"]["resources"]), {"4"})
-            self.assertEqual(set(mj_group["jump"]["resources"]), {"8"})
+            game_jump_indices = JUMP_RESOURCE_RANGES["Game"]
+            mj_jump_indices = JUMP_RESOURCE_RANGES["MultiverseJourney"]
+            self.assertEqual(game_jump_indices["map_backgrounds"], (0, 1, 2, 3))
+            self.assertEqual(game_jump_indices["setup"], (4,))
+            self.assertEqual(game_jump_indices["character_previews"], tuple(range(5, 41)))
+            self.assertEqual(mj_jump_indices["map_backgrounds"], tuple(range(8)))
+            self.assertEqual(mj_jump_indices["setup"], (8,))
+            self.assertEqual(mj_jump_indices["character_previews"], tuple(range(9, 45)))
+            self.assertEqual(
+                set(game_group["jump"]["resources"]),
+                {str(index) for values in game_jump_indices.values() for index in values},
+            )
+            self.assertEqual(
+                set(mj_group["jump"]["resources"]),
+                {str(index) for values in mj_jump_indices.values() for index in values},
+            )
+            for index in game_jump_indices["map_backgrounds"]:
+                resource = game_group["jump"]["resources"][str(index)]
+                self.assertEqual(resource["signature"], "RAW-RGB555")
+                self.assertEqual(resource["chunks"]["0"]["width"], RAW_RGB555_WIDTH)
+                self.assertEqual(resource["chunks"]["0"]["height"], RAW_RGB555_HEIGHT)
+            for index in mj_jump_indices["map_backgrounds"]:
+                resource = mj_group["jump"]["resources"][str(index)]
+                self.assertEqual(resource["signature"], "RAW-RGB555")
+                self.assertEqual(resource["chunks"]["0"]["width"], RAW_RGB555_WIDTH)
+                self.assertEqual(resource["chunks"]["0"]["height"], RAW_RGB555_HEIGHT)
+            for index in game_jump_indices["character_previews"]:
+                self.assertEqual(
+                    game_group["jump"]["resources"][str(index)]["signature"], "SPR"
+                )
+            for index in mj_jump_indices["character_previews"]:
+                self.assertEqual(
+                    mj_group["jump"]["resources"][str(index)]["signature"], "SPR"
+                )
+            mj_zero_frame = mj_group["jump"]["resources"]["4"]["chunks"]["0"]
+            _, _, mj_zero_rgba = read_png_rgba(
+                (root / "mj-stage" / mj_zero_frame["path"]).read_bytes()
+            )
+            self.assertEqual(mj_zero_rgba[:4], bytes((0, 0, 0, 255)))
+            for base, ranges in ((5, game_jump_indices), (9, mj_jump_indices)):
+                for character_id in range(12):
+                    for vehicle_index in range(3):
+                        index = base + character_id * 3 + vehicle_index
+                        self.assertIn(index, ranges["character_previews"])
             self.assertEqual(set(game_group["Data"]["resources"]), {"1", "2", "3", "479", "560"})
             self.assertEqual(set(mj_group["Data"]["resources"]), {"1", "2", "3", "520", "601"})
             self.assertNotIn("520", game_group["Data"]["resources"])
@@ -185,6 +251,13 @@ class PackageSceneTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(FormatError, "raw RGB555 UI resource"):
                 export_ui_resources("Game", source, root / "short-stage")
+
+            (source / "Data.mkf").unlink()
+            (source / "jump.mkf").write_bytes(
+                self._jump_archive("Game", raw_override=b"\0" * (RAW_RGB555_BYTES - 2))
+            )
+            with self.assertRaisesRegex(FormatError, "raw RGB555 UI resource"):
+                export_ui_resources("Game", source, root / "short-jump-stage")
 
             one_chunk = make_smp((0x03E0,))
             (source / "Data.mkf").write_bytes(

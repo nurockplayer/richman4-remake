@@ -37,18 +37,44 @@ UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
 
 # The two editions do not use the same jump resource numbers.  The first four
 # Game jump resources (and first eight MJ resources) are 640x480 map images;
-# those are deliberately outside this UI-only slice.  Resources after the
-# setup atlas are character/vehicle animation and are also outside this
-# bounded export.  ``None`` means all chunks in the one explicitly selected
-# resource; save/load only needs its source-confirmed LOAD and SAVE chunks.
+# the setup atlas follows them, then 36 SPR resources form twelve groups of
+# walking/motorcycle/car previews.  Keep these ranges explicit because the
+# source setup code indexes the edition's jump archive directly.  ``None``
+# means all chunks in the one explicitly selected resource; save/load only
+# needs its source-confirmed LOAD and SAVE chunks.
+JUMP_RESOURCE_RANGES = {
+    "Game": {
+        "map_backgrounds": tuple(range(0, 4)),
+        "setup": (4,),
+        "character_previews": tuple(range(5, 41)),
+    },
+    "MultiverseJourney": {
+        "map_backgrounds": tuple(range(0, 8)),
+        "setup": (8,),
+        "character_previews": tuple(range(9, 45)),
+    },
+}
+
+
+def _jump_resource_indices(edition: str) -> tuple[int, ...]:
+    ranges = JUMP_RESOURCE_RANGES[edition]
+    return (
+        *ranges["map_backgrounds"],
+        *ranges["setup"],
+        *ranges["character_previews"],
+    )
+
+
 EDITION_UI_RESOURCES = {
     "Game": {
-        "jump": {4: None},
+        "jump": {index: None for index in _jump_resource_indices("Game")},
         "Data": {479: (0, 1), 560: (0,)},
         "help": {0: None},
     },
     "MultiverseJourney": {
-        "jump": {8: None},
+        "jump": {
+            index: None for index in _jump_resource_indices("MultiverseJourney")
+        },
         "Data": {520: (0, 1), 601: (0,)},
         "help": {0: None},
     },
@@ -59,9 +85,16 @@ EDITION_UI_RESOURCES = {
 # binding explicit instead of letting a visually similar resource at another
 # edition/index be adopted accidentally.
 RAW_RGB555_RESOURCES = {
-    ("Game", "Data", 560),
-    ("MultiverseJourney", "Data", 601),
+    (edition, "jump", index)
+    for edition, ranges in JUMP_RESOURCE_RANGES.items()
+    for index in ranges["map_backgrounds"]
 }
+RAW_RGB555_RESOURCES.update(
+    {
+        ("Game", "Data", 560),
+        ("MultiverseJourney", "Data", 601),
+    }
+)
 RAW_RGB555_WIDTH = 640
 RAW_RGB555_HEIGHT = 480
 RAW_RGB555_BYTES = RAW_RGB555_WIDTH * RAW_RGB555_HEIGHT * 2
@@ -205,8 +238,9 @@ def _export_resource(
         )
         target = stage / relative
         # UI sprites and atlas fragments use a zero background around their
-        # irregular edges.  Headerless loading pixels are opaque, including
-        # their real black background, so the raw binding opts out below.
+        # irregular edges.  Headerless map/loading pixels are opaque,
+        # including their real black background, so the raw binding opts out
+        # below.
         write_png(
             target,
             chunk,

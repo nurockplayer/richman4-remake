@@ -48,6 +48,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visual.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_amount_regressions.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_modal.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_effects.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_schema.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller_host.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd

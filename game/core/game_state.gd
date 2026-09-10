@@ -89,6 +89,7 @@ const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const SourceLoans = preload("res://game/core/source_loans.gd")
+const BankVisit = preload("res://game/core/bank_visit.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
 const GOD_CARD_IDS = ["送神符", "請神符"]
@@ -2300,6 +2301,10 @@ func _set_action_options(player_id: int) -> void:
 	if player.is_empty() or not bool(player.get("alive", false)):
 		state["action_options"] = options
 		return
+	if BankVisit.has_pending(state) or phase == "await_bank":
+		var token := pending_bank_visit()
+		state["action_options"] = BankVisit.options(self, token) if not token.is_empty() else []
+		return
 	if not AuctionRules.response(self).is_empty():
 		state["action_options"] = ["respond_auction"] if phase == "await_action" else []
 		return
@@ -4153,7 +4158,7 @@ func roll(dice_count: int = -1) -> Dictionary:
 	_record_event("roll", roll_payload)
 	if graph_should_move:
 		dog_collision = _graph_begin_movement(player_id, total)
-	if (not _is_graph() or state.get("phase", "") != "await_route") and not dog_collision:
+	if (not _is_graph() or state.get("phase", "") not in ["await_route", "await_bank"]) and not dog_collision:
 		# A stay/status-release turn does not traverse an edge.  Process graph
 		# objects only after an actual traversed edge so anchor objects remain
 		# preserved when the player merely stays there.
@@ -4204,7 +4209,66 @@ func _graph_begin_movement(player_id: int, steps: int) -> bool:
 	return _graph_continue_movement(player_id)
 
 
+func _graph_after_step(player_id: int, node_id: int, bank_recorded: bool = false) -> String:
+	if not bank_recorded and BankVisit.admit(self, player_id, node_id, "pass"):
+		return "bank"
+	var bank_passed := bank_recorded or _graph_bank_pass_before_god(player_id, node_id)
+	if _process_carried_bomb_step(player_id, node_id):
+		_stop_graph_for_hazard(player_id)
+		return "bomb"
+	if _process_god_step(player_id, node_id, false):
+		_stop_graph_for_dog(player_id)
+		return "dog"
+	var player := _player(player_id)
+	if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
+		return "dead"
+	if (_is_gods() and _status_active(player)) or _graph_consume_roadblock(player_id, node_id):
+		state["remaining_steps"] = 0
+		return "stop"
+	if int(state.get("remaining_steps", 0)) > 0:
+		_graph_visit_tile(player_id, _tile_at(node_id), false, bank_passed)
+		if not bool(player.get("alive", false)):
+			state["remaining_steps"] = 0
+			return "dead"
+	return "continue"
+
+
+func pending_bank_visit() -> Dictionary:
+	if not BankVisit.has_pending(state) or not BankVisit.validate(state, _is_companies()).is_empty():
+		return {}
+	return state.pending_bank_visit.duplicate(true)
+
+
+func resume_bank_visit() -> Dictionary:
+	var token := pending_bank_visit()
+	if token.is_empty() or token.kind != "pass":
+		return _error("目前沒有可續行的銀行操作")
+	var player_id := int(token.player_id)
+	state.erase("pending_bank_visit")
+	state["phase"] = "await_roll"
+	var step_result := _graph_after_step(player_id, int(token.node_id), true)
+	if step_result not in ["bomb", "dog", "dead"]:
+		var collision := _graph_continue_movement(player_id)
+		if state.get("phase", "") not in ["await_bank", "await_route", "game_over"] and not collision:
+			_resolve_landing(player_id)
+	return _result(true, "銀行操作已完成，繼續移動")
+
+
+func complete_bank_visit() -> Dictionary:
+	var token := pending_bank_visit()
+	if token.is_empty() or token.kind != "landing":
+		return _error("目前沒有待完成的銀行操作")
+	state.erase("pending_bank_visit")
+	_set_action_options(int(token.player_id))
+	return _result(true, "銀行操作已完成")
+
+
 func _graph_bank_pass_before_god(player_id: int, node_id: int) -> bool:
+	if _is_companies() and int(state.get("remaining_steps", 0)) == 0:
+		return false
 	if not _is_gods() or _is_sunday() or _sleep_dream_active(_player(player_id)):
 		return false
 	var tile: Dictionary = _tile_at(node_id)
@@ -4296,31 +4360,15 @@ func _graph_continue_movement(player_id: int) -> bool:
 			"previous_node": old_node,
 		}
 		_record_event("move", {"player_id": player_id, "from": old_node, "to": next_node, "steps": 1})
-		var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, next_node)
-		var bomb_collision: bool = _process_carried_bomb_step(player_id, next_node)
-		if bomb_collision:
-			_stop_graph_for_hazard(player_id)
-			return true
-		var dog_collision: bool = _process_god_step(player_id, next_node, false)
-		if dog_collision:
-			_stop_graph_for_dog(player_id)
-			return true
-		if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
-			state["route_options"] = []
-			state["pending_movement"] = {}
-			state["remaining_steps"] = 0
+		var step_result := _graph_after_step(player_id, next_node)
+		if step_result == "bank":
 			return false
-		if _is_gods() and _status_active(player):
-			state["remaining_steps"] = 0
+		if step_result in ["bomb", "dog"]:
+			return true
+		if step_result == "dead":
+			return false
+		if step_result == "stop":
 			break
-		if _graph_consume_roadblock(player_id, next_node):
-			state["remaining_steps"] = 0
-			break
-		if int(state.get("remaining_steps", 0)) > 0:
-			_graph_visit_tile(player_id, _tile_at(next_node), false, bank_passed_before_god)
-			if not bool(player.get("alive", false)):
-				state["remaining_steps"] = 0
-				break
 	state["route_options"] = []
 	state["pending_movement"] = {}
 	state["remaining_steps"] = 0
@@ -4363,27 +4411,11 @@ func choose_route(route: int) -> Dictionary:
 		"previous_node": current_node,
 	}
 	_record_event("route_chosen", {"player_id": player_id, "from": current_node, "to": route})
-	var bank_passed_before_god: bool = _graph_bank_pass_before_god(player_id, route)
-	var bomb_collision: bool = _process_carried_bomb_step(player_id, route)
-	if bomb_collision:
-		_stop_graph_for_hazard(player_id)
+	var step_result := _graph_after_step(player_id, route)
+	if step_result == "bomb":
 		return _result(true, "已選擇路線", {"route": route, "bomb_collision": true})
-	var dog_collision: bool = _process_god_step(player_id, route, false)
-	if dog_collision:
-		_stop_graph_for_dog(player_id)
+	if step_result in ["bank", "dog", "dead"]:
 		return _result(true, "已選擇路線", {"route": route})
-	if not bool(player.get("alive", false)) or state.get("phase", "") == "game_over":
-		state["route_options"] = []
-		state["pending_movement"] = {}
-		state["remaining_steps"] = 0
-		return _result(true, "已選擇路線", {"route": route})
-	if _is_gods() and _status_active(player):
-		state["remaining_steps"] = 0
-	var hit_roadblock: bool = _graph_consume_roadblock(player_id, route)
-	if hit_roadblock:
-		state["remaining_steps"] = 0
-	elif int(state.get("remaining_steps", 0)) > 0:
-		_graph_visit_tile(player_id, _tile_at(route), false, bank_passed_before_god)
 	var continued_dog_collision: bool = _graph_continue_movement(player_id)
 	if int(state.get("remaining_steps", 0)) == 0 and state.get("phase", "") != "game_over" and not continued_dog_collision:
 		_resolve_landing(player_id)
@@ -4779,6 +4811,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
+		BankVisit.admit(self, player_id, int(player.get("position", -1)), "landing")
 		return
 	match str(tile.get("kind", "rest")):
 		"property":
@@ -5110,6 +5143,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# its bank state to the next actor. An unrelated debtor may be charged while
 	# another player is moving; preserve that mover's route and bank state.
 	if debtor_is_current:
+		state.erase("pending_bank_visit")
 		state["route_options"] = []
 		state["pending_movement"] = {}
 		state["remaining_steps"] = 0
@@ -5211,6 +5245,10 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	var bank_token := pending_bank_visit()
+	if BankVisit.has_pending(state) or state.get("phase", "") == "await_bank":
+		if bank_token.is_empty() or normalized not in (BankVisit.ATM_ACTIONS if bank_token.kind == "pass" else BankVisit.BANK_ACTIONS):
+			return _error("請先完成銀行操作")
 	if normalized == "respond_auction":
 		return AuctionRules.respond(self, params)
 	if normalized == "respond_finance":
@@ -5244,7 +5282,10 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var requested_tool_id: String = str(params.get("tool_id", ""))
 	var engineering_action_phase: bool = _is_inventory() and normalized == "use_tool" and requested_tool_id == "工程車" and state.get("phase", "") == "await_action"
 	var inventory_tool_phase: bool = _is_inventory() and normalized == "use_tool" and (state.get("phase", "") == "await_roll" or engineering_action_phase)
-	if not inventory_card_phase and not inventory_tool_phase and not _require_phase("await_action"):
+	if not bank_token.is_empty() and not _valid_int(params.get("amount"), 1, MAX_GRAPH_POINTS):
+		return _error("銀行金額必須是正整數")
+	var bank_pass_action: bool = not bank_token.is_empty() and bank_token.kind == "pass" and normalized in BankVisit.ATM_ACTIONS
+	if not bank_pass_action and not inventory_card_phase and not inventory_tool_phase and not _require_phase("await_action"):
 		return _error("目前不是行動階段")
 	var player_id: int = int(state.get("current_player", -1))
 	var player: Dictionary = _player(player_id)
@@ -5714,6 +5755,8 @@ func bank_transfer_limit(action: String, player_id: int = -1) -> int:
 	if normalized not in ["deposit", "withdraw"]:
 		return 0
 	var resolved_player_id := player_id if player_id >= 0 else int(state.get("current_player", -1))
+	if BankVisit.has_pending(state) and (pending_bank_visit().is_empty() or resolved_player_id != int(state.get("current_player", -1))):
+		return 0
 	var player: Dictionary = _player(resolved_player_id)
 	var bank_value: Variant = state.get("bank", null)
 	if player.is_empty() or not bool(player.get("alive", false)) or typeof(bank_value) != TYPE_DICTIONARY:
@@ -5825,6 +5868,19 @@ func bank_loan_limit(action: String, player_id: int = -1) -> int:
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return 0
 	return SourceLoans.limit(action.to_lower().strip_edges(), player, state.get("bank", {}), _player_wealth(resolved_id))
+
+
+func bank_account_summary(player_id: int = -1) -> Dictionary:
+	var resolved_id := player_id if player_id >= 0 else int(state.get("current_player", -1))
+	var player := _player(resolved_id)
+	if not _is_companies() or player.is_empty():
+		return {}
+	var due_day := int(player.get("loan_due_day", 0))
+	return {
+		"loan_due_date": GameCalendar.add_days(state.get("start_date", {}), due_day - 1) if due_day > 0 else {},
+		"special_principal": int(player.get("special_finance", 0)),
+		"other_deposits": SpecialFinance.other_deposits(state, resolved_id, false),
+	}
 
 
 func _source_loan_action(player_id: int, action: String, amount: int) -> Dictionary:
@@ -6414,6 +6470,8 @@ func _grant_card(player_id: int, card_id: String) -> Dictionary:
 
 
 func end_turn() -> Dictionary:
+	if BankVisit.has_pending(state) or state.get("phase", "") == "await_bank":
+		return _error("請先完成銀行操作")
 	if not AuctionRules.response(self).is_empty():
 		return _error("請先回應拍賣")
 	if not _pending_finance().is_empty():
@@ -6828,6 +6886,10 @@ func _check_game_over(reason: String = "") -> void:
 		if bool(player.get("alive", false)):
 			alive_ids.append(int(player.get("id", -1)))
 	if alive_ids.size() <= 1:
+		state.erase("pending_bank_visit")
+		state["route_options"] = []
+		state["pending_movement"] = {}
+		state["remaining_steps"] = 0
 		state["winner"] = alive_ids[0] if alive_ids.size() == 1 else -1
 		state["phase"] = "game_over"
 		state["action_options"] = []
@@ -8347,9 +8409,20 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var allowed_phases: Array = ["await_roll", "await_action", "game_over"]
 	if graph_save:
 		allowed_phases.append("await_route")
+	if companies_save:
+		allowed_phases.append("await_bank")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	var bank_visit_errors: Array = BankVisit.validate(data, companies_save)
+	if not bank_visit_errors.is_empty():
+		# Reject malformed encounter fields before downstream cross-field checks
+		# inspect the current actor or movement continuation.
+		errors.append_array(bank_visit_errors)
+		return {"ok": false, "errors": errors}
+	var bank_pass_overlap_node := -1
+	if companies_save and phase_name == "await_bank":
+		bank_pass_overlap_node = int(data.pending_bank_visit.node_id)
 	for key in ["turn", "round", "month"]:
 		if not _valid_int(data.get(key, null), 1, 1000000000):
 			errors.append("invalid %s" % key)
@@ -8565,9 +8638,12 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		var pending_trap_for_options: bool = status_save and typeof(data.get("pending_trap", {})) == TYPE_DICTIONARY and not data.get("pending_trap", {}).is_empty()
 		var pending_finance_for_options: bool = typeof(data.get("pending_finance", {})) == TYPE_DICTIONARY and not data.get("pending_finance", {}).is_empty()
 		var pending_auction_for_options: bool = typeof(data.get("pending_auction", {})) == TYPE_DICTIONARY and not data.get("pending_auction", {}).is_empty()
-		if phase_name == "await_action" and not pending_trap_for_options and not pending_finance_for_options and not pending_auction_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
+		var pending_bank_for_options := BankVisit.has_pending(data)
+		if phase_name == "await_action" and not pending_bank_for_options and not pending_trap_for_options and not pending_finance_for_options and not pending_auction_for_options and not action_options.has("end_turn") and not (companies_save and _valid_int(data.get("company_service_pending"),1,1999) and action_options==["company_upgrade"]):
 			errors.append("await_action missing end_turn")
-		if pending_trap_for_options:
+		if pending_bank_for_options:
+			pass # BankVisit.validate already checked the closed action domain.
+		elif pending_trap_for_options:
 			if action_options != ["respond_trap"]:
 				errors.append("pending trap action options mismatch")
 		elif pending_auction_for_options:
@@ -8942,7 +9018,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				if typeof(players) == TYPE_ARRAY and not status_anchor_overlap:
 					for roadblock_player in players:
 						if typeof(roadblock_player) == TYPE_DICTIONARY and _valid_bool(roadblock_player.get("alive", null)) and bool(roadblock_player.get("alive", false)) and _valid_int(roadblock_player.get("position", null), 0, graph_board_size_for_roadblocks - 1) and int(roadblock_player.get("position")) == roadblock_index:
-							errors.append("roadblock target is occupied")
+							if roadblock_index != bank_pass_overlap_node or not _valid_int(roadblock_player.get("id"), current_player, current_player):
+								errors.append("roadblock target is occupied")
 				if hazards_save and typeof(data.get("god_objects", null)) == TYPE_ARRAY:
 					for roadblock_god in data.get("god_objects", []):
 						if typeof(roadblock_god) == TYPE_DICTIONARY and _valid_int(roadblock_god.get("owner", null), -1, -1) and _valid_int(roadblock_god.get("node", null), roadblock_index, roadblock_index):
@@ -9010,6 +9087,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						if hazard_status_anchor_overlap:
 							continue
 						if hazard_index == hazard_route_overlap_node:
+							continue
+						if hazard_index == bank_pass_overlap_node and _valid_int(hazard_player.get("id"), current_player, current_player):
 							continue
 						# The source timed-bomb handler is a no-op when the landing
 						# player already carries a bomb. The ground object therefore
@@ -9394,7 +9473,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 							var status_anchor_overlap: bool = status_save and int(god_node_value) in [_status_node_index_in_board(board, "hospital"), _status_node_index_in_board(board, "prison")]
 							var route_overlap: bool = hazards_save and int(god_node_value) == god_route_overlap_node
 							for god_player in players:
-								if not status_anchor_overlap and not route_overlap and typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
+								var bank_overlap: bool = typeof(god_player) == TYPE_DICTIONARY and int(god_node_value) == bank_pass_overlap_node and _valid_int(god_player.get("id"), current_player, current_player)
+								if not status_anchor_overlap and not route_overlap and not bank_overlap and typeof(god_player) == TYPE_DICTIONARY and bool(god_player.get("alive", false)) and _valid_int(god_player.get("position", null), 0, god_board_limit) and int(god_player.get("position")) == int(god_node_value):
 									errors.append("unattached god %d is on player" % god_id)
 			if typeof(players) == TYPE_ARRAY:
 				var god_claimed_by_player: Dictionary = {}
@@ -9483,8 +9563,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		if typeof(pending_value) != TYPE_DICTIONARY:
 			errors.append("invalid graph pending movement")
 		var pending: Dictionary = pending_value if typeof(pending_value) == TYPE_DICTIONARY else {}
-		if phase_name == "await_route":
-			if typeof(route_options) != TYPE_ARRAY or route_options.is_empty():
+		if phase_name in ["await_route", "await_bank"]:
+			if phase_name == "await_route" and (typeof(route_options) != TYPE_ARRAY or route_options.is_empty()):
 				errors.append("route phase missing route options")
 			if not _valid_int(remaining_steps_value, 1, MAX_GRAPH_STEPS):
 				errors.append("route phase has no remaining steps")
@@ -9516,7 +9596,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 					var route_previous_position: Variant = route_player.get("previous_position", null)
 					if not _valid_int(route_position, 0, graph_board_size - 1) or not _valid_int(route_previous_position, -1, max(-1, graph_board_size - 1)) or int(route_position) != int(pending_current_node) or int(route_previous_position) != int(pending_previous_node):
 						errors.append("pending route position mismatch")
-				if pending_current_valid and pending_previous_valid:
+				if phase_name == "await_route" and pending_current_valid and pending_previous_valid:
 					var legal_routes: Array = []
 					var pending_tile: Dictionary = {}
 					if typeof(board) == TYPE_ARRAY:
@@ -9663,7 +9743,7 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 	var rng_text: String = str(game.state.get("rng_state_text", ""))
 	game._rng.state = int(rng_text) if rng_text != "" else int(game.state.get("rng_state", 0))
 	game._sync_state()
-	if game.state.get("phase", "") in ["await_roll", "await_action", "await_route"]:
+	if game.state.get("phase", "") in ["await_roll", "await_action", "await_route", "await_bank"]:
 		game._set_action_options(int(game.state.get("current_player", -1)))
 	else:
 		game.state["action_options"] = []

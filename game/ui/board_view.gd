@@ -12,6 +12,13 @@ signal movement_finished
 const BOARD_INSET := 24.0
 const MIN_ZOOM := 0.55
 const MAX_ZOOM := 3.2
+# The Game scene uses a 2304x2304 world, while the original player-facing
+# board occupies a 440x440 logical crop.  The extracted scene does not carry
+# its runtime camera projection, so keep this bounded source-like fallback in
+# world units rather than fitting the whole scene into the control.
+const REFERENCE_BOARD_SIZE := Vector2(440.0, 440.0)
+const SOURCE_CROP_WORLD_SPAN := 720.0
+const ROTATION_STEP := PI / 12.0
 const PLAYER_COLORS := [
 	Color("#ef6a65"),
 	Color("#4ba6e8"),
@@ -29,6 +36,8 @@ var _graph_fallback_edges := false
 var _focused_player_position := Vector2i(-1, -1)
 var _focused_map_identity := ""
 var _focused_viewport_size := Vector2.ZERO
+var _focused_movement_index := -1
+var _focused_movement_progress := -1.0
 
 var board_data: Array = []
 var players_data: Array = []
@@ -40,8 +49,10 @@ var god_objects_data: Array = []
 var ground_hazards_data: Dictionary = {}
 var map_definition: Dictionary = {}
 var preview_mode := false
+var debug_overlay := false
 var map_zoom := 1.0
 var map_pan := Vector2.ZERO
+var map_rotation := 0.0
 
 var _cell_rects: Array[Rect2] = []
 var _node_positions: Array = []
@@ -67,14 +78,20 @@ func play_movement(moves: Array, step_seconds := 0.16) -> void:
 	if not _movement_queue.is_empty():
 		var move: Dictionary = _movement_queue[0]
 		_player_directions[int(move.player_id)] = int(move.direction)
+	_focused_movement_index = -1
+	_focused_movement_progress = -1.0
+	_layout_size = Vector2.ZERO
 	queue_redraw()
 
 func cancel_movement(reset_directions := false) -> void:
 	_movement_queue.clear()
 	_movement_index = 0
 	_movement_elapsed = 0.0
+	_focused_movement_index = -1
+	_focused_movement_progress = -1.0
 	if reset_directions:
 		_player_directions.clear()
+	_layout_size = Vector2.ZERO
 	queue_redraw()
 
 func _advance_movement(delta: float) -> void:
@@ -90,6 +107,7 @@ func _advance_movement(delta: float) -> void:
 			return
 		var move: Dictionary = _movement_queue[_movement_index]
 		_player_directions[int(move.player_id)] = int(move.direction)
+	_layout_size = Vector2.ZERO
 	queue_redraw()
 
 func get_player_screen_position(player_id: int) -> Vector2:
@@ -105,6 +123,7 @@ func _ready() -> void:
 	clip_contents = true
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	focus_mode = Control.FOCUS_ALL
 	set_process_input(true)
 	queue_redraw()
 
@@ -135,24 +154,65 @@ func _focus_moving_player() -> void:
 	var map_identity := str(map_definition.get("id", ""))
 	var position := _current_position()
 	var identity := Vector2i(current_player_index, position)
-	if (identity == _focused_player_position and map_identity == _focused_map_identity and size == _focused_viewport_size) or position < 0 or position >= _geometry_board().size():
+	if position < 0 or position >= _geometry_board().size():
+		return
+	var movement_active := _movement_targets_current_player()
+	var movement_progress := _movement_progress()
+	if not movement_active and identity == _focused_player_position and map_identity == _focused_map_identity and size == _focused_viewport_size:
+		return
+	if movement_active and identity == _focused_player_position and map_identity == _focused_map_identity and size == _focused_viewport_size and _movement_index == _focused_movement_index and is_equal_approx(movement_progress, _focused_movement_progress):
 		return
 	_focused_player_position = identity
 	_focused_map_identity = map_identity
 	_focused_viewport_size = size
-	var scene: Dictionary = visuals.scene_for(map_definition)
-	if scene.is_empty() or visuals.texture(scene.get("image")) == null:
+	_focused_movement_index = _movement_index if movement_active else -1
+	_focused_movement_progress = movement_progress if movement_active else -1.0
+	var point := _current_focus_world_position()
+	var bounds := get_map_bounds()
+	var scale := _map_scale() * map_zoom
+	if not bounds.has_area() or scale <= 0.0:
 		return
-	map_zoom = maxf(map_zoom, 1.8)
-	var tile: Dictionary = _geometry_board()[position]
-	var bounds := _map_bounds(_geometry_board())
-	var point := Vector2(float(tile.get("x", 0)), float(tile.get("y", 0)))
-	map_pan = -(point - bounds.get_center()) * _map_scale() * map_zoom
+	# map_pan is stored in screen pixels.  Keeping rotation in this same
+	# projection means movement follow, panning, minimap and hit testing share
+	# one camera transform.
+	map_pan = -((point - bounds.get_center()).rotated(map_rotation)) * scale
 	_layout_size = Vector2.ZERO
+
+func _movement_targets_current_player() -> bool:
+	if _movement_queue.is_empty() or _movement_index < 0 or _movement_index >= _movement_queue.size():
+		return false
+	var move: Dictionary = _movement_queue[_movement_index] if _movement_queue[_movement_index] is Dictionary else {}
+	return int(move.get("player_id", -1)) == current_player_index
+
+func _movement_progress() -> float:
+	if _movement_queue.is_empty():
+		return 0.0
+	return clampf(_movement_elapsed / maxf(0.01, _movement_step_seconds), 0.0, 1.0)
+
+func _current_focus_world_position() -> Vector2:
+	if _movement_targets_current_player():
+		var move: Dictionary = _movement_queue[_movement_index]
+		var from_index := int(move.get("from", -1))
+		var to_index := int(move.get("to", -1))
+		var from_point := _world_position_for_index(from_index)
+		var to_point := _world_position_for_index(to_index)
+		return from_point.lerp(to_point, _movement_progress())
+	return _world_position_for_index(_current_position())
+
+func _world_position_for_index(index: int) -> Vector2:
+	var geometry := _geometry_board()
+	if index < 0 or index >= geometry.size() or not geometry[index] is Dictionary:
+		return Vector2.ZERO
+	var tile: Dictionary = geometry[index]
+	return Vector2(float(tile.get("x", 0)), float(tile.get("y", 0)))
 
 func _reset_for_geometry_change(definition: Dictionary) -> void:
 	if _geometry_signature(map_definition) != _geometry_signature(definition):
 		_focused_player_position = Vector2i(-1, -1)
+		_focused_map_identity = ""
+		_focused_viewport_size = Vector2.ZERO
+		_focused_movement_index = -1
+		_focused_movement_progress = -1.0
 		reset_view()
 
 func _geometry_signature(definition: Dictionary) -> Array:
@@ -219,6 +279,84 @@ func get_screen_position_for_index(index: int) -> Vector2:
 func get_zoom() -> float:
 	return map_zoom
 
+func set_debug_overlay(enabled: bool) -> void:
+	debug_overlay = enabled
+	queue_redraw()
+
+func get_map_bounds() -> Rect2:
+	var scene := _source_scene()
+	var source_bounds := visuals.world_rect(scene)
+	if source_bounds.has_area():
+		return source_bounds
+	return _map_bounds(_geometry_board())
+
+func get_camera_viewport_corners() -> Array:
+	if size.x <= 0.0 or size.y <= 0.0:
+		return []
+	return [
+		screen_to_map(Vector2.ZERO),
+		screen_to_map(Vector2(size.x, 0.0)),
+		screen_to_map(Vector2(size.x, size.y)),
+		screen_to_map(Vector2(0.0, size.y)),
+	]
+
+func get_camera_viewport() -> Rect2:
+	var corners := get_camera_viewport_corners()
+	if corners.is_empty():
+		return Rect2()
+	var minimum: Vector2 = corners[0]
+	var maximum: Vector2 = corners[0]
+	for point_value in corners:
+		var point: Vector2 = point_value
+		minimum.x = min(minimum.x, point.x)
+		minimum.y = min(minimum.y, point.y)
+		maximum.x = max(maximum.x, point.x)
+		maximum.y = max(maximum.y, point.y)
+	return Rect2(minimum, maximum - minimum)
+
+func get_camera_bounds() -> Rect2:
+	return get_camera_viewport()
+
+func get_camera_rotation() -> float:
+	return map_rotation
+
+func get_camera_state() -> Dictionary:
+	return {
+		"map_bounds": get_map_bounds(),
+		"viewport": get_camera_viewport(),
+		"viewport_corners": get_camera_viewport_corners(),
+		"viewport_size": size,
+		"zoom": map_zoom,
+		"pan": map_pan,
+		"rotation": map_rotation,
+		"focus": screen_to_map(size * 0.5),
+	}
+
+func map_to_screen(coordinate: Vector2) -> Vector2:
+	if not is_original_map():
+		return Vector2.ZERO
+	_layout_map()
+	return _map_to_screen(coordinate)
+
+func screen_to_map(screen_position: Vector2) -> Vector2:
+	if not is_original_map():
+		return Vector2.ZERO
+	_layout_map()
+	return _screen_to_map(screen_position)
+
+func map_to_minimap(coordinate: Vector2, minimap_rect: Rect2) -> Vector2:
+	var bounds := get_map_bounds()
+	if not bounds.has_area():
+		return minimap_rect.get_center()
+	var normalized := (coordinate - bounds.position) / bounds.size
+	return minimap_rect.position + Vector2(clampf(normalized.x, 0.0, 1.0), clampf(normalized.y, 0.0, 1.0)) * minimap_rect.size
+
+func get_minimap_viewport_polygon(minimap_rect: Rect2) -> Array:
+	var polygon: Array = []
+	for corner in get_camera_viewport_corners():
+		polygon.append(map_to_minimap(corner, minimap_rect))
+	return polygon
+
 func visible_node_indices() -> Array:
 	var visible: Array = []
 	if not is_original_map() or size.x < 40 or size.y < 40:
@@ -245,6 +383,21 @@ func set_zoom(value: float, focus := Vector2.ZERO) -> void:
 func zoom_by(factor: float, focus := Vector2.ZERO) -> void:
 	set_zoom(map_zoom * factor, focus)
 
+func set_map_rotation(value: float, focus := Vector2.ZERO) -> void:
+	if not is_original_map():
+		return
+	_layout_map()
+	var actual_focus := focus if focus != Vector2.ZERO else size * 0.5
+	var map_point := _screen_to_map(actual_focus)
+	map_rotation = fposmod(value, TAU)
+	var projected := _map_to_screen(map_point)
+	map_pan += actual_focus - projected
+	_layout_size = Vector2.ZERO
+	queue_redraw()
+
+func rotate_by(delta_radians: float, focus := Vector2.ZERO) -> void:
+	set_map_rotation(map_rotation + delta_radians, focus)
+
 func pan_by(delta: Vector2) -> void:
 	if not is_original_map():
 		return
@@ -255,6 +408,7 @@ func pan_by(delta: Vector2) -> void:
 func reset_view() -> void:
 	map_zoom = 1.0
 	map_pan = Vector2.ZERO
+	map_rotation = 0.0
 	_layout_size = Vector2.ZERO
 	queue_redraw()
 
@@ -268,11 +422,17 @@ func board_mode() -> String:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-			zoom_by(1.12, event.position)
+			if event.ctrl_pressed:
+				rotate_by(-ROTATION_STEP, event.position)
+			else:
+				zoom_by(1.12, event.position)
 			accept_event()
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-			zoom_by(1.0 / 1.12, event.position)
+			if event.ctrl_pressed:
+				rotate_by(ROTATION_STEP, event.position)
+			else:
+				zoom_by(1.0 / 1.12, event.position)
 			accept_event()
 			return
 		if event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
@@ -287,9 +447,19 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			grab_focus()
 			var index := select_at_position(event.position)
 			if index >= 0:
 				accept_event()
+			return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_Q:
+			rotate_by(-ROTATION_STEP)
+			accept_event()
+			return
+		if event.keycode == KEY_E:
+			rotate_by(ROTATION_STEP)
+			accept_event()
 			return
 	if event is InputEventMouseMotion and _dragging and _drag_button in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		map_pan = _pan_start + event.position - _drag_start
@@ -328,19 +498,23 @@ func _draw_legacy_board() -> void:
 	_draw_players()
 
 func _draw_original_board() -> void:
-	_focus_moving_player()
-	_layout_map()
 	var geometry := _geometry_board()
 	var frame := Rect2(Vector2(8.0, 8.0), size - Vector2(16.0, 16.0))
 	_draw_style_box(frame, Color("#11283a"), Color("#36546b"), 14.0, 1.0)
-	_scene = visuals.scene_for(map_definition)
+	_scene = _source_scene()
 	_background = visuals.texture(_scene.get("image"))
+	_focus_moving_player()
+	_layout_map()
 	if _background != null:
 		var bounds: Rect2 = visuals.world_rect(_scene)
-		draw_texture_rect(_background, Rect2(_map_to_screen(bounds.position), bounds.size * _map_scale() * map_zoom), false)
+		var map_center := get_map_bounds().get_center()
+		draw_set_transform(size * 0.5 + map_pan, map_rotation, Vector2(_map_scale() * map_zoom, _map_scale() * map_zoom))
+		draw_texture_rect(_background, Rect2(bounds.position - map_center, bounds.size), false)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_graph_fallback_edges = _background == null or _road_icons_missing(geometry)
-	_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
-	_draw_text("滾輪縮放 · 中鍵／右鍵平移", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
+	if preview_mode or debug_overlay:
+		_draw_text("原版路網" if not preview_mode else "原版地圖預覽", Vector2(18.0, 28.0), size.x - 36.0, 13, Color("#d9e8d7"), HORIZONTAL_ALIGNMENT_LEFT)
+		_draw_text("滾輪縮放 · 中鍵／右鍵平移 · Ctrl+滾輪旋轉", Vector2(18.0, 47.0), size.x - 36.0, 9, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_LEFT)
 	for index in range(geometry.size()):
 		var tile: Dictionary = geometry[index] if geometry[index] is Dictionary else {}
 		var from: Vector2 = _node_positions[index]
@@ -436,7 +610,7 @@ func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: 
 		var owner := int(tile.get("owner", -1))
 		if owner >= 0:
 			draw_circle(center, 4.0, PLAYER_COLORS[owner % PLAYER_COLORS.size()])
-		if tile.get("kind", "") == "facility":
+		if tile.get("kind", "") == "facility" and (preview_mode or debug_overlay):
 			var level := int(tile.get("building_level", 0))
 			var facility_names := ["公園", "旅館", "商城", "加油", "研究"]
 			var caption: String = "設施地" if level == 0 else "%s%d" % [facility_names[clampi(int(tile.get("facility_type", 0)), 0, 4)], level]
@@ -461,8 +635,9 @@ func _draw_original_node(index: int, tile: Dictionary, center: Vector2, radius: 
 	var name := String(tile.get("name", "格位 %02d" % (index + 1)))
 	if kind == "unsupported":
 		name = "待還原 · " + name.replace("（待還原）", "")
-	_draw_text(str(index + 1).pad_zeros(2), center + Vector2(-radius, -radius - 5.0), radius * 2.0, 8, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_CENTER)
-	_draw_text(_short_text(name, 10), center + Vector2(-radius * 1.7, radius + 14.0), radius * 3.4, 9, Color("#edf3f0"), HORIZONTAL_ALIGNMENT_CENTER)
+	if preview_mode or debug_overlay:
+		_draw_text(str(index + 1).pad_zeros(2), center + Vector2(-radius, -radius - 5.0), radius * 2.0, 8, Color("#8fb0bc"), HORIZONTAL_ALIGNMENT_CENTER)
+		_draw_text(_short_text(name, 10), center + Vector2(-radius * 1.7, radius + 14.0), radius * 3.4, 9, Color("#edf3f0"), HORIZONTAL_ALIGNMENT_CENTER)
 	if _route_options_has(index):
 		_draw_text("選擇", center + Vector2(-radius * 1.5, 4.0), radius * 3.0, 8, Color("#fff1c9"), HORIZONTAL_ALIGNMENT_CENTER)
 
@@ -593,6 +768,12 @@ func _geometry_board() -> Array:
 		return geometry
 	return board_data
 
+func _source_scene() -> Dictionary:
+	if map_definition.is_empty():
+		return {}
+	var resolved: Variant = visuals.scene_for(map_definition)
+	return resolved if resolved is Dictionary else {}
+
 func _merged_tile(index: int) -> Dictionary:
 	var geometry := _geometry_board()
 	var tile: Dictionary = geometry[index].duplicate(true) if index >= 0 and index < geometry.size() and geometry[index] is Dictionary else {}
@@ -631,7 +812,7 @@ func _layout_map() -> void:
 		return
 	if _layout_size == size and _node_positions.size() == geometry.size():
 		return
-	var bounds := _map_bounds(geometry)
+	var bounds := get_map_bounds()
 	var center := bounds.position + bounds.size * 0.5
 	var scale := _map_scale_for_bounds(bounds)
 	var view_center := size * 0.5
@@ -640,17 +821,18 @@ func _layout_map() -> void:
 	for index in range(geometry.size()):
 		var tile: Dictionary = geometry[index] if geometry[index] is Dictionary else {}
 		var coordinate := Vector2(float(tile.get("x", index)), float(tile.get("y", 0)))
-		_node_positions[index] = view_center + map_pan + (coordinate - center) * scale * map_zoom
-		_node_radii[index] = clampf(13.0 * map_zoom, 8.0, 22.0)
+		_node_positions[index] = view_center + map_pan + (coordinate - center).rotated(map_rotation) * scale * map_zoom
+		_node_radii[index] = clampf(18.0 * scale * map_zoom, 8.0, 28.0)
 	_layout_size = size
 
 func _map_scale() -> float:
-	return _map_scale_for_bounds(_map_bounds(_geometry_board()))
+	return _map_scale_for_bounds(get_map_bounds())
 
 func _map_scale_for_bounds(bounds: Rect2) -> float:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
 		return 1.0
-	return max(0.01, min((size.x - 72.0) / bounds.size.x, (size.y - 112.0) / bounds.size.y))
+	var board_scale := minf(size.x / REFERENCE_BOARD_SIZE.x, size.y / REFERENCE_BOARD_SIZE.y)
+	return maxf(0.01, board_scale * REFERENCE_BOARD_SIZE.x / SOURCE_CROP_WORLD_SPAN)
 
 func _map_bounds(geometry: Array) -> Rect2:
 	if geometry.is_empty():
@@ -669,15 +851,15 @@ func _map_bounds(geometry: Array) -> Rect2:
 	return Rect2(minimum, maximum - minimum)
 
 func _map_to_screen(coordinate: Vector2) -> Vector2:
-	var bounds := _map_bounds(_geometry_board())
+	var bounds := get_map_bounds()
 	var coordinate_center := bounds.position + bounds.size * 0.5
-	return size * 0.5 + map_pan + (coordinate - coordinate_center) * _map_scale() * map_zoom
+	return size * 0.5 + map_pan + (coordinate - coordinate_center).rotated(map_rotation) * _map_scale() * map_zoom
 
 func _screen_to_map(screen_position: Vector2) -> Vector2:
-	var bounds := _map_bounds(_geometry_board())
+	var bounds := get_map_bounds()
 	var coordinate_center := bounds.position + bounds.size * 0.5
 	var scale: float = max(0.0001, _map_scale() * map_zoom)
-	return (screen_position - size * 0.5 - map_pan) / scale + coordinate_center
+	return ((screen_position - size * 0.5 - map_pan) / scale).rotated(-map_rotation) + coordinate_center
 
 func _perimeter_cells(side: int) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
@@ -796,7 +978,14 @@ func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bo
 	var sprite: Texture2D = visuals.texture(frame)
 	if sprite == null:
 		return false
-	draw_texture_rect(sprite, visuals.sprite_rect(frame, center, scale_factor), false)
+	var logical: Dictionary = frame.get("logical", {})
+	var local_rect := Rect2(
+		-Vector2(logical.get("anchor_x", 0), logical.get("anchor_y", 0)),
+		Vector2(logical.get("width", 0), logical.get("height", 0))
+	)
+	draw_set_transform(center, map_rotation, Vector2(scale_factor, scale_factor))
+	draw_texture_rect(sprite, local_rect, false)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	return true
 
 func _road_icon_frame(tile: Dictionary) -> Dictionary:

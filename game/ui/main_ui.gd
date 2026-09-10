@@ -20,6 +20,7 @@ const FinancialPresentation = preload("res://game/ui/financial_presentation.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
+const GameShell = preload("res://game/ui/game_shell.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -63,6 +64,8 @@ const PLAYER_COLORS := [
 var game_state: Object
 var state: Dictionary = {}
 var board_view: Control
+var source_shell: Control
+var legacy_interface_root: Control
 
 var seed_label: Label
 var map_identity_label: Label
@@ -199,15 +202,20 @@ func _ready() -> void:
 	# absent or incomplete; tests can force either lane through the setter below.
 	_development_path_enabled = OS.is_debug_build()
 	_build_interface()
+	_build_source_shell()
 	_setup_audio()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
 	else:
 		_enter_unavailable_content_state()
+	if source_shell != null and source_shell.has_method("show_title"):
+		source_shell.call("show_title")
 
 func _process(_delta: float) -> void:
 	if _legacy_save_modal_open():
+		return
+	if source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible():
 		return
 	_maybe_schedule_ai_turn()
 
@@ -256,6 +264,7 @@ func _build_interface() -> void:
 	add_child(backdrop_glow)
 
 	var margins := MarginContainer.new()
+	legacy_interface_root = margins
 	margins.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	margins.add_theme_constant_override("margin_left", 22)
 	margins.add_theme_constant_override("margin_top", 18)
@@ -279,6 +288,104 @@ func _build_interface() -> void:
 	fate_popup = FatePanel.new()
 	add_child(fate_popup)
 	_build_end_overlay()
+
+func _build_source_shell() -> void:
+	var shell := GameShell.new()
+	shell.name = "SourceGameShell"
+	add_child(shell)
+	source_shell = shell
+	if shell.has_signal("start_requested"):
+		shell.start_requested.connect(_on_source_start_requested)
+		shell.load_requested.connect(_on_source_load_requested)
+		shell.save_requested.connect(_on_source_save_requested)
+		shell.option_requested.connect(_on_source_option_requested)
+		shell.help_requested.connect(_on_source_help_requested)
+		shell.ai_requested.connect(_on_source_ai_requested)
+		shell.map_requested.connect(_on_source_map_requested)
+		shell.inspect_requested.connect(_on_source_inspect_requested)
+		shell.tools_requested.connect(_on_source_tools_requested)
+		shell.cards_requested.connect(_on_source_cards_requested)
+		shell.sale_requested.connect(_on_source_sale_requested)
+		shell.stocks_requested.connect(_on_source_stocks_requested)
+		shell.roll_requested.connect(_on_source_roll_requested)
+		shell.buy_requested.connect(_on_source_buy_requested)
+		shell.upgrade_requested.connect(_on_source_upgrade_requested)
+		shell.end_turn_requested.connect(_on_source_end_turn_requested)
+		shell.route_requested.connect(_on_source_route_requested)
+		shell.minimap_pan_requested.connect(_on_source_minimap_pan_requested)
+		shell.minimap_node_requested.connect(_on_source_minimap_node_requested)
+	if shell.has_method("set_board_view"):
+		shell.call("set_board_view", board_view)
+	if legacy_interface_root != null:
+		legacy_interface_root.hide()
+
+func _on_source_start_requested() -> void:
+	_on_new_game_pressed()
+
+func _on_source_load_requested() -> void:
+	_load_game()
+
+func _on_source_save_requested() -> void:
+	_save_game()
+
+func _on_source_option_requested() -> void:
+	_on_new_game_pressed()
+
+func _on_source_help_requested() -> void:
+	_append_local_log("說明功能將在後續原版指令頁接入。")
+	_refresh_log_only()
+
+func _on_source_ai_requested() -> void:
+	_append_local_log("託管功能將在後續原版指令頁接入。")
+	_refresh_log_only()
+
+func _on_source_map_requested() -> void:
+	if source_shell != null and source_shell.has_method("toggle_map_view"):
+		source_shell.call("toggle_map_view")
+
+func _on_source_inspect_requested() -> void:
+	if source_shell != null and source_shell.has_method("select_tab"):
+		source_shell.call("select_tab", "other")
+
+func _on_source_tools_requested() -> void:
+	_on_cards_pressed()
+
+func _on_source_cards_requested() -> void:
+	_on_cards_pressed()
+
+func _on_source_sale_requested() -> void:
+	_on_stocks_pressed()
+
+func _on_source_stocks_requested() -> void:
+	_on_stocks_pressed()
+
+func _on_source_roll_requested() -> void:
+	_on_roll_pressed()
+
+func _on_source_buy_requested() -> void:
+	_on_buy_pressed()
+
+func _on_source_upgrade_requested() -> void:
+	_on_upgrade_pressed()
+
+func _on_source_end_turn_requested() -> void:
+	_on_end_turn_pressed()
+
+func _on_source_route_requested(next_index: int) -> void:
+	_on_route_selected(next_index)
+
+func _on_source_minimap_pan_requested(delta: Vector2) -> void:
+	if board_view != null and board_view.has_method("pan_by"):
+		board_view.call("pan_by", delta)
+
+func _on_source_minimap_node_requested(index: int) -> void:
+	if board_view == null:
+		return
+	if board_view.has_method("select_tile"):
+		board_view.call("select_tile", index)
+	if board_view.has_method("get_screen_position_for_index") and board_view.has_method("pan_by"):
+		var position: Vector2 = board_view.call("get_screen_position_for_index", index)
+		board_view.call("pan_by", board_view.size * 0.5 - position)
 
 func _build_header() -> Control:
 	var panel := PanelContainer.new()
@@ -1613,6 +1720,8 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		_local_log.clear()
 		_append_local_log("已建立新局 · seed %d · %d 位玩家。" % [resolved_seed, resolved_players])
 	_refresh_from_state()
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 	end_overlay.hide()
 	_ai_pending = false
 	return true
@@ -1771,6 +1880,8 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	if legacy_market:
 		_append_local_log("已讀取舊版開發存檔；目前使用舊版三股市模式。")
 	_refresh_from_state()
+	if source_shell != null and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 	end_overlay.hide()
 	_ai_pending = false
 
@@ -2288,6 +2399,8 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 		state = snapshot.duplicate(true)
 	_adopt_map_from_snapshot(state)
 	_update_all()
+	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
+		source_shell.call("show_game")
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2326,7 +2439,16 @@ func _update_all() -> void:
 	_update_auction_popup()
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
+	_sync_source_shell(phase, current_index)
 	_last_rendered_phase = phase
+
+func _sync_source_shell(phase: String, current_index: int) -> void:
+	if source_shell == null:
+		return
+	if source_shell.has_method("sync_snapshot"):
+		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
+	if source_shell.has_method("sync_action_state"):
+		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])))
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -3361,6 +3483,11 @@ func _current_player() -> Dictionary:
 	if index >= 0 and index < players.size() and players[index] is Dictionary:
 		return players[index]
 	return {"name": "玩家", "is_human": true, "cash": 0, "position": 0, "properties": [], "cards": []}
+
+func get_player_wealth(player_id: int) -> int:
+	if game_state != null and game_state.has_method("get_player_wealth"):
+		return int(game_state.call("get_player_wealth", player_id))
+	return 0
 
 func _current_tile() -> Dictionary:
 	var position := int(_current_player().get("position", 0))

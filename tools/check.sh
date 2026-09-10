@@ -68,6 +68,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/original_help.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_ui.gd
+RICHMAN4_SETTINGS_TEST_ROOT="$PWD/.local/system-settings-$BASHPID" run_checked "$GODOT_BIN" --headless --path . --script tests/system_settings.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_final.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_deferred.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_catalog.gd

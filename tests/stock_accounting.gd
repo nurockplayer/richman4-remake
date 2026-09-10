@@ -235,6 +235,10 @@ func test_metadata_validation() -> void:
 	missing_symbol.players[0]["stock_average_costs"] = populated_costs()
 	missing_symbol.players[0].stock_average_costs.erase("s01")
 	expect(not bool(Game.validate_save(missing_symbol).get("ok", false)), "new save must include each stock average")
+	var malformed_stocks: Dictionary = saved.duplicate(true)
+	malformed_stocks.players[0]["stocks"] = []
+	malformed_stocks.players[0]["stock_average_costs"] = populated_costs()
+	expect(not bool(Game.validate_save(malformed_stocks).get("ok", false)), "malformed stocks reject without cost-validation crash")
 
 func test_price_limits_and_affordability() -> void:
 	var upper_buy = make_game()

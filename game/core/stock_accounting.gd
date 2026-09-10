@@ -163,7 +163,8 @@ static func validate_player(player: Dictionary, symbols: Array) -> Array:
 			errors.append("player stock average cost missing %s" % symbol)
 			continue
 		var average: Variant = costs.get(symbol)
-		var holding := int(player.get("stocks", {}).get(symbol, 0))
+		var stocks_value: Variant = player.get("stocks", {})
+		var holding := int(stocks_value.get(symbol, 0)) if typeof(stocks_value) == TYPE_DICTIONARY else 0
 		if average == null:
 			if holding <= 0:
 				errors.append("unknown stock average cost with no holding %s" % symbol)

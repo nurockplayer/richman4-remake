@@ -126,7 +126,8 @@ func scan_slots() -> Dictionary:
 
 
 ## Inspect a row without returning a live game object.  Valid metadata is only
-## derived after both validate_save and from_dict accept the parsed snapshot.
+## derived after from_dict applies supported migrations and its resulting
+## snapshot passes strict validation. Reading never rewrites the source file.
 func preview(slot_id: Variant) -> Dictionary:
 	var resolved := _resolve_slot(slot_id)
 	if not bool(resolved.get("ok", false)):
@@ -432,8 +433,13 @@ func _decode_and_validate(bytes: PackedByteArray) -> Dictionary:
 	if parser.parse(text) != OK or not parser.data is Dictionary:
 		return {"ok": false, "status": STATUS_CORRUPT, "error": "malformed_json"}
 	var parsed: Variant = parser.data
-	var validation := _validate_snapshot(parsed)
-	if not bool(validation.get("ok", false)):
+	# Use the same migration-before-validation boundary as ordinary game loads.
+	# The fingerprint remains tied to the original bytes in _inspect; only the
+	# returned in-memory candidate is normalized. New writes remain strict.
+	var restored: Variant = GameState.from_dict(parsed)
+	var snapshot: Dictionary = restored.to_dict() if restored != null else parsed
+	var validation: Dictionary = GameState.validate_save(snapshot)
+	if restored == null or not bool(validation.get("ok", false)):
 		return {
 			"ok": false,
 			"status": STATUS_INVALID,
@@ -443,8 +449,8 @@ func _decode_and_validate(bytes: PackedByteArray) -> Dictionary:
 	return {
 		"ok": true,
 		"status": STATUS_VALID,
-		"snapshot": parsed.duplicate(true),
-		"state": validation.get("state"),
+		"snapshot": snapshot,
+		"state": restored,
 	}
 
 

@@ -9,6 +9,7 @@ class_name RichmanGameShell
 const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
+const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
@@ -62,6 +63,7 @@ var full_map_view: Control
 var player_inspect_panel: Control
 var player_inspect_buttons: HBoxContainer
 var player_inspect_detail: Label
+var source_setup_panel: Control
 
 var title_start_button: Button
 var title_load_button: Button
@@ -137,6 +139,16 @@ func _build_reference_canvas() -> void:
 	_build_title_screen()
 	_build_game_screen()
 	_build_player_inspector()
+	_build_source_setup_panel()
+
+
+func _build_source_setup_panel() -> void:
+	source_setup_panel = SourceSetupPanel.new()
+	source_setup_panel.name = "SourceSetupPanel"
+	source_setup_panel.position = Vector2.ZERO
+	source_setup_panel.size = REFERENCE_SIZE
+	source_setup_panel.hide()
+	add_child(source_setup_panel)
 
 
 func _layout_reference_canvas() -> void:
@@ -150,6 +162,9 @@ func _layout_reference_canvas() -> void:
 		return
 	reference_canvas.scale = Vector2.ONE * scale_factor
 	reference_canvas.position = (viewport_size - REFERENCE_SIZE * scale_factor) * 0.5
+	if source_setup_panel != null:
+		source_setup_panel.scale = Vector2.ONE * scale_factor
+		source_setup_panel.position = reference_canvas.position
 
 
 func _build_title_screen() -> void:
@@ -566,6 +581,8 @@ func select_tab(tab_id: String) -> void:
 
 func show_title() -> void:
 	title_visible = true
+	if source_setup_panel != null:
+		source_setup_panel.hide()
 	close_player_inspector()
 	if full_map_visible:
 		toggle_full_map_view()
@@ -575,8 +592,25 @@ func show_title() -> void:
 
 func show_game() -> void:
 	title_visible = false
+	if source_setup_panel != null:
+		source_setup_panel.hide()
 	title_screen.hide()
 	game_screen.show()
+
+
+func show_setup(catalog: Array = [], selected_definition: Dictionary = {}, defaults: Dictionary = {}) -> void:
+	if source_setup_panel == null:
+		return
+	title_visible = false
+	title_screen.hide()
+	game_screen.hide()
+	if source_setup_panel.has_method("set_catalog"):
+		source_setup_panel.call("set_catalog", catalog, selected_definition, defaults)
+	source_setup_panel.show()
+
+
+func is_setup_visible() -> bool:
+	return source_setup_panel != null and source_setup_panel.visible
 
 
 func is_title_visible() -> bool:

@@ -538,6 +538,11 @@ def _validate_source_equality(document: dict[str, Any], archive: Any, *, edition
                     f"help edition {edition} resource {resource_index}: "
                     "source payload digest does not match the original"
                 )
+            if split_help_pages(decoded, edition=edition, resource_index=resource_index) != topic["pages"]:
+                raise FormatError(
+                    f"help edition {edition} resource {resource_index}: "
+                    "pages do not match the decoded original"
+                )
             resource_index += 1
     if resource_index - 1 != EXPECTED_TOPIC_COUNT:
         raise FormatError(f"help edition {edition}: unexpected topic count")

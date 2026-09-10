@@ -103,11 +103,11 @@ func _load_edition(edition: String, record: Variant) -> Dictionary:
 	if not _int_field(record.get("entry_count"), ENTRY_COUNT, ENTRY_COUNT):
 		return {"error": "%s: unexpected archive entry count" % edition}
 	var path := base_path.path_join(relative)
-	if FileAccess.get_sha256(path) != expected_sha:
-		return {"error": "%s: content digest mismatch" % edition}
 	var text := _read_bounded(path, MAX_EDITION_BYTES)
 	if text.is_empty():
 		return {"error": "%s: unreadable content" % edition}
+	if FileAccess.get_sha256(path) != expected_sha:
+		return {"error": "%s: content digest mismatch" % edition}
 	var parsed: Variant = JSON.parse_string(text)
 	if not parsed is Dictionary:
 		return {"error": "%s: invalid content JSON" % edition}

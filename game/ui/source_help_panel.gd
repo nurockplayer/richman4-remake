@@ -368,6 +368,14 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if not _built or not is_visible_in_tree():
+		return
+	# The source closes on a right release anywhere in the active modal,
+	# including an unavailable view just reopened under a stationary pointer.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
+		_close()
+		get_viewport().set_input_as_handled()
+		return
 	if not event is InputEventKey:
 		return
 	if not _built or not is_visible_in_tree():

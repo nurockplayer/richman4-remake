@@ -2324,9 +2324,9 @@ func _set_action_options(player_id: int) -> void:
 		if bank_open and not _loan_block_active(player):
 			options.push_front("take_loan")
 	if bool(state.get("bank_access", false)) and bank_open:
-		if int(player.get("cash", 0)) > 0:
+		if bank_transfer_limit("deposit", player_id) > 0:
 			options.push_front("deposit")
-		if int(player.get("deposit", 0)) > 0:
+		if bank_transfer_limit("withdraw", player_id) > 0:
 			options.push_front("withdraw")
 	if stock_open:
 		options.push_front("sell_stock")
@@ -5621,12 +5621,40 @@ func _buy_vehicle(player_id: int, vehicle: String) -> Dictionary:
 	return _result(true, "已購買交通工具")
 
 
+func bank_transfer_limit(action: String, player_id: int = -1) -> int:
+	var normalized := action.to_lower().strip_edges()
+	if normalized not in ["deposit", "withdraw"]:
+		return 0
+	var resolved_player_id := player_id if player_id >= 0 else int(state.get("current_player", -1))
+	var player: Dictionary = _player(resolved_player_id)
+	var bank_value: Variant = state.get("bank", null)
+	if player.is_empty() or not bool(player.get("alive", false)) or typeof(bank_value) != TYPE_DICTIONARY:
+		return 0
+	var cash_value: Variant = player.get("cash", null)
+	var deposit_value: Variant = player.get("deposit", null)
+	var bank_cash_value: Variant = bank_value.get("cash", null)
+	var bank_deposits_value: Variant = bank_value.get("deposits", null)
+	if not _valid_int(cash_value, 0, MAX_GRAPH_POINTS) or not _valid_int(deposit_value, 0, MAX_GRAPH_POINTS):
+		return 0
+	if not _valid_int(bank_cash_value, 0, MAX_GRAPH_POINTS) or not _valid_int(bank_deposits_value, 0, MAX_GRAPH_POINTS):
+		return 0
+	var cash := int(cash_value)
+	var deposit := int(deposit_value)
+	var bank_cash := int(bank_cash_value)
+	var bank_deposits := int(bank_deposits_value)
+	if normalized == "deposit":
+		return mini(cash, mini(MAX_GRAPH_POINTS - deposit, mini(MAX_GRAPH_POINTS - bank_cash, MAX_GRAPH_POINTS - bank_deposits)))
+	return mini(deposit, mini(bank_cash, MAX_GRAPH_POINTS - cash))
+
+
 func _deposit(player_id: int, amount: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if not bool(state.get("bank_access", false)):
 		return _error("尚未經過銀行")
 	if amount <= 0 or amount > int(player.get("cash", 0)):
 		return _error("存款金額無效")
+	if amount > bank_transfer_limit("deposit", player_id):
+		return _error("存款金額超出可用上限")
 	player["cash"] = int(player.get("cash", 0)) - amount
 	player["deposit"] = int(player.get("deposit", 0)) + amount
 	var bank: Dictionary = state.get("bank", {})
@@ -5646,6 +5674,8 @@ func _withdraw(player_id: int, amount: int) -> Dictionary:
 		return _error("提款金額無效")
 	if not _bank_can_pay(amount):
 		return _error("銀行現金暫不足")
+	if amount > bank_transfer_limit("withdraw", player_id):
+		return _error("提款金額超出可用上限")
 	_withdraw_internal(player_id, amount)
 	_record_event("withdraw", {"player_id": player_id, "amount": amount})
 	_set_action_options(player_id)
@@ -6866,8 +6896,9 @@ func _ai_action(player_id: int) -> void:
 				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
 				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
-		choose_action("deposit", {"amount": int(player.get("cash", 0)) / 4})
-		return
+		var deposit_amount := mini(int(player.get("cash", 0)) / 4, bank_transfer_limit("deposit", player_id))
+		if deposit_amount > 0 and bool(choose_action("deposit", {"amount": deposit_amount}).get("ok", false)):
+			return
 	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
 		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]

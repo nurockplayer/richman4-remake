@@ -95,6 +95,7 @@ var load_button: Button
 var bank_popup: PopupPanel
 var bank_loan_button: Button
 var bank_loan_status: Label
+var bank_transfer_status: Label
 var news_popup: PopupPanel
 var fate_popup: PopupPanel
 var bank_deposit_button: Button
@@ -103,6 +104,10 @@ var bank_deposit_amount: SpinBox
 var bank_withdraw_amount: SpinBox
 var bank_deposit_all_button: Button
 var bank_withdraw_all_button: Button
+var _bank_deposit_input_invalid := false
+var _bank_withdraw_input_invalid := false
+var _bank_deposit_focus_text := ""
+var _bank_withdraw_focus_text := ""
 var new_game_popup: PopupPanel
 var seed_input: LineEdit
 var player_count_option: OptionButton
@@ -654,6 +659,10 @@ func _build_popups() -> void:
 	var bank_balance := _make_label("", 14, TEXT_GOLD)
 	bank_balance.name = "Balance"
 	bank_box.add_child(bank_balance)
+	bank_transfer_status = _make_label("", 10, TEXT_MUTED)
+	bank_transfer_status.name = "TransferStatus"
+	bank_transfer_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bank_box.add_child(bank_transfer_status)
 	var deposit_input_row := HBoxContainer.new()
 	deposit_input_row.add_theme_constant_override("separation", 8)
 	bank_box.add_child(deposit_input_row)
@@ -685,6 +694,12 @@ func _build_popups() -> void:
 	bank_actions.add_child(withdraw)
 	bank_deposit_amount.value_changed.connect(_on_bank_deposit_amount_changed)
 	bank_withdraw_amount.value_changed.connect(_on_bank_withdraw_amount_changed)
+	bank_deposit_amount.get_line_edit().focus_entered.connect(_on_bank_deposit_focus_entered)
+	bank_deposit_amount.get_line_edit().focus_exited.connect(_on_bank_deposit_focus_exited)
+	bank_deposit_amount.get_line_edit().text_changed.connect(_on_bank_deposit_text_changed)
+	bank_withdraw_amount.get_line_edit().focus_entered.connect(_on_bank_withdraw_focus_entered)
+	bank_withdraw_amount.get_line_edit().focus_exited.connect(_on_bank_withdraw_focus_exited)
+	bank_withdraw_amount.get_line_edit().text_changed.connect(_on_bank_withdraw_text_changed)
 	bank_loan_status = _make_label("", 11, TEXT_GOLD)
 	bank_loan_status.name = "LoanStatus"
 	bank_box.add_child(bank_loan_status)
@@ -1735,7 +1750,7 @@ func _on_withdraw_pressed() -> void:
 	_handle_result(result)
 
 func _on_deposit_all_pressed() -> void:
-	var amount := maxi(0, int(_current_player().get("cash", 0)))
+	var amount := _bank_deposit_limit()
 	if amount <= 0:
 		return
 	var result := _invoke_game("choose_action", ["deposit", {"amount": amount}])
@@ -1768,6 +1783,47 @@ func _on_bank_withdraw_amount_changed(value: float) -> void:
 		bank_withdraw_button.text = "提取 %s" % _format_money(int(value))
 	if bank_withdraw_amount != null and not bank_withdraw_amount.get_line_edit().has_focus():
 		bank_withdraw_amount.get_line_edit().text = str(int(value))
+
+func _bank_amount_text_valid(raw_text: String, limit: int) -> bool:
+	if limit <= 0 or raw_text.is_empty() or not raw_text.is_valid_int():
+		return false
+	var amount := int(raw_text)
+	return amount > 0 and amount <= limit
+
+func _on_bank_deposit_focus_entered() -> void:
+	if bank_deposit_amount != null:
+		_bank_deposit_focus_text = bank_deposit_amount.get_line_edit().text.strip_edges()
+
+func _on_bank_withdraw_focus_entered() -> void:
+	if bank_withdraw_amount != null:
+		_bank_withdraw_focus_text = bank_withdraw_amount.get_line_edit().text.strip_edges()
+
+func _on_bank_deposit_text_changed(value: String) -> void:
+	if bank_deposit_amount != null and bank_deposit_amount.get_line_edit().has_focus():
+		_bank_deposit_focus_text = value.strip_edges()
+		_bank_deposit_input_invalid = false
+
+func _on_bank_withdraw_text_changed(value: String) -> void:
+	if bank_withdraw_amount != null and bank_withdraw_amount.get_line_edit().has_focus():
+		_bank_withdraw_focus_text = value.strip_edges()
+		_bank_withdraw_input_invalid = false
+
+func _bank_focus_input_invalid(field: SpinBox, remembered_text: String, limit: int) -> bool:
+	if field == null:
+		return true
+	var current_text := field.get_line_edit().text.strip_edges()
+	var candidate_text := current_text
+	if not remembered_text.is_empty() and not _bank_amount_text_valid(remembered_text, limit):
+		candidate_text = remembered_text
+	return not _bank_amount_text_valid(candidate_text, limit)
+
+func _on_bank_deposit_focus_exited() -> void:
+	_bank_deposit_input_invalid = _bank_focus_input_invalid(bank_deposit_amount, _bank_deposit_focus_text, _bank_deposit_limit())
+	_bank_deposit_focus_text = ""
+
+func _on_bank_withdraw_focus_exited() -> void:
+	_bank_withdraw_input_invalid = _bank_focus_input_invalid(bank_withdraw_amount, _bank_withdraw_focus_text, _bank_withdraw_limit())
+	_bank_withdraw_focus_text = ""
 
 func _on_cards_pressed() -> void:
 	if not _is_human_turn():
@@ -1808,19 +1864,26 @@ func _on_bank_pressed() -> void:
 	_update_bank_popup()
 	bank_popup.popup_centered()
 
+func _bank_transfer_limit(action: String) -> int:
+	if game_state == null or not game_state.has_method("bank_transfer_limit"):
+		return 0
+	var value: Variant = game_state.call("bank_transfer_limit", action)
+	return int(value) if typeof(value) == TYPE_INT and int(value) >= 0 else 0
+
 func _bank_deposit_limit() -> int:
-	return maxi(0, int(_current_player().get("cash", 0)))
+	return _bank_transfer_limit("deposit")
 
 func _bank_withdraw_limit() -> int:
-	var player_limit := maxi(0, int(_current_player().get("deposit", 0)))
-	var bank_value: Variant = state.get("bank", {})
-	var bank_cash := maxi(0, int(bank_value.get("cash", 0))) if bank_value is Dictionary else 0
-	return mini(player_limit, bank_cash)
+	return _bank_transfer_limit("withdraw")
 
 func _bank_deposit_input_amount() -> int:
+	if _bank_deposit_input_invalid:
+		return 0
 	return _bank_input_amount(bank_deposit_amount, _bank_deposit_limit())
 
 func _bank_withdraw_input_amount() -> int:
+	if _bank_withdraw_input_invalid:
+		return 0
 	return _bank_input_amount(bank_withdraw_amount, _bank_withdraw_limit())
 
 func _bank_input_amount(field: SpinBox, limit: int) -> int:
@@ -1840,12 +1903,20 @@ func _update_bank_popup() -> void:
 	var options: Array = _as_array(state.get("action_options", []))
 	var deposit_limit := _bank_deposit_limit()
 	var withdraw_limit := _bank_withdraw_limit()
+	_bank_deposit_input_invalid = false
+	_bank_withdraw_input_invalid = false
+	_bank_deposit_focus_text = ""
+	_bank_withdraw_focus_text = ""
+	if bank_transfer_status != null:
+		bank_transfer_status.text = "目前可存入 %s　·　可提取 %s" % [_format_money(deposit_limit), _format_money(withdraw_limit)]
 	if bank_deposit_amount != null:
-		bank_deposit_amount.max_value = max(1, deposit_limit)
-		bank_deposit_amount.value = mini(500, deposit_limit) if deposit_limit > 0 else 1
+		bank_deposit_amount.min_value = 0 if deposit_limit <= 0 else 1
+		bank_deposit_amount.max_value = deposit_limit
+		bank_deposit_amount.value = mini(500, deposit_limit) if deposit_limit > 0 else 0
 	if bank_withdraw_amount != null:
-		bank_withdraw_amount.max_value = max(1, withdraw_limit)
-		bank_withdraw_amount.value = mini(500, withdraw_limit) if withdraw_limit > 0 else 1
+		bank_withdraw_amount.min_value = 0 if withdraw_limit <= 0 else 1
+		bank_withdraw_amount.max_value = withdraw_limit
+		bank_withdraw_amount.value = mini(500, withdraw_limit) if withdraw_limit > 0 else 0
 	var deposit_input := int(bank_deposit_amount.value) if bank_deposit_amount != null else 0
 	var withdraw_input := int(bank_withdraw_amount.value) if bank_withdraw_amount != null else 0
 	bank_deposit_button.text = "存入 %s" % _format_money(deposit_input)

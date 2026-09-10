@@ -120,6 +120,7 @@ func run() -> void:
 		},
 		"fixture_state": {
 			"kind": "synthetic_board_camera_fixture",
+			"phase": "idle",
 			"capture_position": capture_position,
 			"capture_rotation": capture_rotation,
 			"current_player_index": 0,

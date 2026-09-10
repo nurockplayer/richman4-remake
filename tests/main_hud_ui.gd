@@ -7,6 +7,11 @@ const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const CompanyFixture = preload("res://tests/fixtures/company_fixture.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 
+const SOURCE_HUD_DATA_LEFT := 46.0
+const SOURCE_HUD_DATA_RIGHT := 174.0
+const SOURCE_HUD_DATA_TOP := 76.0
+const SOURCE_HUD_DATA_BOTTOM := 264.0
+
 var checks := 0
 var failures := 0
 
@@ -221,8 +226,23 @@ func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -
 	_expect(shell.other_label.text.contains("同盟 · 下回合到期"), "source other HUD explains the alliance 128 sentinel")
 	var sentinel_inspector: String = str(shell._player_inspection_text(0))
 	_expect(sentinel_inspector.contains("待醒來") and sentinel_inspector.contains("保險 · 到期當日仍有效") and sentinel_inspector.contains("同盟 · 下回合到期"), "player inspector shares the sentinel status presentation")
+	_test_source_hud_data_geometry(shell)
 	_expect(game.to_json() == before, "source HUD detail rendering leaves the live game object untouched")
 	ui._refresh_from_state()
+
+
+func _test_source_hud_data_geometry(shell: Control) -> void:
+	var labels := {
+		"property": shell.property_label,
+		"stock": shell.stock_label,
+		"other": shell.other_label,
+	}
+	for key in labels:
+		shell.select_tab(str(key))
+		var label: Label = labels[key]
+		var rect := Rect2(label.position, label.size)
+		var source_safe := rect.position.x >= SOURCE_HUD_DATA_LEFT and rect.position.x + rect.size.x <= SOURCE_HUD_DATA_RIGHT and rect.position.y >= SOURCE_HUD_DATA_TOP and rect.position.y + rect.size.y <= SOURCE_HUD_DATA_BOTTOM and not label.clip_text
+		_expect(label.visible and source_safe and not str(label.text).is_empty(), "source %s data label stays inside the icon-free readable area without clipping" % key)
 
 
 func _test_source_full_map_and_player_inspect(ui: Control, shell: Control, game: Object) -> void:

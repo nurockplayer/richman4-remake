@@ -330,13 +330,16 @@ func _build_hud() -> void:
 	wealth_caption = _hud_label("總資產", 10, Vector2(28.0, 206.0), Vector2(140.0, 18.0), hud_muted_color)
 	wealth_label = _hud_label("$0", 16, Vector2(66.0, 222.0), Vector2(106.0, 30.0), hud_money_color)
 	wealth_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	property_label = _hud_label("地產\n0 筆 · $0", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
+	property_label = _hud_label("地產\n0 筆 · $0", 11, Vector2(46.0, 76.0), Vector2(128.0, 188.0), hud_main_color)
 	property_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stock_label = _hud_label("股票\n0 股", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
+	property_label.clip_text = false
+	stock_label = _hud_label("股票\n0 股", 11, Vector2(46.0, 76.0), Vector2(128.0, 188.0), hud_main_color)
 	stock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stock_label.clip_text = false
 	stock_label.hide()
-	other_label = _hud_label("其他\n點券 0 · 卡片 0\n道具 0 種", 11, Vector2(28.0, 80.0), Vector2(140.0, 164.0), hud_main_color)
+	other_label = _hud_label("其他\n點券 0 · 卡片 0\n道具 0 種", 11, Vector2(46.0, 76.0), Vector2(128.0, 188.0), hud_main_color)
 	other_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	other_label.clip_text = false
 	other_label.hide()
 	var tab_entries := [["cash", "資\n金"], ["property", "地\n產"], ["stock", "股\n票"], ["other", "其\n他"]]
 	for index in range(tab_entries.size()):

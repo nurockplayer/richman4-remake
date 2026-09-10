@@ -37,6 +37,9 @@ func give(game: Object, id: int, card_id: String) -> void:
 
 func use_card(ui: Node, card_id: String, target_id: int = -1) -> void:
 	ui._refresh_from_state()
+	# Wait for the source viewport to follow the fixture's current player
+	# before checking the real visible-target filter and opening the picker.
+	await process_frame
 	var visible: Array = ui.board_view.visible_node_indices()
 	check(target_id < 0 or visible.has(int(ui.state.players[target_id].position)), "requested card target is actually visible")
 	ui._on_cards_pressed()
@@ -60,7 +63,7 @@ func run() -> void:
 	await process_frame
 	var game := setup(ui, 69001)
 	give(game, 0, "夢遊")
-	use_card(ui, "夢遊", 0)
+	await use_card(ui, "夢遊", 0)
 	check(int(game.state.players[0].get("dream_days", 0)) == 4, "self dream from actual card UI")
 	check(str(ui._rest_status_label(ui._player_rest_status(game.state.players[0]))).contains("夢遊"), "status identifies dream instead of prison")
 	check(ui.cards_button.disabled and ui.bank_button.disabled and ui.stocks_button.disabled and ui.roll_button.disabled, "dream blocks manual cards bank stock and dice")
@@ -73,7 +76,7 @@ func run() -> void:
 	game = setup(ui, 69002)
 	give(game, 0, "夢遊")
 	give(game, 1, "嫁禍")
-	use_card(ui, "夢遊", 1)
+	await use_card(ui, "夢遊", 1)
 	check(ui._human_trap_response_pending(), "dream offers existing human defense response")
 	check(ui.trap_popup.visible and ui.trap_prompt_label.text.contains("夢遊") and not ui.trap_prompt_label.text.contains("入獄"), "dream defense prompt has correct consequence")
 	if ui._human_trap_response_pending():
@@ -81,7 +84,7 @@ func run() -> void:
 	check(int(game.state.players[1].get("dream_days", 0)) == 5 and game.state.players[1].cards.has("嫁禍"), "decline keeps scapegoat and resolves dream")
 	game = setup(ui, 69003)
 	give(game, 0, "冬眠")
-	use_card(ui, "冬眠")
+	await use_card(ui, "冬眠")
 	check(int(game.state.players[1].get("winter_sleep_days", 0)) == 5, "winter uses actual button without target picker")
 	check(str(ui._rest_status_label(ui._player_rest_status(game.state.players[1]))).contains("冬眠"), "winter status shown to player")
 	check(Game.validate_save(game.to_dict()).get("ok", false), "UI results keep legal save")

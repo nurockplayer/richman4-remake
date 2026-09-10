@@ -22,6 +22,7 @@ const REMODEL_SAVE_VERSION = 11
 const RESEARCH_SAVE_VERSION = 12
 const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
+const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -1172,6 +1173,7 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 		player["insurance_status"] = 0
 		for stock_symbol in get_stock_symbols():
 			player.stocks[stock_symbol] = 0
+		StockAccounting.initialize_player(player, get_stock_symbols())
 	OriginalStockMarket.reset_turn_supply(state.market, _rng)
 	_sync_state()
 	_set_action_options(0)
@@ -1191,6 +1193,12 @@ func get_company_at(node_id: int) -> Dictionary:
 
 func _update_company_owners() -> void:
 	if not _is_companies(): return
+	# Keep source-test fixtures that stage holdings directly saveable without
+	# changing the legacy-save rule: a player without cost metadata remains
+	# unknown until that position is closed.
+	for player in _players():
+		for stock_symbol in get_stock_symbols():
+			StockAccounting.reconcile_implicit_holding(player, stock_symbol, get_stock_symbols())
 	for company in state.get("companies", []):
 		var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
 		var old_owner := int(company.get("owner", -1))
@@ -1222,15 +1230,21 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 	var quantity := int(quantity_value)
 	var row: Dictionary = state.market.rows[stock_symbol]
 	if int(row.suspension) > 0: return _error("這檔股票暫停交易")
+	var limit_state := OriginalStockMarket.limit_state(float(row.previous_price), float(row.price))
+	if action == "buy_stock" and limit_state == 1: return _error("漲停無法買入")
+	if action == "sell_stock" and limit_state == 3: return _error("跌停無法賣出")
 	var amount := OriginalStockMarket.quote(float(row.price), quantity)
 	if action == "buy_stock":
 		if quantity > int(row.market_supply) or quantity > int(row.turn_supply): return _error("本回合可購買股數不足")
+		var affordable_quantity := floori(float(player.deposit) / float(row.price))
+		if quantity > affordable_quantity: return _error("銀行存款不足")
 		if int(player.deposit) < amount: return _error("銀行存款不足")
 		player.deposit = int(player.deposit) - amount
 		state.bank.deposits = int(state.bank.deposits) - amount
 		row.market_supply = int(row.market_supply) - quantity
 		row.turn_supply = int(row.turn_supply) - quantity
 		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+		StockAccounting.record_purchase(player, stock_symbol, quantity, amount, get_stock_symbols())
 	else:
 		if int(player.stocks[stock_symbol]) < quantity: return _error("持股不足")
 		if int(player.deposit) > 1000000000000 - amount or int(state.bank.deposits) > 1000000000000 - amount: return _error("存款超出上限")
@@ -1239,6 +1253,7 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 		row.market_supply = int(row.market_supply) + quantity
 		row.turn_supply = int(row.turn_supply) + quantity
 		player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) - quantity
+		StockAccounting.record_sale(player, stock_symbol, quantity, get_stock_symbols())
 	_update_company_owners()
 	_record_event("stock_bought" if action == "buy_stock" else "stock_sold", {"player_id":player_id,"symbol":stock_symbol,"stock_name":str(row.name),"quantity":quantity,"price":float(row.price),"amount":amount,"account":"deposit"})
 	_set_action_options(player_id)
@@ -1259,6 +1274,7 @@ func _buy_company_stock(player_id: int, params: Dictionary) -> Dictionary:
 	var stock_symbol := OriginalStockMarket.symbol(int(company.stock_index))
 	player.cash = int(player.cash) - amount
 	player.stocks[stock_symbol] = int(player.stocks[stock_symbol]) + quantity
+	StockAccounting.record_purchase(player, stock_symbol, quantity, amount, get_stock_symbols())
 	company.treasury = int(company.treasury) - quantity
 	state.company_purchase_remaining = int(state.company_purchase_remaining) - quantity
 	_update_company_owners()
@@ -2324,9 +2340,9 @@ func _set_action_options(player_id: int) -> void:
 		if bank_open and not _loan_block_active(player):
 			options.push_front("take_loan")
 	if bool(state.get("bank_access", false)) and bank_open:
-		if int(player.get("cash", 0)) > 0:
+		if bank_transfer_limit("deposit", player_id) > 0:
 			options.push_front("deposit")
-		if int(player.get("deposit", 0)) > 0:
+		if bank_transfer_limit("withdraw", player_id) > 0:
 			options.push_front("withdraw")
 	if stock_open:
 		options.push_front("sell_stock")
@@ -5114,6 +5130,7 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 			row.turn_supply = int(row.turn_supply) + quantity
 			state.jackpot = int(state.jackpot) + OriginalStockMarket.quote(float(row.price), quantity)
 			debtor.stocks[stock_symbol] = 0
+		StockAccounting.clear_player(debtor, get_stock_symbols())
 		_update_company_owners()
 	else:
 		debtor["stocks"] = {"tech": 0, "transport": 0, "energy": 0}
@@ -5621,12 +5638,40 @@ func _buy_vehicle(player_id: int, vehicle: String) -> Dictionary:
 	return _result(true, "已購買交通工具")
 
 
+func bank_transfer_limit(action: String, player_id: int = -1) -> int:
+	var normalized := action.to_lower().strip_edges()
+	if normalized not in ["deposit", "withdraw"]:
+		return 0
+	var resolved_player_id := player_id if player_id >= 0 else int(state.get("current_player", -1))
+	var player: Dictionary = _player(resolved_player_id)
+	var bank_value: Variant = state.get("bank", null)
+	if player.is_empty() or not bool(player.get("alive", false)) or typeof(bank_value) != TYPE_DICTIONARY:
+		return 0
+	var cash_value: Variant = player.get("cash", null)
+	var deposit_value: Variant = player.get("deposit", null)
+	var bank_cash_value: Variant = bank_value.get("cash", null)
+	var bank_deposits_value: Variant = bank_value.get("deposits", null)
+	if not _valid_int(cash_value, 0, MAX_GRAPH_POINTS) or not _valid_int(deposit_value, 0, MAX_GRAPH_POINTS):
+		return 0
+	if not _valid_int(bank_cash_value, 0, MAX_GRAPH_POINTS) or not _valid_int(bank_deposits_value, 0, MAX_GRAPH_POINTS):
+		return 0
+	var cash := int(cash_value)
+	var deposit := int(deposit_value)
+	var bank_cash := int(bank_cash_value)
+	var bank_deposits := int(bank_deposits_value)
+	if normalized == "deposit":
+		return mini(cash, mini(MAX_GRAPH_POINTS - deposit, mini(MAX_GRAPH_POINTS - bank_cash, MAX_GRAPH_POINTS - bank_deposits)))
+	return mini(deposit, mini(bank_cash, MAX_GRAPH_POINTS - cash))
+
+
 func _deposit(player_id: int, amount: int) -> Dictionary:
 	var player: Dictionary = _player(player_id)
 	if not bool(state.get("bank_access", false)):
 		return _error("尚未經過銀行")
 	if amount <= 0 or amount > int(player.get("cash", 0)):
 		return _error("存款金額無效")
+	if amount > bank_transfer_limit("deposit", player_id):
+		return _error("存款金額超出可用上限")
 	player["cash"] = int(player.get("cash", 0)) - amount
 	player["deposit"] = int(player.get("deposit", 0)) + amount
 	var bank: Dictionary = state.get("bank", {})
@@ -5646,6 +5691,8 @@ func _withdraw(player_id: int, amount: int) -> Dictionary:
 		return _error("提款金額無效")
 	if not _bank_can_pay(amount):
 		return _error("銀行現金暫不足")
+	if amount > bank_transfer_limit("withdraw", player_id):
+		return _error("提款金額超出可用上限")
 	_withdraw_internal(player_id, amount)
 	_record_event("withdraw", {"player_id": player_id, "amount": amount})
 	_set_action_options(player_id)
@@ -6866,8 +6913,9 @@ func _ai_action(player_id: int) -> void:
 				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
 				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
 	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
-		choose_action("deposit", {"amount": int(player.get("cash", 0)) / 4})
-		return
+		var deposit_amount := mini(int(player.get("cash", 0)) / 4, bank_transfer_limit("deposit", player_id))
+		if deposit_amount > 0 and bool(choose_action("deposit", {"amount": deposit_amount}).get("ok", false)):
+			return
 	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
 		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]
@@ -8958,6 +9006,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				for symbol in stocks.keys():
 					if not stock_symbols.has(symbol):
 						errors.append("player %d unknown stock" % index)
+			if companies_save:
+				errors.append_array(StockAccounting.validate_player(player, stock_symbols))
 			var cards: Variant = player.get("cards", null)
 			if typeof(cards) != TYPE_ARRAY or cards.size() > 15:
 				errors.append("player %d cards invalid" % index)
@@ -9436,6 +9486,9 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		game.state = _canonicalize_json_numbers(game.state)
 	if game._is_companies():
 		OriginalStockMarket.normalize_numbers(game.state.market)
+		for player in game.state.get("players", []):
+			if typeof(player) == TYPE_DICTIONARY:
+				StockAccounting.normalize_player(player, OriginalStockMarket.symbols())
 		OriginalStockMarket.normalize_price_events(game.state.event_log)
 		OriginalStockMarket.normalize_price_events(game.state.last_event)
 		if not bool(validate_save(game.state).get("ok", false)): return null

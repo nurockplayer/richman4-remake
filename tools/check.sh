@@ -30,6 +30,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
+# Issue #104 bank transfer headroom and UI cap acceptance.
+run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
@@ -64,6 +67,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_save.gd

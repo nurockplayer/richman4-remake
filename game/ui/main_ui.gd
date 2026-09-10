@@ -139,6 +139,7 @@ var shop_balance_label: Label
 var shop_popup_list: VBoxContainer
 var shop_scroll: ScrollContainer
 var stocks_popup: PopupPanel
+var stocks_description_label: Label
 var company_popup: PopupPanel
 var trap_popup: PopupPanel
 var trap_prompt_label: Label
@@ -790,9 +791,10 @@ func _build_popups() -> void:
 	stocks_popup.min_size = Vector2i(760, 610)
 	var stocks_box := _popup_box(stocks_popup)
 	stocks_box.add_child(_make_label("股票市場", 19, TEXT_MAIN))
-	var stocks_description := _make_label("選擇股數後交易；公司市場從銀行存款扣款，市場供給與暫停狀態會限制買入。", 11, TEXT_MUTED)
-	stocks_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stocks_box.add_child(stocks_description)
+	stocks_description_label = _make_label("", 11, TEXT_MUTED)
+	stocks_description_label.name = "StocksDescription"
+	stocks_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stocks_box.add_child(stocks_description_label)
 	var stocks_scroll := ScrollContainer.new()
 	stocks_scroll.name = "StocksScroll"
 	stocks_scroll.custom_minimum_size = Vector2(0.0, 470.0)
@@ -2964,6 +2966,10 @@ func _format_price(price: float) -> String:
 	return "$%.2f" % price
 
 
+func _stock_popup_description(is_company_market: bool) -> String:
+	return "選擇股數後交易；公司市場從銀行存款扣款，市場供給與暫停狀態會限制買入。" if is_company_market else "選擇股數後交易；舊版三股市使用現金，市場開放狀態與持股數量會限制買賣。"
+
+
 func _update_stocks_popup() -> void:
 	for child in stocks_popup_list.get_children():
 		child.free()
@@ -2973,6 +2979,8 @@ func _update_stocks_popup() -> void:
 	var symbols := _stock_symbols_for_ui()
 	var market_open := bool(market.get("open", true))
 	var is_company_market := _has_original_companies()
+	if stocks_description_label != null:
+		stocks_description_label.text = _stock_popup_description(is_company_market)
 	var account := int(player.get("deposit" if is_company_market else "cash", 0))
 	var account_name := "存款" if is_company_market else "現金"
 	var account_label := _make_label("%s：%s　·　持股為每檔獨立計算" % [account_name, _format_money(account)], 12, TEXT_GOLD)

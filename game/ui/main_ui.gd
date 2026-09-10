@@ -287,8 +287,10 @@ func _build_interface() -> void:
 	_build_popups()
 	news_popup = NewsPanel.new()
 	add_child(news_popup)
+	news_popup.visibility_changed.connect(_update_load_gate)
 	fate_popup = FatePanel.new()
 	add_child(fate_popup)
+	fate_popup.visibility_changed.connect(_update_load_gate)
 	_build_end_overlay()
 
 func _build_source_shell() -> void:
@@ -709,6 +711,7 @@ func _build_popups() -> void:
 	auction_popup = AuctionPresentation.new()
 	add_child(auction_popup)
 	auction_popup.answered.connect(_respond_to_auction)
+	auction_popup.visibility_changed.connect(_update_load_gate)
 	new_game_popup = _make_popup(Vector2i(760, 680))
 	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
@@ -1867,7 +1870,17 @@ func _save_game() -> void:
 func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
+func _load_blocked_by_presentation() -> bool:
+	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+
+func _reject_load_during_presentation() -> void:
+	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
+	_refresh_log_only()
+
 func _load_game_from_path(path: String) -> void:
+	if _load_blocked_by_presentation():
+		_reject_load_during_presentation()
+		return
 	if not FileAccess.file_exists(path):
 		_append_local_log("找不到存檔；先建立一局再儲存即可。")
 		_refresh_log_only()
@@ -2474,6 +2487,7 @@ func _update_all() -> void:
 	_update_auction_popup()
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
+	_update_load_gate()
 	_sync_source_shell(phase, current_index)
 	_last_rendered_phase = phase
 
@@ -2484,6 +2498,10 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])))
+
+func _update_load_gate() -> void:
+	if load_button != null:
+		load_button.disabled = _load_blocked_by_presentation()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -2686,6 +2704,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var detained := _has_original_statuses() and not rest_status.is_empty()
 	var auction_pending := _pending_auction_for_ui()
 	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance") or not auction_pending.is_empty()
+	_update_load_gate()
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
 		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")

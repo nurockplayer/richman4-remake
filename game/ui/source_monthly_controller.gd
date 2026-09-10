@@ -88,11 +88,13 @@ func _show_next() -> void:
 	_display_id += 1
 	var generation := _generation
 	var display_id := _display_id
-	report_panel.set_visuals(_visuals)
-	report_panel.set_view_model(_queue[0])
 	report_panel.continued.connect(func() -> void: _on_continued(generation, display_id))
 	add_child(report_panel)
 	report_panel.position = Vector2.ZERO
+	# The real presenter starts its source timer when it receives the model.
+	# Attach first so that timer has a scene-tree lifetime.
+	report_panel.set_visuals(_visuals)
+	report_panel.set_view_model(_queue[0])
 	show()
 
 func _on_continued(generation: int, display_id: int) -> void:

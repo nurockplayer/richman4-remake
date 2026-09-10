@@ -302,6 +302,7 @@ func _test_geometry(panel: Control) -> void:
 		expect_equal(section_art.size, Vector2(66, 33), "selected section art keeps logical size")
 		expect_equal(int(section_art.get_meta("source_chunk", -1)), 1, "selected section uses chunk1")
 
+	panel.call("select_section", 2)
 	expect(_find(panel, "SourceHelpTopicUpArt") != null, "topic list arrows are drawn for an 8+ topic section")
 	var game_calls := 0
 	for call in visuals.calls:
@@ -337,7 +338,8 @@ func _test_section_and_topic_content(panel: Control) -> void:
 			for row_index in range(rows.size()):
 				var topic_index := offset + row_index
 				covered[topic_index] = true
-				var row_label: Label = rows[row_index]["label"]
+				# Selecting a topic rebuilds labels; reacquire each row after it.
+				var row_label: Label = _rendered_rows(panel)[row_index]["label"]
 				expect(row_label != null and row_label.text == str(topics[topic_index]["title"]), "section %d topic %d renders its own title" % [section_id, topic_index])
 				expect(bool(panel.call("select_topic", topic_index)), "section %d topic %d can be selected" % [section_id, topic_index])
 				var selected_rows := _rendered_rows(panel)

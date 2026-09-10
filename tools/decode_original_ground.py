@@ -25,6 +25,7 @@ from decode_original_images import (
     write_png,
 )
 from import_original import ImportErrorBase, parse_map_payload
+from original_ui_assets import export_ui_resources
 
 SCHEMA = "richman4.scene-images/v1"
 SIDE = 72
@@ -145,7 +146,7 @@ def scene_objects(graph: bytes, parsed: dict) -> list[dict]:
     return objects
 
 
-def decode_source(source: Path, output: Path) -> dict:
+def decode_source(source: Path, output: Path, *, include_ui: bool = False) -> dict:
     source, output = source.resolve(), output.resolve()
     assert_disjoint_paths(source, output)
     assert_private_output(output)
@@ -159,11 +160,13 @@ def decode_source(source: Path, output: Path) -> dict:
             raise InputError(f"duplicate ground edition: {canonical}")
         editions.append((canonical, directory))
     output.mkdir(parents=True, exist_ok=True)
-    manifest = {"schema": SCHEMA, "version": 1, "pixel_format": "rgb555", "maps": [], "characters": {}}
+    manifest = {"schema": SCHEMA, "version": 1, "pixel_format": "rgb555", "maps": [], "characters": {}, "ui": {}}
     with tempfile.TemporaryDirectory(prefix=".ground-stage-", dir=output) as temporary:
         stage = Path(temporary)
         (stage / "images").mkdir()
         for edition, directory in editions:
+            if include_ui:
+                manifest["ui"][edition] = export_ui_resources(edition, directory, stage)
             data_path = _find_casefolded(directory, "Data.mkf")
             if data_path is not None:
                 data_archive = parse_mkf(data_path)
@@ -268,7 +271,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path(".local/original-scenes"))
     args = parser.parse_args()
     try:
-        manifest = decode_source(args.source, args.output)
+        manifest = decode_source(args.source, args.output, include_ui=True)
     except (InputError, FormatError, ImportErrorBase, OSError) as error:
         parser.exit(1, f"Ground import failed: {error}\n")
     print(f"Decoded {len(manifest['maps'])} original backgrounds into {args.output}")

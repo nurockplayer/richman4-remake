@@ -53,6 +53,16 @@ func run() -> void:
 	wrong.source.payload_sha256 = "different"
 	expect(visuals.scene_for(wrong).is_empty(), "different map provenance cannot load")
 	expect(visuals.texture(record) != null, "verified PNG loads")
+	visuals.manifest.ui = {"Game": {"Panel": {"archive_sha256": "a".repeat(64), "resources": {"75": {"chunks": {"0": road_frame.duplicate(true)}}}}}}
+	var ui_frame: Dictionary = visuals.ui("Game", "Panel", 75)
+	expect(not ui_frame.is_empty() and visuals.texture(ui_frame) != null, "selected edition UI frame loads with verified pixels")
+	expect(visuals.sprite_rect(ui_frame, Vector2(100, 100), 2) == Rect2(90, 80, 40, 60), "UI uses logical geometry independently of texture dimensions")
+	expect(visuals.ui("MultiverseJourney", "Panel", 75).is_empty(), "missing edition cannot borrow base-game UI")
+	expect(visuals.ui("Game", "Panel", 74).is_empty() and visuals.ui("Game", "Panel", 75, 9).is_empty(), "missing resource or chunk stays unavailable")
+	visuals.manifest.ui.Game.Panel.resources["75"].chunks["0"].logical.width = 0
+	expect(visuals.ui("Game", "Panel", 75).is_empty(), "invalid UI logical bounds are unavailable")
+	visuals.manifest.ui = {"Game": []}
+	expect(visuals.ui("Game", "Panel", 75).is_empty(), "malformed UI group does not crash")
 	expect(visuals.texture({"path": "images/test.png", "sha256": "wrong"}) == null, "wrong digest cannot load")
 	for path in ["../test.png", "/tmp/test.png", "images/../test.png", "images/..\\test.png"]:
 		expect(visuals.texture({"path": path, "sha256": record.sha256}) == null, "path escape rejected")

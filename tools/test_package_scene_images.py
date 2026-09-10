@@ -6,10 +6,42 @@ import tempfile
 import unittest
 
 from decode_original_images import VisualChunk, VisualResource, write_png
+from original_ui_assets import export_ui_resources
+from test_decode_original_images import make_mkf, make_smp, read_png_rgba
 from package_scene_images import validate
 
 
 class PackageSceneTests(unittest.TestCase):
+    def test_ui_export_is_bounded_provenanced_and_packaged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            payload = make_smp((0, 0x8000, 0x03E0))
+            item = (payload, len(payload), 24, 6)
+            archive = make_mkf([item] * 77)
+            (source / "Panel.mkf").write_bytes(archive)
+            stage = root / "stage"
+            group = export_ui_resources("Game", source, stage)
+            self.assertEqual(set(group), {"Panel"})
+            self.assertEqual(group["Panel"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
+            self.assertEqual(set(group["Panel"]["resources"]), {"0", "1", "2", "75"})
+            record = group["Panel"]["resources"]["75"]["chunks"]["0"]
+            self.assertEqual(record["logical"], {"width": 3, "height": 1, "anchor_x": -2, "anchor_y": 5})
+            width, height, pixels = read_png_rgba((stage / record["path"]).read_bytes())
+            self.assertEqual((width, height), (3, 1))
+            self.assertEqual(pixels[:8], bytes([0, 0, 0, 0, 0, 0, 0, 255]))
+            manifest = {"schema": "richman4.scene-images/v1", "characters": {},
+                        "maps": [{"world_rect": {"x": 0, "y": 0, "width": 3, "height": 1}, "image": record}],
+                        "ui": {"Game": group}}
+            path = stage / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            _, paths = validate(path)
+            self.assertEqual(len(paths), 4)
+            (stage / group["Panel"]["resources"]["1"]["chunks"]["0"]["path"]).write_bytes(b"corrupt")
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                validate(path)
+
     def test_referenced_png_integrity_and_escape(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

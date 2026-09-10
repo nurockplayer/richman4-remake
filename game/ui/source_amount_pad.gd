@@ -230,6 +230,21 @@ static func parse_amount(raw: String, maximum_value: int) -> Dictionary:
 	return {"ok": true, "amount": amount, "reason": ""}
 
 
+static func append_source_digit(raw: String, digit: String, maximum_value: int) -> String:
+	if digit.length() != 1 or digit.unicode_at(0) < 48 or digit.unicode_at(0) > 57:
+		return raw
+	var candidate := ("" if raw == "0" else raw) + digit
+	for index in candidate.length():
+		if candidate.unicode_at(index) < 48 or candidate.unicode_at(index) > 57:
+			return candidate
+	# Compare digit strings before conversion, including extended remake limits.
+	# Programmatic malformed/over-limit input still uses the strict parser.
+	var upper := str(maxi(0, maximum_value))
+	if candidate.length() > upper.length() or (candidate.length() == upper.length() and candidate > upper):
+		return upper
+	return candidate
+
+
 func cancel() -> void:
 	cancelled.emit()
 
@@ -366,8 +381,7 @@ func _digit_from_event(event: InputEventKey) -> String:
 
 
 func _append_digit(digit: String) -> void:
-	if input_field.text == "0": input_field.text = ""
-	input_field.text += digit
+	input_field.text = append_source_digit(input_field.text, digit, maximum)
 	input_field.caret_column = input_field.text.length()
 	_focus_entry()
 	_refresh_display()
@@ -403,6 +417,9 @@ func _on_text_changed(_value: String) -> void:
 
 
 func _submit() -> bool:
+	if _has_source_visual and _available and raw_text() in ["", "0"]:
+		cancelled.emit()
+		return false
 	var result := parsed_amount()
 	if not bool(result.get("ok", false)):
 		var reason := str(result.get("reason", "金額無效"))

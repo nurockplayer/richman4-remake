@@ -755,8 +755,7 @@ func _on_amount_bar_changed(value: float) -> void:
 
 
 func _append_digit(digit: String) -> void:
-	if _amount_text == "0": _amount_text = ""
-	_amount_text += digit
+	_amount_text = AmountPadScript.append_source_digit(_amount_text, digit, _current_limit())
 	if _amount_bar != null:
 		var parsed: Dictionary = AmountPadScript.parse_amount(_amount_text, _current_limit())
 		_amount_bar.set_value_no_signal(float(parsed.get("amount", 0)) if bool(parsed.get("ok", false)) else 0.0)

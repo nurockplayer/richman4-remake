@@ -344,6 +344,7 @@ func _test_direct_source_input() -> void:
 	viewport.size = Vector2i(960, 720)
 	viewport.handle_input_locally = true
 	root.add_child(viewport)
+	viewport.notify_mouse_entered()
 	var panel := SourceSavePanelScript.new()
 	viewport.add_child(panel)
 	var confirmed: Array = []
@@ -394,6 +395,7 @@ func _test_direct_source_input() -> void:
 		expect(panel.is_overwrite_confirmation_visible() and confirmed.is_empty(), "occupied direct save retains required overwrite consent in " + edition)
 		_pointer(viewport, panel, Vector2(350, 160))
 		expect(panel.selected_slot() == 1, "overwrite decision freezes the selected destination in " + edition)
+		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, true)
 		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, false)
 		expect(not panel.is_overwrite_confirmation_visible() and confirmed.is_empty(), "right cancel backs out of overwrite without writing in " + edition)
 		_pointer(viewport, panel, Vector2(350, 90))

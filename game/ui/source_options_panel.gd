@@ -136,6 +136,7 @@ var _pressed_action := ""
 var _source_art_available := false
 var _source_art_status: Dictionary = {}
 var _source_frames: Dictionary = {}
+var _current_track := -1
 
 var _surface: Control
 var _frame_backdrop: ColorRect
@@ -204,6 +205,13 @@ func set_visual_accessor(accessor: Variant) -> void:
 ## Compatibility alias used by the existing source presenters.
 func set_visuals(accessor: Variant) -> void:
 	set_visual_accessor(accessor)
+
+
+## Report the track currently playing in the host audio layer.  The default
+## stays unknown so the presenter never invents a selection from a preview.
+func set_current_track(index: int) -> void:
+	_current_track = index if index >= -1 and index < TRACK_LABELS.size() else -1
+	_render()
 
 
 func view_model() -> Dictionary:
@@ -588,7 +596,7 @@ func _draw_options() -> void:
 	# contract geometry above.
 	var command_role := "title_commands" if _mode == "title" else "game_commands"
 	var command_frame: Dictionary = resolved[command_role]
-	_add_art(command_frame, "SourceOptionsCommandPlate", Vector2(170.0, 0.0), _logical_for(command_frame, Vector2(177.0, 174.0)), int(CHUNKS[command_role]))
+	_add_art(command_frame, "SourceOptionsCommandPlate", Vector2(168.0, 2.0), _logical_for(command_frame, Vector2(177.0, 174.0)), int(CHUNKS[command_role]))
 
 	_draw_field_labels()
 	_draw_markers(resolved)
@@ -658,6 +666,7 @@ func _draw_markers(resolved: Dictionary) -> void:
 
 func _draw_commands(resolved: Dictionary) -> void:
 	var labels: Array = TITLE_COMMAND_LABELS if _mode == "title" else GAME_COMMAND_LABELS
+	var label_centers := [Vector2(276.0, 33.0), Vector2(276.0, 87.0), Vector2(276.0, 138.0)]
 	for index in range(3):
 		var rect: Rect2 = _hitbox("modecmd%d" % index)
 		if _pressed_action == "command:%d" % index:
@@ -671,9 +680,9 @@ func _draw_commands(resolved: Dictionary) -> void:
 		var label := _make_centered_label(
 			"SourceOptionsCommand%d" % index,
 			str(labels[index]),
-			rect.position + rect.size / 2.0,
+			label_centers[index],
 			rect.size,
-			15,
+			20,
 		)
 		label.set_meta("source_command", (TITLE_COMMANDS if _mode == "title" else GAME_COMMANDS)[index])
 		label.set_meta("source_hitbox", rect)
@@ -681,34 +690,36 @@ func _draw_commands(resolved: Dictionary) -> void:
 
 	var cancel_rect: Rect2 = _hitbox("cancel")
 	var accept_rect: Rect2 = _hitbox("accept")
-	var cancel_result: Dictionary = resolved["cancel"]
-	var accept_result: Dictionary = resolved["accept"]
-	_add_art(cancel_result, "SourceOptionsCancelArt", cancel_rect.position, cancel_rect.size, int(CHUNKS["cancel"]))
-	_add_art(accept_result, "SourceOptionsAcceptArt", accept_rect.position, accept_rect.size, int(CHUNKS["accept"]))
 	if _pressed_action == "cancel":
-		_add_art(resolved["cancel_pressed"], "SourceOptionsCancelPressed", cancel_rect.position, cancel_rect.size, int(CHUNKS["cancel_pressed"]))
+		_add_art(resolved["cancel"], "SourceOptionsCancelPressed", cancel_rect.position, cancel_rect.size, int(CHUNKS["cancel"]))
 	if _pressed_action == "accept":
-		_add_art(resolved["accept_pressed"], "SourceOptionsAcceptPressed", accept_rect.position, accept_rect.size, int(CHUNKS["accept_pressed"]))
-	_make_centered_label("SourceOptionsCancelLabel", "取消", Vector2(224.0, 328.0), Vector2(62.0, 22.0), 20)
-	_make_centered_label("SourceOptionsAcceptLabel", "確定", Vector2(296.0, 328.0), Vector2(62.0, 22.0), 20)
+		_add_art(resolved["accept"], "SourceOptionsAcceptPressed", accept_rect.position, accept_rect.size, int(CHUNKS["accept"]))
+	_make_centered_label("SourceOptionsCancelLabel", "取 消", Vector2(224.0, 328.0), Vector2(62.0, 22.0), 20)
+	_make_centered_label("SourceOptionsAcceptLabel", "確 定", Vector2(296.0, 328.0), Vector2(62.0, 22.0), 20)
 
 
 func _draw_tracks_and_views() -> void:
 	var track_rect := _hitbox("track")
+	if _current_track >= 0 and _current_track < TRACK_LABELS.size():
+		var highlight := ColorRect.new()
+		highlight.name = "SourceOptionsTrackHighlight"
+		highlight.position = FRAME_ORIGIN + Vector2(18.0, 226.0 + 15.0 * _current_track)
+		highlight.size = Vector2(159.0, 14.0)
+		highlight.color = Color("#ff0000")
+		highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_surface.add_child(highlight)
 	for index in range(TRACK_LABELS.size()):
-		var track_label := _make_label("SourceOptionsTrackLabel%d" % index, TRACK_LABELS[index], 12)
-		track_label.position = FRAME_ORIGIN + Vector2(49.0, 226.0 + 15.0 * index)
-		track_label.size = Vector2(128.0, 15.0)
-		track_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		track_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		var track_label := _make_left_center_label(
+			"SourceOptionsTrackLabel%d" % index,
+			TRACK_LABELS[index],
+			Vector2(26.0, 233.0 + 15.0 * index),
+			Vector2(151.0, 14.0),
+			12,
+		)
+		track_label.add_theme_color_override("font_color", Color("#f0f0f0"))
 		track_label.set_meta("source_track", index)
 		track_label.set_meta("source_hitbox", track_rect)
 		track_labels.append(track_label)
-	for index in range(3):
-		var names := ["日、月曆", "縮小地圖", "組合畫面"]
-		var centers := [Vector2(286.0, 226.0), Vector2(286.0, 258.0), Vector2(286.0, 290.0)]
-		var label := _make_centered_label("SourceOptionsViewLabel%d" % index, names[index], centers[index], Vector2(110.0, 22.0), 15)
-		label.set_meta("source_view", index)
 
 
 func _add_art(result: Dictionary, node_name: String, local_origin: Vector2, logical_size: Vector2, chunk: int) -> TextureRect:

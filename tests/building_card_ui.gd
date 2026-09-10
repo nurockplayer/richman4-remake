@@ -75,7 +75,22 @@ func run() -> void:
 	expect(game.state.board[1].facility_type == 4 and game.state.board[1].building_level == 1, "actual angel button builds selected laboratory")
 	expect(game.state.board[6].facility_type == 4 and game.state.board[6].building_level == 1, "angel updates other entrance")
 	expect(not game.state.players[0].cards.has("天使"), "angel UI consumes card once")
+	var board_camera: Object = ui.board_view
+	var target_tile: Dictionary = game.state.board[7]
+	var target_position := Vector2(float(target_tile.get("x", 0)), float(target_tile.get("y", 0)))
+	var camera_state: Dictionary = board_camera.get_camera_state()
+	var target_screen: Vector2 = board_camera.map_to_screen(target_position)
+	var viewport_size: Vector2 = camera_state.get("viewport_size", Vector2.ZERO)
+	board_camera.pan_by(viewport_size * 0.5 - target_screen)
+	await process_frame
+	var manual_pan: Vector2 = board_camera.get_camera_state().get("pan", Vector2.ZERO)
+	expect(board_camera.visible_node_indices().has(7), "camera setup moves monster target into the visible rect")
+	ui._refresh_from_state()
+	await process_frame
+	expect(board_camera.get_camera_state().get("pan", Vector2.ZERO) == manual_pan, "current-player follow preserves a manually panned camera")
 	ui._on_cards_pressed()
+	await process_frame
+	expect(board_camera.get_camera_state().get("pan", Vector2.ZERO) == manual_pan, "card popup refresh preserves a manually panned camera")
 	target = ui.cards_popup.find_child("Target_怪獸", true, false)
 	expect(select_id(target, 7), "monster picker includes enemy building")
 	use = ui.cards_popup.find_child("UseCard_怪獸", true, false)

@@ -210,7 +210,7 @@ func _ready() -> void:
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
 	else:
-		_enter_unavailable_content_state()
+	_enter_unavailable_content_state()
 	if source_shell != null and source_shell.has_method("show_title"):
 		source_shell.call("show_title")
 
@@ -2516,6 +2516,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "tools", not cards_button.disabled)
 		source_shell.call("set_toolbar_enabled", "sale", not stocks_button.disabled)
 		source_shell.call("set_toolbar_enabled", "ai", not _presentation_busy and not _legacy_save_modal_open())
+	_last_rendered_phase = phase
 
 func _update_load_gate() -> void:
 	if load_button != null:

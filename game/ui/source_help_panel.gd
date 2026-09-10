@@ -373,8 +373,8 @@ func _input(event: InputEvent) -> void:
 	# The source closes on a right release anywhere in the active modal,
 	# including an unavailable view just reopened under a stationary pointer.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
-		_close()
 		get_viewport().set_input_as_handled()
+		_close()
 		return
 	if not event is InputEventKey:
 		return

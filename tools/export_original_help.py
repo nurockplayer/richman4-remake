@@ -56,7 +56,6 @@ from decode_original_images import (
     assert_disjoint_paths,
     assert_private_output,
     decode_entry,
-    discover_editions,
     parse_mkf,
 )
 
@@ -330,7 +329,18 @@ def _find_help_archive(directory: Path) -> Path:
 
 def _edition_directory_map(source: Path) -> dict[str, Path]:
     mapping: dict[str, Path] = {}
-    discovered = discover_editions(source)
+    if not source.is_dir():
+        raise InputError(f"source is not a directory: {source}")
+    # This bounded exporter needs only help.mkf. Map discovery would require
+    # unrelated map.mkf files even when both complete help archives exist.
+    try:
+        discovered = [
+            (child.name, child)
+            for child in sorted(source.iterdir(), key=lambda path: path.name.casefold())
+            if child.is_dir() and not child.is_symlink()
+        ]
+    except OSError as exc:
+        raise InputError(f"cannot inspect source {source}: {exc}") from exc
     for name, path in discovered:
         key = name.casefold()
         if key == "game":

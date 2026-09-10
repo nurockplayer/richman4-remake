@@ -537,6 +537,12 @@ func _render() -> void:
 		var pressed_slot := int(_pressed_action.trim_prefix("slot:"))
 		if pressed_slot >= 0 and pressed_slot < SLOT_COUNT:
 			_draw_pressed_effect(pressed_slot)
+	elif _pressed_action == "reset":
+		_draw_pressed_effect_rect(RESET, "reset")
+	elif _pressed_action == "cancel":
+		_draw_pressed_effect_rect(CANCEL, "cancel")
+	elif _pressed_action == "accept":
+		_draw_pressed_effect_rect(ACCEPT, "accept")
 	if _editing_slot >= 0 and pending_blink_visible():
 		var key_center := _key_center(_editing_slot)
 		var pending := ColorRect.new()
@@ -571,7 +577,7 @@ func _draw_labels() -> void:
 		key_labels.append(label)
 		var title_center := _title_center(index)
 		var title := _make_label("SourceHotkeysTitleLabel%d" % index, SOURCE_LABELS[index], 12, SOURCE_WHITE)
-		title.position = FRAME_ORIGIN + title_center - Vector2(36.0, 7.0) + pressed_offset
+		title.position = FRAME_ORIGIN + title_center - Vector2(36.0, 7.0)
 		title.size = Vector2(72.0, 14.0)
 		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -588,19 +594,30 @@ func _draw_footer_labels() -> void:
 	for entry in entries:
 		var label := _make_label(str(entry[0]), str(entry[1]), 15, SOURCE_WHITE)
 		var center: Vector2 = entry[2]
-		label.position = FRAME_ORIGIN + center - Vector2(36.0, 8.0)
+		var action := str(entry[0]).trim_suffix("Label").trim_prefix("SourceHotkeys").to_lower()
+		var pressed_offset := Vector2.ONE if _pressed_action == action else Vector2.ZERO
 		label.size = Vector2(72.0, 16.0)
+		# Label enforces its font minimum height (15px source text is 23px in
+		# Godot's default font), so center after assigning size to preserve the
+		# source logical anchor and its one-pixel pressed displacement.
+		label.position = FRAME_ORIGIN + center + pressed_offset - label.size / 2.0
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 
 
 func _draw_pressed_effect(slot: int) -> void:
+	_draw_pressed_effect_rect(_cell_rect(slot), "slot:%d" % slot)
+
+
+func _draw_pressed_effect_rect(rect: Rect2, action: String) -> void:
 	var effect := Control.new()
 	effect.name = "SourceHotkeysPressed"
-	effect.position = FRAME_ORIGIN + _cell_rect(slot).position
-	effect.size = _cell_rect(slot).size
+	effect.position = FRAME_ORIGIN + rect.position
+	effect.size = rect.size
 	effect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	effect.set_meta("source_slot", slot)
+	effect.set_meta("source_action", action)
+	if action.begins_with("slot:"):
+		effect.set_meta("source_slot", int(action.trim_prefix("slot:")))
 	effect.set_meta("source_press_offset", Vector2(1.0, 1.0))
 	effect.set_meta("source_edge_darken", 16)
 	effect.draw.connect(func() -> void:

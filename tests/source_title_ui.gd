@@ -2,6 +2,8 @@ extends SceneTree
 const Fixture = preload("res://tests/fixtures/company_fixture.gd")
 class TitleTestUI extends "res://game/ui/main_ui.gd":
 	var quit_intents := 0
+	var option_intents := 0
+	func _on_source_option_requested() -> void: option_intents += 1
 	func _setup_audio() -> void: pass
 	func _on_source_quit_requested() -> void: quit_intents += 1
 	func _load_map_catalog(path: String = "", _fallback: bool = false) -> void:
@@ -48,6 +50,9 @@ func run() -> void:
 	check(ui._map_catalog_complete and ui.game_state != null, "ordinary catalog entry is source-capable")
 	check(shell.is_title_visible() and shell.get("_source_edition") == "Game", "ordinary launch uses the Game title")
 	var before: String = ui.game_state.to_json()
+	press(viewport, shell.title_option_button)
+	check(ui.option_intents == 1, "ordinary title OPTION reaches the S35 host entry")
+	check(ui.game_state.to_json() == before, "OPTION entry preserves current match and RNG")
 	var exit_button: Button = shell.title_screen.find_child("SourceTitleExit", true, false)
 	check(exit_button != null, "source title supplies the missing EXIT control")
 	check(shell.has_signal("quit_requested"), "title exit has a host quit-intent boundary")

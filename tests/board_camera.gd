@@ -82,7 +82,7 @@ func run() -> void:
 	await _run_frames()
 
 	check(board.get_map_bounds() == Rect2(0, 0, 2304, 2304), "camera uses source scene world bounds")
-	check(board.get_camera_viewport().size.x < 1000 and board.get_camera_viewport().size.y < 1000, "gameplay camera keeps a near-field crop")
+	check(close_enough(board.get_camera_viewport().size, Vector2(440, 440), 0.01), "camera uses the inferred 440 world-unit logical crop")
 	check(close_enough(board.get_screen_position_for_index(0), board.size * 0.5), "initial active player is centered")
 	check(board.get_camera_state().has_all(["map_bounds", "viewport", "viewport_corners", "zoom", "pan", "rotation"]), "camera state exposes minimap inputs")
 
@@ -100,6 +100,8 @@ func run() -> void:
 	var rotated_screen := board.map_to_screen(map_point)
 	check(close_enough(board.screen_to_map(rotated_screen), map_point, 0.75), "rotation preserves inverse map projection")
 	check(board.select_at_position(board.get_screen_position_for_index(2)) == 2, "rotated node remains clickable at its projected position")
+	for sprite_kind in ["road_icon", "house", "scenery", "player"]:
+		check(is_zero_approx(board.get_sprite_rotation(sprite_kind)), "%s sprite remains upright while its world position rotates" % sprite_kind)
 	var minimap := Rect2(0, 0, 200, 200)
 	var minimap_polygon := board.get_minimap_viewport_polygon(minimap)
 	check(minimap_polygon.size() == 4, "minimap receives the four camera viewport corners")

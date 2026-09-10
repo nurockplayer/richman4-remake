@@ -15,9 +15,14 @@ const MAX_ZOOM := 3.2
 # The Game scene uses a 2304x2304 world, while the original player-facing
 # board occupies a 440x440 logical crop.  The extracted scene does not carry
 # its runtime camera projection, so keep this bounded source-like fallback in
-# world units rather than fitting the whole scene into the control.
+# world units rather than fitting the whole scene into the control.  The
+# 440-unit span is an approximately 1:1 logical-source inference from the
+# 440px board region in the reference capture, not a recovered runtime
+# canonical.
 const REFERENCE_BOARD_SIZE := Vector2(440.0, 440.0)
-const SOURCE_CROP_WORLD_SPAN := 720.0
+# Provisional input increment; no original-runtime camera rotation evidence
+# establishes a canonical step size.
+const SOURCE_CROP_WORLD_SPAN := 440.0
 const ROTATION_STEP := PI / 12.0
 const PLAYER_COLORS := [
 	Color("#ef6a65"),
@@ -549,7 +554,7 @@ func _draw_original_board() -> void:
 		return a.get("center", Vector2.ZERO).y < b.get("center", Vector2.ZERO).y
 	)
 	for job in _scene_draws:
-		var painted := _draw_sprite(job.frame, job.center, _map_scale() * map_zoom)
+		var painted := _draw_sprite(job.frame, job.center, _map_scale() * map_zoom, str(job.get("kind", "")))
 		if not painted:
 			_draw_scene_fallback(job)
 		if painted and job.has("color"):
@@ -974,7 +979,7 @@ func _draw_style_box(rect: Rect2, background: Color, border: Color, radius: floa
 	style.set_corner_radius_all(int(radius))
 	draw_style_box(style, rect)
 
-func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bool:
+func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float, kind := "") -> bool:
 	var sprite: Texture2D = visuals.texture(frame)
 	if sprite == null:
 		return false
@@ -983,10 +988,21 @@ func _draw_sprite(frame: Dictionary, center: Vector2, scale_factor: float) -> bo
 		-Vector2(logical.get("anchor_x", 0), logical.get("anchor_y", 0)),
 		Vector2(logical.get("width", 0), logical.get("height", 0))
 	)
-	draw_set_transform(center, map_rotation, Vector2(scale_factor, scale_factor))
+	# The map/background is ground and rotates through its projected position.
+	# Extracted road, house, scenery, and character frames are billboard
+	# overlays: rotate their world position, but keep the source sprite upright.
+	draw_set_transform(center, _sprite_rotation(kind), Vector2(scale_factor, scale_factor))
 	draw_texture_rect(sprite, local_rect, false)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	return true
+
+func _sprite_rotation(kind: String) -> float:
+	if kind in ["road_icon", "house", "scenery", "player"]:
+		return 0.0
+	return map_rotation
+
+func get_sprite_rotation(kind: String) -> float:
+	return _sprite_rotation(kind)
 
 func _road_icon_frame(tile: Dictionary) -> Dictionary:
 	return visuals.road(_scene, int(tile.get("visual_index", 0)))

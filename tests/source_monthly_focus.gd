@@ -7,6 +7,15 @@ class InitiallyInactivePanel extends "res://game/ui/source_monthly_panel.gd":
 		return false
 
 func run() -> void:
+	# Native launch focus arrives after initial scene frames on macOS. Wait for
+	# that real startup event before deliberately simulating an inactive app.
+	if DisplayServer.get_name() != "headless":
+		for attempt in range(300):
+			if DisplayServer.window_is_focused():
+				break
+			await create_timer(0.01).timeout
+		await settle()
+	expect(DisplayServer.get_name() == "headless" or DisplayServer.window_is_focused(), "native startup focus is established before injected transitions")
 	# Focus notifications are injected into the real native/headless Node. This
 	# proves the lifecycle boundary, not an ordinary OS application switch.
 	var panel := ReportPanel.new()

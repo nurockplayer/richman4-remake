@@ -99,3 +99,12 @@ Escape 是平台操作 fallback。所有候選 fingerprint、原有檔案唯讀�
 測試回放到未修復 panel 後仍為188／20，再於修復版取得188／0。此回放是測試證據
 補正，不冒稱初版 transport 已完整。MainUI 的42項測試也改走960×720 SubViewport
 內實際滑鼠事件，保留每項原有狀態、寫入、取消、舊存檔與 AI assertions。
+
+
+Fresh review of PR132 at dddc0c4 found a P1: Ctrl+S/Ctrl+L still reached the legacy
+owner-path adapters from the ordinary source board. Tests-only d7fd6b1 dispatches
+those actual key events through the same SubViewport: qualified RED48/4. The two
+shortcuts now call the same source picker handlers as the HUD. The direct methods
+remain explicit development/test APIs; no ordinary shortcut invokes them. The
+six added assertions preserve the original42 checks and use counters in place of
+owner-path I/O, so RED never writes an owner file.

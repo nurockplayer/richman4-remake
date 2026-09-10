@@ -251,10 +251,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_on_new_game_pressed()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_S and event.ctrl_pressed:
-			_save_game()
+			_on_source_save_requested()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_L and event.ctrl_pressed:
-			_load_game()
+			_on_source_load_requested()
 			get_viewport().set_input_as_handled()
 
 func _build_interface() -> void:

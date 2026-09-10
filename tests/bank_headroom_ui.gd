@@ -69,10 +69,24 @@ func _run() -> void:
 	_expect(deposit_all != null, "bank UI exposes deposit-all")
 	if deposit_amount != null:
 		_expect_equal(int(deposit_amount.max_value), 250, "deposit selector uses the player-account headroom")
-		deposit_amount.value = 120
+		var deposit_editor := deposit_amount.get_line_edit()
+		var before_focus_rejection: String = deposit_game.to_json()
+		deposit_editor.grab_focus()
+		deposit_editor.text = "251"
+		deposit_editor.release_focus()
+		await process_frame
 		ui.bank_deposit_button.pressed.emit()
-		_expect_equal(int(deposit_game.state["players"][0]["cash"]), 630, "selected deposit transfers the requested amount")
-		_expect_equal(int(deposit_game.state["players"][0]["deposit"]), MAX_BALANCE - 130, "selected deposit preserves the exact account headroom")
+		_expect_equal(deposit_game.to_json(), before_focus_rejection, "focus-exit over-limit deposit remains atomic")
+		_expect_equal(int(deposit_game.state["players"][0]["cash"]), 750, "focus-exit over-limit deposit preserves cash")
+		_expect_equal(int(deposit_game.state["players"][0]["deposit"]), MAX_BALANCE - 250, "focus-exit over-limit deposit preserves account balance")
+		_expect_equal(deposit_game.state["event_log"].size(), 1, "focus-exit over-limit deposit appends no event")
+		deposit_editor.grab_focus()
+		deposit_amount.value = 125
+		deposit_editor.release_focus()
+		await process_frame
+		ui.bank_deposit_button.pressed.emit()
+		_expect_equal(int(deposit_game.state["players"][0]["cash"]), 625, "selected deposit transfers the requested amount")
+		_expect_equal(int(deposit_game.state["players"][0]["deposit"]), MAX_BALANCE - 125, "selected deposit preserves the exact account headroom")
 	if deposit_all != null:
 		_expect(not deposit_all.disabled, "deposit-all stays enabled while headroom remains")
 		deposit_all.pressed.emit()

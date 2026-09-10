@@ -369,7 +369,7 @@ func _build_detail_shell() -> void:
 	_detail_chart = StockChart.new()
 	_detail_chart.name = "StockDetailChart"
 	_detail_chart.position = Vector2(38, 185)
-	_detail_chart.size = Vector2(542, 180)
+	_detail_chart.size = Vector2(542, 225)
 	_detail_chart.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_detail_root.add_child(_detail_chart)
 

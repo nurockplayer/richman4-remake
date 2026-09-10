@@ -34,8 +34,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_active_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_bootstrap.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_flow.gd
@@ -67,6 +70,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/legacy_stock_bounds.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_save.gd

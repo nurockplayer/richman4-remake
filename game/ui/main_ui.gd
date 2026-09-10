@@ -41,6 +41,9 @@ const PROPERTY_CARD_SAVE_VERSION := 10
 const REMODEL_SAVE_VERSION := 11
 const RESEARCH_SAVE_VERSION := 12
 const BUILDING_CARD_SAVE_VERSION := 13
+const LEGACY_MARKET_SAVE_MIN_VERSION := 1
+const LEGACY_MARKET_SAVE_MAX_VERSION := 6
+const LEGACY_STOCK_SYMBOLS := ["tech", "transport", "energy"]
 const RESEARCH_TOOLS := ["機器工人", "時光機", "傳送機", "工程車", "核子飛彈"]
 const PANEL_BG := Color("#1c2d40")
 const PANEL_RAISED := Color("#243b50")
@@ -63,6 +66,7 @@ var board_view: Control
 
 var seed_label: Label
 var map_identity_label: Label
+var market_mode_label: Label
 var phase_label: Label
 var turn_label: Label
 var setup_summary_label: Label
@@ -109,6 +113,8 @@ var _bank_withdraw_input_invalid := false
 var _bank_deposit_focus_text := ""
 var _bank_withdraw_focus_text := ""
 var new_game_popup: PopupPanel
+var content_error_dialog: AcceptDialog
+var legacy_save_dialog: ConfirmationDialog
 var seed_input: LineEdit
 var player_count_option: OptionButton
 var initial_fund_option: OptionButton
@@ -170,8 +176,12 @@ var _map_catalog: Array = []
 var _map_catalog_path := ""
 var _map_catalog_error := ""
 var _map_catalog_ok := false
+var _map_catalog_complete := false
 var _selected_map_definition: Dictionary = {}
 var _active_map_definition: Dictionary = {}
+var _development_path_enabled := false
+var _pending_legacy_load_snapshot: Dictionary = {}
+var _pending_legacy_load_state: Object
 var _company_purchase_quantity: SpinBox
 var _company_purchase_button: Button
 var _company_service_target: OptionButton
@@ -183,15 +193,29 @@ var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
 
 func _ready() -> void:
+	# A debug/editor launch is the explicit development lane for the synthetic
+	# board.  Release packages stay fail-closed when original map content is
+	# absent or incomplete; tests can force either lane through the setter below.
+	_development_path_enabled = OS.is_debug_build()
 	_build_interface()
 	_setup_audio()
 	_load_map_catalog()
-	_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
+	if _map_is_startable(_selected_map_definition):
+		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
+	else:
+		_enter_unavailable_content_state()
 
 func _process(_delta: float) -> void:
+	if _legacy_save_modal_open():
+		return
 	_maybe_schedule_ai_turn()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _legacy_save_modal_open():
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+			_cancel_legacy_save_load()
+		get_viewport().set_input_as_handled()
+		return
 	if _presentation_busy:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
@@ -251,8 +275,10 @@ func _build_interface() -> void:
 	_build_popups()
 	news_popup = NewsPanel.new()
 	add_child(news_popup)
+	news_popup.visibility_changed.connect(_update_load_gate)
 	fate_popup = FatePanel.new()
 	add_child(fate_popup)
+	fate_popup.visibility_changed.connect(_update_load_gate)
 	_build_end_overlay()
 
 func _build_header() -> Control:
@@ -289,6 +315,10 @@ func _build_header() -> Control:
 	map_identity_label = _make_label("地圖 · 測試棋盤", 10, TEXT_MUTED)
 	map_identity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_column.add_child(map_identity_label)
+	market_mode_label = _make_label("股市 · 尚未載入", 9, TEXT_MUTED)
+	market_mode_label.name = "MarketModeLabel"
+	market_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	meta_column.add_child(market_mode_label)
 	setup_summary_label = _make_label("1998/01/01 星期四 · 期限不限 · 目標不限", 9, TEXT_MUTED)
 	setup_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	setup_summary_label.clip_text = true
@@ -538,6 +568,7 @@ func _build_popups() -> void:
 	auction_popup = AuctionPresentation.new()
 	add_child(auction_popup)
 	auction_popup.answered.connect(_respond_to_auction)
+	auction_popup.visibility_changed.connect(_update_load_gate)
 	new_game_popup = _make_popup(Vector2i(760, 680))
 	new_game_popup.wrap_controls = false
 	var new_game_box := _popup_box(new_game_popup)
@@ -853,6 +884,22 @@ func _build_popups() -> void:
 	map_catalog_file_dialog.filters = PackedStringArray(["*.json ; 地圖目錄 (catalog.json)"])
 	map_catalog_file_dialog.file_selected.connect(_on_map_catalog_file_selected)
 	add_child(map_catalog_file_dialog)
+
+	content_error_dialog = AcceptDialog.new()
+	content_error_dialog.name = "ContentUnavailableDialog"
+	content_error_dialog.title = "無法開始對局"
+	content_error_dialog.ok_button_text = "知道了"
+	add_child(content_error_dialog)
+
+	legacy_save_dialog = ConfirmationDialog.new()
+	legacy_save_dialog.name = "LegacySaveDialog"
+	legacy_save_dialog.title = "舊版存檔"
+	legacy_save_dialog.ok_button_text = "繼續使用舊版三股市"
+	legacy_save_dialog.cancel_button_text = "取消"
+	legacy_save_dialog.confirmed.connect(_confirm_legacy_save_load)
+	legacy_save_dialog.canceled.connect(_cancel_legacy_save_load)
+	legacy_save_dialog.close_requested.connect(_legacy_save_dialog_close_requested)
+	add_child(legacy_save_dialog)
 
 func _make_setup_option(values: Array, caption: String, suffix: String, default_index: int) -> OptionButton:
 	var row := HBoxContainer.new()
@@ -1172,13 +1219,21 @@ func _popup_box(popup: PopupPanel) -> VBoxContainer:
 	margin.add_child(box)
 	return box
 
-func _load_map_catalog(path: String = "") -> void:
+func _load_map_catalog(path: String = "", allow_development_fallback: bool = false) -> void:
 	var result: Dictionary = OriginalMaps.load_catalog(path, true)
 	_map_catalog_path = path if not path.is_empty() else OriginalMaps.default_catalog_path()
-	_map_catalog_ok = bool(result.get("ok", false)) and _as_array(result.get("maps", [])).size() > 0
+	var loaded_maps := _as_array(result.get("maps", [])).duplicate(true)
+	var parsed_ok := bool(result.get("ok", false)) and not loaded_maps.is_empty()
+	_map_catalog_complete = parsed_ok and _catalog_has_complete_original_content(loaded_maps)
 	_map_catalog_error = str(result.get("error", ""))
-	if _map_catalog_ok:
-		_map_catalog = _as_array(result.get("maps", [])).duplicate(true)
+	var development_path := allow_development_fallback or _is_development_path()
+	if parsed_ok and (_map_catalog_complete or development_path):
+		_map_catalog = loaded_maps
+		# A debug/import lane can inspect synthetic or partially imported maps, but
+		# it must remain visibly separate from the complete packaged catalog.
+		_map_catalog_ok = true
+		if not _map_catalog_complete and _map_catalog_error.is_empty():
+			_map_catalog_error = "此 catalog 未具備完整原版十二股市能力。"
 		_selected_map_definition = {}
 		for index in range(_map_catalog.size()):
 			var definition: Dictionary = _map_catalog[index] if _map_catalog[index] is Dictionary else {}
@@ -1187,10 +1242,57 @@ func _load_map_catalog(path: String = "") -> void:
 				break
 		if _selected_map_definition.is_empty() and not _map_catalog.is_empty():
 			_selected_map_definition = (_map_catalog[0] as Dictionary).duplicate(true)
-	else:
+	elif development_path:
+		_map_catalog_ok = false
+		_map_catalog_complete = false
 		_map_catalog = [_make_fallback_map_definition()]
 		_selected_map_definition = (_map_catalog[0] as Dictionary).duplicate(true)
+		if _map_catalog_error.is_empty():
+			_map_catalog_error = "尚未匯入本機原版地圖。"
+	else:
+		_map_catalog_ok = false
+		_map_catalog_complete = false
+		_map_catalog = []
+		_selected_map_definition = {}
+		if _map_catalog_error.is_empty():
+			_map_catalog_error = "原版地圖目錄不完整，請匯入包含來源身分與十二股市資料的 catalog.json。"
 	_update_map_selector()
+
+func _is_development_path() -> bool:
+	var configured := OS.get_environment("RICHMAN4_DEV_MODE").to_lower()
+	return _development_path_enabled or configured in ["1", "true", "yes"]
+
+func _set_development_path(enabled: bool) -> void:
+	_development_path_enabled = enabled
+
+func _map_has_complete_original_market(definition: Dictionary) -> bool:
+	if not bool(definition.get("supports_original_companies", false)):
+		return false
+	var stock_rows: Variant = definition.get("stock_rows", [])
+	return stock_rows is Array and stock_rows.size() == 12
+
+func _catalog_has_complete_original_content(maps: Array) -> bool:
+	if maps.is_empty():
+		return false
+	for value in maps:
+		if not value is Dictionary or not _map_is_playable(value) or not _map_has_complete_original_market(value):
+			return false
+	return true
+
+func _map_is_startable(definition: Dictionary) -> bool:
+	if not _map_is_playable(definition):
+		return false
+	if _is_development_path():
+		return true
+	return _map_catalog_complete and _map_has_complete_original_market(definition)
+
+func _enter_unavailable_content_state() -> void:
+	if game_state == null:
+		state = _unavailable_state(DEFAULT_SEED)
+		_active_map_definition = {}
+		_refresh_from_state()
+	var reason := _map_catalog_error if not _map_catalog_error.is_empty() else "請匯入完整原版地圖 catalog.json 後重新開啟遊戲。"
+	_show_content_error("目前無法開始正常對局。\n%s\n\n開發測試棋盤只在明確的開發路徑使用。" % reason)
 
 func _make_fallback_map_definition() -> Dictionary:
 	var state_script: Variant = load("res://game/core/game_state.gd")
@@ -1245,14 +1347,21 @@ func _update_map_selector() -> void:
 		map_selector.add_item(label, index)
 		if not _selected_map_definition.is_empty() and str(definition.get("id", "")) == str(_selected_map_definition.get("id", "")):
 			selected_index = index
-	map_selector.select(selected_index)
+	if not _map_catalog.is_empty():
+		map_selector.select(selected_index)
 	if selected_index >= 0 and selected_index < _map_catalog.size():
 		_selected_map_definition = (_map_catalog[selected_index] as Dictionary).duplicate(true)
-	if _map_catalog_ok:
-		map_catalog_status_label.text = "已載入本機原版地圖 %d 張。" % _map_catalog.size()
+	if _map_catalog_ok and _map_catalog_complete:
+		map_catalog_status_label.text = "已載入完整本機原版地圖 %d 張 · 十二股市能力可用。" % _map_catalog.size()
+	elif _map_catalog_ok and _is_development_path():
+		var development_reason := _map_catalog_error if not _map_catalog_error.is_empty() else "此 catalog 尚未具備完整原版十二股市能力。"
+		map_catalog_status_label.text = "開發路徑：載入 %d 張測試／部分地圖；不代表可發行原版內容。\n%s" % [_map_catalog.size(), development_reason]
+	elif _is_development_path():
+		var fallback_reason := _map_catalog_error if not _map_catalog_error.is_empty() else "尚未匯入本機原版地圖。"
+		map_catalog_status_label.text = "開發路徑：使用明確標示的測試棋盤；不代表原版地圖。\n%s" % fallback_reason
 	else:
 		var reason := _map_catalog_error if not _map_catalog_error.is_empty() else "尚未匯入本機原版地圖。"
-		map_catalog_status_label.text = "未找到本機原版地圖，使用明確測試棋盤。\n%s" % reason
+		map_catalog_status_label.text = "無法開始正常對局：需要完整本機原版地圖 catalog.json。\n%s" % reason
 	_update_map_preview()
 
 func _on_map_selected(index: int) -> void:
@@ -1267,7 +1376,14 @@ func _on_map_catalog_pressed() -> void:
 
 func _on_map_catalog_file_selected(path: String) -> void:
 	_load_map_catalog(path)
-	_append_local_log("已讀取本機地圖目錄。") if _map_catalog_ok else _append_local_log("地圖目錄讀取失敗，已回到測試棋盤。")
+	if _map_catalog_ok and _map_catalog_complete:
+		_append_local_log("已讀取完整本機原版地圖目錄。")
+	elif _map_catalog_ok and _is_development_path():
+		_append_local_log("已讀取開發路徑地圖目錄；完整原版能力仍未確認。")
+	else:
+		_append_local_log("地圖目錄讀取失敗；未啟動測試棋盤，請匯入完整原版 catalog.json。")
+		if game_state == null or state.get("phase", "") == "unavailable":
+			_enter_unavailable_content_state()
 	_refresh_log_only()
 
 func _extract_map_identity(snapshot: Dictionary) -> Variant:
@@ -1382,14 +1498,18 @@ func _update_map_preview() -> void:
 		return
 	if _selected_map_definition.is_empty():
 		map_preview_status_label.text = "尚無可預覽的地圖。"
+		if new_game_confirm_button != null:
+			new_game_confirm_button.disabled = true
 		return
 	var board: Array = _as_array(_selected_map_definition.get("board", []))
-	if _map_is_playable(_selected_map_definition):
+	if _map_is_startable(_selected_map_definition):
 		map_preview_status_label.text = "可開始新局 · %d 格路網。" % board.size()
+	elif _map_is_playable(_selected_map_definition) and not _is_development_path():
+		map_preview_status_label.text = "目前僅供預覽：此地圖缺少完整原版十二股市資料。"
 	else:
 		map_preview_status_label.text = "僅供預覽：%s" % str(_selected_map_definition.get("unsupported_reason", "此地圖尚未開放對局。"))
 	if new_game_confirm_button != null:
-		new_game_confirm_button.disabled = not _map_is_playable(_selected_map_definition)
+		new_game_confirm_button.disabled = not _map_is_startable(_selected_map_definition)
 
 func _map_is_playable(definition: Dictionary) -> bool:
 	return not definition.is_empty() and bool(definition.get("supports_new_game", false))
@@ -1413,8 +1533,12 @@ func _on_new_game_pressed() -> void:
 	seed_input.grab_focus()
 
 func _on_new_game_confirm() -> void:
-	if not _map_is_playable(_selected_map_definition):
-		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+	if not _map_is_startable(_selected_map_definition):
+		var unavailable_message := "此地圖目前僅供預覽，無法開始新局。"
+		if _map_is_playable(_selected_map_definition) and not _is_development_path():
+			unavailable_message = "此地圖缺少完整原版十二股市資料，無法開始正常對局。請匯入完整 catalog.json。"
+		_append_local_log(unavailable_message)
+		_set_setup_error(unavailable_message)
 		_refresh_log_only()
 		return
 	var setup_validation := _collect_setup_options()
@@ -1456,8 +1580,13 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		return false
 	var resolved_players: int = player_count
 	var selected_definition := map_definition.duplicate(true) if not map_definition.is_empty() else _selected_map_definition.duplicate(true)
-	if not _map_is_playable(selected_definition):
-		_append_local_log("此地圖目前僅供預覽，無法開始新局。")
+	if not _map_is_startable(selected_definition):
+		var unavailable_message := "此地圖目前僅供預覽，無法開始新局。"
+		if _map_is_playable(selected_definition) and not _is_development_path():
+			unavailable_message = "無法開始正常對局：原版 catalog 不完整或尚未載入。請匯入包含來源身分與十二股市資料的 catalog.json。"
+		_append_local_log(unavailable_message)
+		if not _is_development_path():
+			_show_content_error(unavailable_message)
 		_refresh_log_only()
 		return false
 	var effective_setup := setup_options.duplicate(true)
@@ -1593,11 +1722,24 @@ func _save_game() -> void:
 	_refresh_log_only()
 
 func _load_game() -> void:
-	if not FileAccess.file_exists(SAVE_PATH):
+	_load_game_from_path(SAVE_PATH)
+
+func _load_blocked_by_presentation() -> bool:
+	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+
+func _reject_load_during_presentation() -> void:
+	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
+	_refresh_log_only()
+
+func _load_game_from_path(path: String) -> void:
+	if _load_blocked_by_presentation():
+		_reject_load_during_presentation()
+		return
+	if not FileAccess.file_exists(path):
 		_append_local_log("找不到存檔；先建立一局再儲存即可。")
 		_refresh_log_only()
 		return
-	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		_append_local_log("讀取失敗：無法開啟本機存檔。")
 		_refresh_log_only()
@@ -1622,14 +1764,103 @@ func _load_game() -> void:
 		_append_local_log("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
 		_refresh_log_only()
 		return
+	if _is_legacy_market_snapshot(parsed):
+		_pending_legacy_load_snapshot = parsed.duplicate(true)
+		_pending_legacy_load_state = restored
+		_show_legacy_save_dialog(parsed)
+		return
+	_apply_loaded_game(restored, parsed, false)
+
+func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: bool) -> void:
+	if restored == null:
+		return
 	_cancel_presentation()
 	game_state = restored
 	_adopt_map_from_snapshot(parsed)
 	_local_log.clear()
 	_append_local_log("已讀取棋局 · seed %s。" % str(parsed.get("seed", "?")))
+	if legacy_market:
+		_append_local_log("已讀取舊版開發存檔；目前使用舊版三股市模式。")
 	_refresh_from_state()
 	end_overlay.hide()
 	_ai_pending = false
+
+func _show_content_error(message: String) -> void:
+	if content_error_dialog == null:
+		return
+	content_error_dialog.dialog_text = message
+	content_error_dialog.popup_centered(Vector2i(700, 220))
+
+func _show_legacy_save_dialog(snapshot: Dictionary) -> void:
+	if legacy_save_dialog == null:
+		return
+	# Loading a legacy snapshot is a pending decision. Invalidate any queued
+	# movement/AI callback before exposing the modal so the current game cannot
+	# advance while the player chooses a compatibility path.
+	_cancel_presentation()
+	var version := int(snapshot.get("version", 0))
+	legacy_save_dialog.dialog_text = "這份存檔是 v%d 舊版開發對局，使用三股市資料，不能假設具備原版十二股市能力。\n\n繼續會原樣載入並顯示舊版三股市模式；取消或關閉會保留目前棋局、隨機狀態與磁碟存檔。要繼續嗎？" % version
+	legacy_save_dialog.popup_centered(Vector2i(720, 300))
+
+func _legacy_save_modal_open() -> bool:
+	return not _pending_legacy_load_snapshot.is_empty() and legacy_save_dialog != null and legacy_save_dialog.visible
+
+func _confirm_legacy_save_load() -> void:
+	if _pending_legacy_load_snapshot.is_empty() or _pending_legacy_load_state == null:
+		return
+	var snapshot := _pending_legacy_load_snapshot.duplicate(true)
+	var restored := _pending_legacy_load_state
+	_pending_legacy_load_snapshot = {}
+	_pending_legacy_load_state = null
+	legacy_save_dialog.hide()
+	_apply_loaded_game(restored, snapshot, true)
+
+func _cancel_legacy_save_load() -> void:
+	if _pending_legacy_load_snapshot.is_empty():
+		return
+	_pending_legacy_load_snapshot = {}
+	_pending_legacy_load_state = null
+	_cancel_presentation()
+	if legacy_save_dialog != null:
+		legacy_save_dialog.hide()
+	_append_local_log("已取消讀取舊版存檔；目前棋局保持不變。")
+	_refresh_log_only()
+
+func _legacy_save_dialog_close_requested() -> void:
+	# The window close button emits close_requested without necessarily emitting
+	# the Cancel button signal. Treat every close path as the safe cancellation.
+	_cancel_legacy_save_load()
+
+func _market_symbols_from_snapshot(snapshot: Dictionary) -> Array:
+	var market_value: Variant = snapshot.get("market", {})
+	if not market_value is Dictionary:
+		return []
+	var market: Dictionary = market_value
+	var rows: Variant = market.get("rows", {})
+	if not rows is Dictionary or rows.is_empty():
+		rows = market.get("prices", {})
+	if not rows is Dictionary:
+		return []
+	var symbols: Array = []
+	for key in rows.keys():
+		var symbol := str(key).to_lower()
+		if not symbol.is_empty() and not symbols.has(symbol):
+			symbols.append(symbol)
+	return symbols
+
+func _is_legacy_market_snapshot(snapshot: Dictionary) -> bool:
+	var version := int(snapshot.get("version", 0))
+	if version < LEGACY_MARKET_SAVE_MIN_VERSION or version > LEGACY_MARKET_SAVE_MAX_VERSION:
+		return false
+	if bool(snapshot.get("original_companies", false)):
+		return false
+	var symbols := _market_symbols_from_snapshot(snapshot)
+	if symbols.size() != LEGACY_STOCK_SYMBOLS.size():
+		return false
+	for symbol in LEGACY_STOCK_SYMBOLS:
+		if not symbols.has(symbol):
+			return false
+	return true
 
 func _on_roll_pressed() -> void:
 	if roll_button.disabled:
@@ -1986,9 +2217,11 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _legacy_save_modal_open():
+		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
@@ -2008,7 +2241,7 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	return {"ok": false, "message": "模擬核心未載入；目前無法執行此操作。"}
 
 func _handle_result(result: Dictionary) -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if result.has("_presentation_generation"):
 		if int(result._presentation_generation) != _presentation_generation or result.get("_presentation_owner") != game_state:
@@ -2055,7 +2288,7 @@ func _on_movement_finished() -> void:
 		_refresh_from_state(result)
 
 func _refresh_from_state(result: Dictionary = {}) -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	var snapshot := _read_snapshot()
 	if result.has("snapshot") and result["snapshot"] is Dictionary:
@@ -2104,7 +2337,12 @@ func _update_all() -> void:
 	_update_auction_popup()
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
+	_update_load_gate()
 	_last_rendered_phase = phase
+
+func _update_load_gate() -> void:
+	if load_button != null:
+		load_button.disabled = _load_blocked_by_presentation()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -2120,6 +2358,8 @@ func _update_header(phase: String, current_index: int) -> void:
 		var identity: Variant = _extract_map_identity(state)
 		map_name = str(identity.get("name", identity.get("id", "測試棋盤"))) if identity is Dictionary else str(identity) if identity is String else "測試棋盤"
 	map_identity_label.text = "地圖 · %s" % map_name
+	if market_mode_label != null:
+		market_mode_label.text = _market_mode_text()
 	var player := _current_player()
 	var is_human := bool(player.get("is_human", true))
 	current_player_label.text = "你的回合" if is_human else "%s 的回合" % str(player.get("name", "AI"))
@@ -2141,6 +2381,15 @@ func _setup_summary_text() -> String:
 			target_text = "目標%s（%d倍）" % [_format_money(initial_fund * wealth_multiplier), wealth_multiplier]
 		return "%s · %s · %s" % [date_text, limit_text, target_text]
 	return "舊版日期 · 第%d天 · 期限/目標未記錄" % int(state.get("day", 1))
+
+func _market_mode_text() -> String:
+	if _has_original_companies():
+		return "股市 · 原版十二股"
+	if _is_legacy_market_snapshot(state):
+		return "股市 · 舊版三股市（開發存檔）"
+	if str(state.get("phase", "")) == "unavailable":
+		return "股市 · 暫停"
+	return "股市 · 三股模擬"
 
 func _update_players(players: Array, current_index: int) -> void:
 	for child in players_list.get_children():
@@ -2296,6 +2545,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var detained := _has_original_statuses() and not rest_status.is_empty()
 	var auction_pending := _pending_auction_for_ui()
 	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance") or not auction_pending.is_empty()
+	_update_load_gate()
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
 		roll_button.text = ("出院擲骰" if rest_status.kind == "hospital" else "出獄擲骰") if int(rest_status.count) == 128 else ("休養" if rest_status.kind == "hospital" else "服刑")
@@ -2498,7 +2748,7 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
@@ -2525,6 +2775,9 @@ func _maybe_schedule_ai_turn() -> void:
 	timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
 
 func _on_ai_timer_timeout(generation := -1) -> void:
+	if _legacy_save_modal_open():
+		_ai_pending = false
+		return
 	if generation >= 0 and generation != _presentation_generation:
 		return
 	_ai_pending = false

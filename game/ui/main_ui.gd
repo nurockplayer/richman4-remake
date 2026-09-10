@@ -383,12 +383,16 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if source_shell != null and source_shell.has_method("toggle_map_view"):
+	if source_shell == null:
+		return
+	if source_shell.has_method("toggle_full_map_view"):
+		source_shell.call("toggle_full_map_view")
+	elif source_shell.has_method("toggle_map_view"):
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if source_shell != null and source_shell.has_method("select_tab"):
-		source_shell.call("select_tab", "other")
+	if source_shell != null and source_shell.has_method("open_player_inspector"):
+		source_shell.call("open_player_inspector")
 
 func _on_source_tools_requested() -> void:
 	_on_cards_pressed()
@@ -1334,9 +1338,11 @@ func _update_setup_validation(show_message: bool) -> void:
 
 func _build_end_overlay() -> void:
 	end_overlay = ColorRect.new()
+	end_overlay.name = "SettlementOverlay"
 	end_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	end_overlay.color = Color(0.03, 0.08, 0.13, 0.84)
 	end_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	end_overlay.z_index = 100
 	add_child(end_overlay)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1363,9 +1369,11 @@ func _build_end_overlay() -> void:
 	end_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(end_detail)
 	var restart := _make_button("開始新局", _on_end_restart_pressed, true)
+	restart.name = "SettlementRestart"
 	restart.custom_minimum_size = Vector2(0.0, 48.0)
 	column.add_child(restart)
 	var close := _make_button("返回棋盤", _close_end_overlay)
+	close.name = "SettlementClose"
 	close.custom_minimum_size = Vector2(0.0, 38.0)
 	column.add_child(close)
 	end_overlay.hide()
@@ -1899,7 +1907,8 @@ func _load_game() -> void:
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
-	return title_open or stocks_open
+	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
+	return title_open or stocks_open or inspect_open
 
 func _load_blocked_by_presentation() -> bool:
 	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
@@ -2873,6 +2882,7 @@ func _update_end_overlay(phase: String) -> void:
 	end_title.text = "本局結算"
 	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
 	end_overlay.show()
+	end_overlay.move_to_front()
 
 func _update_financial_popup() -> void:
 	if financial_popup == null: return

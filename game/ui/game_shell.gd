@@ -7,6 +7,7 @@ class_name RichmanGameShell
 ## ownership of GameState and connects these signals to the existing actions.
 
 const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
+const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
@@ -56,6 +57,10 @@ var board_host: Control
 var hud_panel: Control
 var calendar_panel: Control
 var minimap: Control
+var full_map_view: Control
+var player_inspect_panel: Control
+var player_inspect_buttons: HBoxContainer
+var player_inspect_detail: Label
 
 var title_start_button: Button
 var title_load_button: Button
@@ -87,6 +92,8 @@ var calendar_mode_label: Label
 var title_visible := true
 var active_tab := "cash"
 var calendar_mode := "day"
+var full_map_visible := false
+var _inspect_player_index := -1
 var snapshot: Dictionary = {}
 var map_definition: Dictionary = {}
 var _player_wealth := -1
@@ -128,6 +135,7 @@ func _build_reference_canvas() -> void:
 	add_child(reference_canvas)
 	_build_title_screen()
 	_build_game_screen()
+	_build_player_inspector()
 
 
 func _layout_reference_canvas() -> void:
@@ -434,6 +442,67 @@ func _build_calendar_and_minimap() -> void:
 	minimap.pan_requested.connect(func(delta: Vector2) -> void: minimap_pan_requested.emit(delta))
 	minimap.node_selected.connect(func(index: int) -> void: minimap_node_requested.emit(index))
 	game_screen.add_child(minimap)
+	full_map_view = SourceMinimap.new()
+	full_map_view.name = "SourceFullMap"
+	full_map_view.position = BOARD_RECT.position
+	full_map_view.size = BOARD_RECT.size
+	full_map_view.custom_minimum_size = BOARD_RECT.size
+	full_map_view.z_index = 5
+	full_map_view.hide()
+	full_map_view.pan_requested.connect(func(delta: Vector2) -> void: minimap_pan_requested.emit(delta))
+	full_map_view.node_selected.connect(func(index: int) -> void: minimap_node_requested.emit(index))
+	game_screen.add_child(full_map_view)
+
+
+func _build_player_inspector() -> void:
+	player_inspect_panel = Control.new()
+	player_inspect_panel.name = "SourcePlayerInspect"
+	player_inspect_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	player_inspect_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	player_inspect_panel.z_index = 40
+	player_inspect_panel.hide()
+	reference_canvas.add_child(player_inspect_panel)
+	var shade := ColorRect.new()
+	shade.name = "InspectShade"
+	shade.color = Color(0.03, 0.08, 0.13, 0.78)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_inspect_panel.add_child(shade)
+	var card := PanelContainer.new()
+	card.name = "InspectCard"
+	card.position = Vector2(54.0, 48.0)
+	card.size = Vector2(532.0, 384.0)
+	card.add_theme_stylebox_override("panel", _style(Color("#20394b"), Color("#d9a958"), 12, 2))
+	player_inspect_panel.add_child(card)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 14)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 14)
+	card.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	margin.add_child(column)
+	var heading := _label("玩家檢視", 20, TEXT_GOLD)
+	heading.name = "InspectHeading"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(heading)
+	player_inspect_buttons = HBoxContainer.new()
+	player_inspect_buttons.name = "InspectPlayers"
+	player_inspect_buttons.add_theme_constant_override("separation", 6)
+	player_inspect_buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_child(player_inspect_buttons)
+	player_inspect_detail = _label("等待棋局資料。", 11, TEXT_MAIN)
+	player_inspect_detail.name = "InspectDetail"
+	player_inspect_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	player_inspect_detail.clip_text = true
+	player_inspect_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(player_inspect_detail)
+	var close := _action_button("返回", "inspect_close")
+	close.name = "InspectClose"
+	close.custom_minimum_size = Vector2(0.0, 34.0)
+	close.pressed.connect(close_player_inspector)
+	column.add_child(close)
 
 
 func _emit_toolbar(key: String) -> void:
@@ -468,6 +537,24 @@ func toggle_map_view() -> void:
 	_toggle_calendar_mode()
 
 
+func toggle_full_map_view() -> void:
+	if full_map_view == null:
+		return
+	full_map_visible = not full_map_visible
+	full_map_view.visible = full_map_visible
+	if full_map_visible:
+		if action_strip != null:
+			action_strip.hide()
+		full_map_view.refresh_viewport()
+	else:
+		if action_strip != null:
+			action_strip.show()
+
+
+func is_full_map_visible() -> bool:
+	return full_map_visible
+
+
 func select_tab(tab_id: String) -> void:
 	if tab_buttons.has(tab_id):
 		_select_tab(tab_id)
@@ -475,6 +562,9 @@ func select_tab(tab_id: String) -> void:
 
 func show_title() -> void:
 	title_visible = true
+	close_player_inspector()
+	if full_map_visible:
+		toggle_full_map_view()
 	title_screen.show()
 	game_screen.hide()
 
@@ -505,6 +595,8 @@ func set_board_view(view: Control) -> void:
 	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if minimap != null and minimap.has_method("set_board_view"):
 		minimap.call("set_board_view", view)
+	if full_map_view != null and full_map_view.has_method("set_board_view"):
+		full_map_view.call("set_board_view", view)
 	_refresh_minimap_if_camera_changed(true)
 
 
@@ -516,6 +608,8 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 	_render_calendar()
 	if minimap != null and minimap.has_method("set_snapshot"):
 		minimap.call("set_snapshot", snapshot, map_definition)
+	if full_map_view != null and full_map_view.has_method("set_snapshot"):
+		full_map_view.call("set_snapshot", snapshot, map_definition)
 
 
 func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String, buy_disabled: bool, upgrade_text: String, upgrade_disabled: bool, end_disabled: bool, hint: String, routes: Array = [], phase: String = "", action_options: Array = []) -> void:
@@ -559,11 +653,92 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	route_buttons.visible = phase == "await_route" and not routes.is_empty()
 	action_hint_label.visible = phase in ["await_roll", "await_action", "await_route"] and (roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible)
 	action_strip.visible = roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible
+	if full_map_visible:
+		action_strip.hide()
+
+
+func open_player_inspector(player_index := -1) -> void:
+	var players: Variant = snapshot.get("players", [])
+	if not players is Array or players.is_empty() or player_inspect_panel == null:
+		return
+	var current_index := int(snapshot.get("current_player", 0))
+	_inspect_player_index = current_index if player_index < 0 else player_index
+	_inspect_player_index = clampi(_inspect_player_index, 0, players.size() - 1)
+	_render_player_inspector()
+	player_inspect_panel.show()
+
+
+func close_player_inspector() -> void:
+	if player_inspect_panel != null:
+		player_inspect_panel.hide()
+
+
+func is_player_inspector_visible() -> bool:
+	return player_inspect_panel != null and player_inspect_panel.visible
+
+
+func _select_inspected_player(player_index: int) -> void:
+	_inspect_player_index = player_index
+	_render_player_inspector()
+
+
+func _render_player_inspector() -> void:
+	if player_inspect_buttons == null or player_inspect_detail == null:
+		return
+	var players: Variant = snapshot.get("players", [])
+	if not players is Array or players.is_empty():
+		player_inspect_detail.text = "等待棋局資料。"
+		return
+	for child in player_inspect_buttons.get_children():
+		player_inspect_buttons.remove_child(child)
+		child.queue_free()
+	_inspect_player_index = clampi(_inspect_player_index, 0, players.size() - 1)
+	for index in range(players.size()):
+		var player: Dictionary = players[index] if players[index] is Dictionary else {}
+		var button := _action_button(str(player.get("name", "玩家 %d" % (index + 1))), "inspect_player")
+		button.name = "InspectPlayer_%d" % index
+		button.toggle_mode = true
+		button.button_pressed = index == _inspect_player_index
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.pressed.connect(_select_inspected_player.bind(index))
+		player_inspect_buttons.add_child(button)
+	player_inspect_detail.text = _player_inspection_text(_inspect_player_index)
+
+
+func _player_inspection_text(player_index: int) -> String:
+	var players: Array = snapshot.get("players", [])
+	if player_index < 0 or player_index >= players.size() or not players[player_index] is Dictionary:
+		return "等待棋局資料。"
+	var player: Dictionary = players[player_index]
+	var lines: Array[String] = []
+	lines.append("%s · 玩家 %d" % [str(player.get("name", "玩家")), player_index + 1])
+	lines.append("現金 %s · 存款 %s" % [_money(int(player.get("cash", 0))), _money(int(player.get("deposit", 0)))])
+	if player_index == int(snapshot.get("current_player", -1)) and _player_wealth >= 0:
+		lines.append("總資產 %s" % _money(_player_wealth))
+	var property_lines := _property_lines(player.get("properties", []) as Array)
+	lines.append("地產：%s" % ("；".join(property_lines) if not property_lines.is_empty() else "無"))
+	var holdings: Variant = player.get("stocks", {})
+	var stock_lines: Array[String] = []
+	if holdings is Dictionary:
+		for symbol in holdings:
+			var amount := int(holdings[symbol])
+			if amount > 0:
+				stock_lines.append("%s × %d · %s" % [_stock_display_name(str(symbol)), amount, _stock_price_text(str(symbol))])
+	stock_lines = _limit_lines(stock_lines, 5)
+	lines.append("股票：%s" % ("；".join(stock_lines) if not stock_lines.is_empty() else "無"))
+	var tools: Variant = player.get("tools", {})
+	lines.append("點券 %d · 卡片 %d · 道具 %d 種" % [int(player.get("points", 0)), (player.get("cards", []) as Array).size(), tools.size() if tools is Dictionary else 0])
+	var statuses := _player_status_lines(player)
+	if not statuses.is_empty():
+		lines.append("狀態：" + "；".join(statuses))
+	return "\n".join(lines)
 
 
 func refresh_minimap() -> void:
 	if minimap != null and minimap.has_method("refresh_viewport"):
 		minimap.call("refresh_viewport")
+	if full_map_view != null and full_map_view.has_method("refresh_viewport"):
+		full_map_view.call("refresh_viewport")
 
 
 func _refresh_minimap_if_camera_changed(force := false) -> void:
@@ -599,7 +774,10 @@ func _render_hud() -> void:
 	deposit_label.text = _money(int(player.get("deposit", 0)))
 	wealth_label.text = _money(_player_wealth) if _player_wealth >= 0 else "未知"
 	var properties: Array = player.get("properties", [])
-	property_label.text = "地產\n%d 筆\n估值 %s" % [properties.size(), _money(int(player.get("property_values", 0)))]
+	var property_lines := _property_lines(properties)
+	property_label.text = "地產\n%d 筆 · 估值 %s" % [properties.size(), _money(int(player.get("property_values", 0)))]
+	if not property_lines.is_empty():
+		property_label.text += "\n" + "\n".join(property_lines)
 	var holdings: Dictionary = player.get("stocks", {})
 	var total_shares := 0
 	var stock_lines: Array[String] = []
@@ -608,12 +786,21 @@ func _render_hud() -> void:
 		if amount <= 0:
 			continue
 		total_shares += amount
-		stock_lines.append("%s × %d" % [_stock_display_name(str(symbol)), amount])
-	stock_label.text = "股票\n%d 股\n%s" % [total_shares, "、".join(stock_lines)]
+		stock_lines.append("%s × %d · %s" % [_stock_display_name(str(symbol)), amount, _stock_price_text(str(symbol))])
+	stock_lines = _limit_lines(stock_lines, 5)
+	stock_label.text = "股票\n%d 股" % total_shares
+	if not stock_lines.is_empty():
+		stock_label.text += "\n" + "\n".join(stock_lines)
 	if stock_lines.is_empty():
 		stock_label.text = "股票\n0 股"
 	var tools: Dictionary = player.get("tools", {})
-	other_label.text = "其他\n點券 %d · 卡片 %d\n道具 %d 種" % [int(player.get("points", 0)), (player.get("cards", []) as Array).size(), tools.size()]
+	var other_lines: Array[String] = [
+		"點券 %d · 卡片 %d" % [int(player.get("points", 0)), (player.get("cards", []) as Array).size()],
+		"道具 %d 種" % tools.size(),
+	]
+	other_lines.append_array(_player_status_lines(player))
+	other_lines = _limit_lines(other_lines, 7)
+	other_label.text = "其他\n" + "\n".join(other_lines)
 	if not _source_edition.is_empty():
 		var frame := _visuals.ui(_source_edition, "Data", 2, clampi(character_id, 0, 11))
 		portrait.texture = _source_texture(frame)
@@ -644,6 +831,8 @@ func _render_hud() -> void:
 	for key in tab_buttons:
 		var tab: Button = tab_buttons[key]
 		tab.modulate = Color.WHITE if key == active_tab else Color(0.72, 0.82, 0.82, 1.0)
+	if player_inspect_panel != null and player_inspect_panel.visible:
+		_render_player_inspector()
 
 
 func _render_calendar() -> void:
@@ -699,6 +888,95 @@ func _stock_display_name(symbol: String) -> String:
 			if definition_name is String and not str(definition_name).is_empty():
 				return str(definition_name)
 	return normalized.to_upper()
+
+
+func _property_lines(properties: Array) -> Array[String]:
+	var board: Variant = snapshot.get("board", [])
+	var lines: Array[String] = []
+	if not board is Array:
+		return lines
+	for property_value in properties:
+		var index := int(property_value)
+		var tile: Dictionary = board[index] if index >= 0 and index < board.size() and board[index] is Dictionary else {}
+		if tile.is_empty():
+			for candidate in board:
+				if candidate is Dictionary and int(candidate.get("source_object_id", -1)) == index:
+					tile = candidate
+					break
+		if tile.is_empty():
+			continue
+		var name := _short_text(str(tile.get("name", "地產 %02d" % (index + 1))), 10)
+		var level := int(tile.get("building_level", tile.get("level", 0)))
+		lines.append("%s Lv%d" % [name, level])
+	return _limit_lines(lines, 6)
+
+
+func _stock_price_text(symbol: String) -> String:
+	var normalized := symbol.to_lower().strip_edges()
+	var market: Variant = snapshot.get("market", {})
+	if market is Dictionary:
+		var rows: Variant = market.get("rows", {})
+		if rows is Dictionary:
+			var row: Variant = rows.get(normalized, rows.get(StringName(normalized), {}))
+			if row is Dictionary and (row.has("price") or row.has("value")):
+				return "$%.2f" % float(row.get("price", row.get("value", 0.0)))
+		var prices: Variant = market.get("prices", {})
+		if prices is Dictionary:
+			var quote: Variant = prices.get(normalized, prices.get(StringName(normalized), null))
+			if quote is Dictionary and (quote.has("price") or quote.has("value")):
+				return "$%.2f" % float(quote.get("price", quote.get("value", 0.0)))
+			if quote is int or quote is float:
+				return "$%.2f" % float(quote)
+	return "市價未知"
+
+
+func _player_status_lines(player: Dictionary) -> Array[String]:
+	var lines: Array[String] = []
+	var god_id := int(player.get("god_id", 0))
+	if god_id > 0:
+		var god_days := -1
+		var actors: Variant = snapshot.get("god_objects", [])
+		if actors is Array:
+			for actor in actors:
+				if actor is Dictionary and int(actor.get("owner", -1)) == int(player.get("id", -1)) and int(actor.get("id", 0)) == god_id:
+					god_days = int(actor.get("days", 0))
+					break
+		lines.append("%s%s" % [OriginalGods.name_for(god_id), " · %d 天" % god_days if god_days >= 0 else " · 附身"])
+	var hospital_days := int(player.get("hospital_days", 0))
+	if hospital_days > 0:
+		lines.append("住院 · %d 天" % hospital_days)
+	var prison_days := int(player.get("prison_days", 0))
+	if prison_days > 0:
+		lines.append("服刑 · %d 天" % prison_days)
+	var skip_turns := int(player.get("skip_turns", 0))
+	if skip_turns > 0:
+		lines.append("停留 · %d 回合" % skip_turns)
+	var bomb_steps := int(player.get("bomb_steps", 0))
+	if bomb_steps > 0:
+		lines.append("定時炸彈 · %d 步" % bomb_steps)
+	var insurance_status := int(player.get("insurance_status", 0))
+	if insurance_status > 0:
+		lines.append("保險 · %d 天" % insurance_status)
+	var alliance: Variant = player.get("alliance", {})
+	if alliance is Dictionary and not alliance.is_empty():
+		lines.append("同盟 · 剩餘 %d 回合" % int(alliance.get("turns", 0)))
+	return _limit_lines(lines, 5)
+
+
+func _limit_lines(lines: Array[String], maximum: int) -> Array[String]:
+	if lines.size() <= maximum:
+		return lines
+	var result: Array[String] = []
+	for index in range(maximum - 1):
+		result.append(lines[index])
+	result.append("…另 %d 項" % (lines.size() - (maximum - 1)))
+	return result
+
+
+func _short_text(value: String, maximum: int) -> String:
+	if value.length() <= maximum:
+		return value
+	return value.substr(0, maxi(1, maximum - 1)) + "…"
 
 
 func _weekday_text(weekday: int) -> String:

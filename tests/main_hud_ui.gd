@@ -5,6 +5,7 @@ const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const CompanyFixture = preload("res://tests/fixtures/company_fixture.gd")
+const OriginalGods = preload("res://game/content/original_gods.gd")
 
 var checks := 0
 var failures := 0
@@ -138,8 +139,7 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	ui._refresh_from_state()
 
 
-func _test_source_purchase_offer(ui: Control, shell: Control) -> void:
-	var game := _set_human_graph_game(ui)
+func _test_source_purchase_offer(ui: Control, shell: Control, game: Object) -> void:
 	game.state.current_player = 0
 	game.state.players[0].position = 2
 	game.state.players[0].previous_position = 0
@@ -169,6 +169,107 @@ func _test_source_purchase_offer(ui: Control, shell: Control) -> void:
 	_expect(upgrade_hint.contains("$300"), "source owned-property offer uses the authoritative upgrade price")
 	_expect(upgrade_hint.contains("YES") and upgrade_hint.contains("NO"), "source owned-property offer exposes confirm and decline controls")
 	_expect(game.to_json() == before_upgrade_refresh, "source owned-property refresh does not mutate simulation state")
+	game.state.phase = "await_roll"
+	game.state.players[0].position = 0
+	game.state.players[0].previous_position = -1
+	game.state.board[2].owner = -1
+	game.state.players[0].properties = []
+	game.state.players[0].cash = 100000
+	game.state.property_action_used = false
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+
+
+func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -> void:
+	var before: String = game.to_json()
+	var snapshot: Dictionary = game.get_snapshot().duplicate(true)
+	var player: Dictionary = snapshot.players[0]
+	player.properties = [2, 3]
+	player.stocks = {"s01": 3}
+	player.god_id = 1
+	player.hospital_days = 2
+	snapshot.board[2].name = "東區大街"
+	snapshot.board[2].building_level = 2
+	snapshot.board[3].name = "西區大街"
+	snapshot.board[3].building_level = 1
+	snapshot.god_objects = [{"id": 1, "owner": 0, "days": 5}]
+	snapshot.market = {"rows": {"s01": {"name": "來源企業", "price": 123.45}}}
+	shell.sync_snapshot(snapshot, {}, 9999)
+	shell.select_tab("property")
+	_expect(shell.property_label.text.contains("東區大街 Lv2"), "source property HUD lists the first property name and level")
+	_expect(shell.property_label.text.contains("西區大街 Lv1"), "source property HUD lists the second property name and level")
+	shell.select_tab("stock")
+	_expect(shell.stock_label.text.contains("來源企業 × 3"), "source stock HUD lists the display name and holding")
+	_expect(shell.stock_label.text.contains("$123.45"), "source stock HUD lists the authoritative current price")
+	shell.select_tab("other")
+	_expect(shell.other_label.text.contains(OriginalGods.name_for(1)), "source other HUD lists the attached god")
+	_expect(shell.other_label.text.contains("5 天"), "source other HUD lists the attached god duration")
+	_expect(shell.other_label.text.contains("住院 · 2 天"), "source other HUD lists the active status duration")
+	_expect(game.to_json() == before, "source HUD detail rendering leaves the live game object untouched")
+	ui._refresh_from_state()
+
+
+func _test_source_full_map_and_player_inspect(ui: Control, shell: Control, game: Object) -> void:
+	var before_map: String = game.to_json()
+	var map_button: Button = shell.toolbar_buttons.get("map") as Button
+	var calendar_visible: bool = shell.calendar_panel.visible
+	map_button.pressed.emit()
+	await process_frame
+	_expect(shell.is_full_map_visible(), "source map command opens the full-map view")
+	_expect(shell.full_map_view.visible and shell.full_map_view.size == Vector2(440.0, 440.0), "full-map view occupies the source board region")
+	_expect(shell.calendar_panel.visible == calendar_visible and not shell.minimap.visible, "full-map command does not reduce to the calendar minimap toggle")
+	var full_map_points: Array = shell.full_map_view.call("_board_points")
+	_expect(full_map_points.size() == game.state.board.size(), "full-map view projects every board node")
+	_expect(game.to_json() == before_map, "full-map command does not mutate simulation state")
+	map_button.pressed.emit()
+	await process_frame
+	_expect(not shell.is_full_map_visible() and not shell.full_map_view.visible, "source map command closes the full-map view")
+
+	var before_inspect: String = game.to_json()
+	var inspect_button: Button = shell.toolbar_buttons.get("inspect") as Button
+	inspect_button.pressed.emit()
+	await process_frame
+	_expect(shell.is_player_inspector_visible(), "source inspect command opens the player inspector")
+	_expect(shell.player_inspect_buttons.get_child_count() == game.state.players.size(), "player inspector exposes every player from the snapshot")
+	_expect(shell.player_inspect_detail.text.contains(str(game.state.players[0].name)), "player inspector starts on the current player")
+	var other_button: Button = shell.player_inspect_buttons.get_child(1) as Button if shell.player_inspect_buttons.get_child_count() > 1 else null
+	if other_button != null:
+		other_button.pressed.emit()
+		_expect(shell.player_inspect_detail.text.contains(str(game.state.players[1].name)), "player inspector selects another player from the existing snapshot")
+	_expect(game.to_json() == before_inspect, "player inspection and selection do not mutate simulation state")
+	_expect(ui._source_modal_open(), "player inspector blocks simulation shortcuts while open")
+	var space := InputEventKey.new()
+	space.keycode = KEY_SPACE
+	space.pressed = true
+	ui._unhandled_input(space)
+	_expect(game.to_json() == before_inspect, "player inspector blocks a queued roll shortcut")
+	shell.close_player_inspector()
+	await process_frame
+	_expect(not shell.is_player_inspector_visible(), "player inspector closes through its presentation API")
+
+
+func _test_settlement_overlay_input(ui: Control, shell: Control) -> void:
+	var game: Object = ui.game_state
+	if game == null:
+		_expect(false, "settlement overlay has a live game fixture")
+		return
+	game.state.phase = "game_over"
+	game.state.winner = 0
+	game._sync_state()
+	var before: String = game.to_json()
+	ui._refresh_from_state()
+	await process_frame
+	var close: Button = ui.end_overlay.find_child("SettlementClose", true, false) as Button
+	var restart: Button = ui.end_overlay.find_child("SettlementRestart", true, false) as Button
+	_expect(ui.end_overlay.visible and ui.end_overlay.z_index > shell.z_index and ui.end_overlay.mouse_filter == Control.MOUSE_FILTER_STOP, "settlement overlay renders above and captures input over the source shell")
+	_expect(close != null and close.visible and not close.disabled, "settlement overlay exposes a usable return control")
+	_expect(restart != null and restart.visible and not restart.disabled, "settlement overlay exposes a usable restart control")
+	if close != null:
+		close.pressed.emit()
+		await process_frame
+	_expect(not ui.end_overlay.visible, "settlement return control receives input above the source shell")
+	_expect(game.to_json() == before, "settlement return control does not mutate simulation state")
 
 
 func _test_stock_names(shell: Control) -> void:
@@ -363,12 +464,15 @@ func _run() -> void:
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
 	_test_hud_tabs_and_actions(ui, shell, game)
-	_test_source_purchase_offer(ui, shell)
+	_test_source_purchase_offer(ui, shell, game)
+	_test_source_hud_detail_values(ui, shell, game)
+	await _test_source_full_map_and_player_inspect(ui, shell, game)
 	_test_minimap_input(ui, shell, game)
 	_test_source_roll_presentation_gate(ui, shell)
 	await _test_source_stock_modal_gate(ui, shell)
 	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)
+	await _test_settlement_overlay_input(ui, shell)
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	print("Main HUD checks: %d, failures: %d" % [checks, failures])

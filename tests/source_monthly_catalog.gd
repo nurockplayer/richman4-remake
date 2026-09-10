@@ -9,14 +9,12 @@ extends "res://tests/source_title_ui.gd"
 ## through MainUI's normal invoke/handle boundary.
 
 const Core = preload("res://game/core/game_state.gd")
+const Calendar = preload("res://game/core/game_calendar.gd")
 
 const PLAYER_COUNT := 4
 const SEARCH_SEED_LIMIT := 16
 const ACTION_LIMIT := 200
 const CATALOG_MAP_COUNT := 12
-const EXPECTED_START_DATE := {"year": 1998, "month": 1, "day": 1}
-const EXPECTED_DIVIDEND_DATE := {"year": 1998, "month": 1, "day": 15}
-const EXPECTED_INTEREST_DATE := {"year": 1998, "month": 2, "day": 1}
 
 var _checks := 0
 var _failures := 0
@@ -87,7 +85,10 @@ func _run_catalog_case(ui: Control, viewport: SubViewport, edition: String, map_
 		return
 
 	var setup_options: Dictionary = ui._default_setup_options(PLAYER_COUNT, definition)
-	_expect(_date_equal(setup_options.get("start_date", {}), EXPECTED_START_DATE), "%s map %d accepted defaults start at 1998-01-01" % [edition, map_number])
+	var start_date: Dictionary = setup_options.get("start_date", {}).duplicate(true)
+	_expect(Calendar.is_valid(start_date), "%s map %d accepted defaults supply a valid source calendar date" % [edition, map_number])
+	var dividend_date := _next_calendar_day(start_date, 15)
+	var interest_date := _next_calendar_day(start_date, 1)
 	_expect(bool(setup_options.get("original_companies", false)), "%s map %d accepted defaults enable original companies" % [edition, map_number])
 	_expect(bool(setup_options.get("original_facilities", false)), "%s map %d accepted defaults enable original facilities" % [edition, map_number])
 	# The source setup factory accepts human_flags as the resolved player-control
@@ -122,8 +123,8 @@ func _run_catalog_case(ui: Control, viewport: SubViewport, edition: String, map_
 	_expect(game.get_stock_symbols().size() == 12, "%s map %d exposes the actual twelve-stock capability" % [edition, map_number])
 	_expect(bool(initial.get("original_companies", false)) and bool(initial.get("original_facilities", false)), "%s map %d preserves accepted source capability flags" % [edition, map_number])
 	_expect(initial.get("initial_human_flags", []) == [false, false, false, false], "%s map %d preserves the supported all-AI setup option" % [edition, map_number])
-	_expect(_date_equal(initial.get("start_date", {}), EXPECTED_START_DATE), "%s map %d starts the real calendar at 1998-01-01" % [edition, map_number])
-	_expect(_date_equal(initial.get("date", {}), EXPECTED_START_DATE) and int(initial.get("day", 0)) == 1 and int(initial.get("elapsed", -1)) == 0, "%s map %d initial calendar snapshot is day one" % [edition, map_number])
+	_expect(_date_equal(initial.get("start_date", {}), start_date), "%s map %d starts the real calendar at the unchanged source setup date" % [edition, map_number])
+	_expect(_date_equal(initial.get("date", {}), start_date) and int(initial.get("day", 0)) == 1 and int(initial.get("elapsed", -1)) == 0, "%s map %d initial calendar snapshot is day one" % [edition, map_number])
 	_expect(bool(Core.validate_save(game.to_dict()).get("ok", false)), "%s map %d initial source save validates" % [edition, map_number])
 	var initial_json: String = game.to_json()
 	var initial_decoded: Variant = JSON.parse_string(initial_json)
@@ -179,7 +180,7 @@ func _run_catalog_case(ui: Control, viewport: SubViewport, edition: String, map_
 			_expect(bool(panel.call("is_model_valid")), "%s map %d real %s presenter accepts the authoritative model" % [edition, map_number, kind])
 			_expect(panel.call("view_model") == report, "%s map %d %s presenter displays the exact detached core report" % [edition, map_number, kind])
 			_expect(str(report.get("edition", "")) == edition, "%s map %d %s report preserves the source edition" % [edition, map_number, kind])
-			_expect(_date_equal(report.get("date", {}), EXPECTED_DIVIDEND_DATE if kind == "dividend" else EXPECTED_INTEREST_DATE), "%s map %d %s report has the expected 1998 calendar date" % [edition, map_number, kind])
+			_expect(_date_equal(report.get("date", {}), dividend_date if kind == "dividend" else interest_date), "%s map %d %s report occurs at the next real calendar boundary" % [edition, map_number, kind])
 			if panel.has_method("source_art_available"):
 				var art_available: bool = bool(panel.call("source_art_available"))
 				print("SOURCE_ART: edition=%s map=%d kind=%s display=%s available=%s status=%s" % [edition, map_number, kind, DisplayServer.get_name(), art_available, JSON.stringify(panel.call("source_art_status"))])
@@ -391,15 +392,24 @@ func _verify_block_and_ack(ui: Control, viewport: SubViewport, game: Object, con
 
 
 func _wait_for_report(ui: Control, controller: Control) -> void:
-	for _frame in range(1200):
+	var deadline := Time.get_ticks_msec() + 15000
+	while Time.get_ticks_msec() < deadline:
 		if controller.report_panel != null and is_instance_valid(controller.report_panel):
 			var panel: Control = controller.report_panel
 			if panel.has_method("set_auto_advance_seconds"):
 				panel.call("set_auto_advance_seconds", 0.0)
 		if not ui._presentation_busy and controller.is_open() and controller.report_panel != null:
 			return
-		await process_frame
+		await create_timer(0.01).timeout
 	_expect(false, "monthly presenter did not become visible within the bounded movement wait")
+
+
+func _next_calendar_day(start_date: Dictionary, day_of_month: int) -> Dictionary:
+	for offset in range(1, 33):
+		var candidate := Calendar.add_days(start_date, offset)
+		if int(candidate.get("day", 0)) == day_of_month:
+			return candidate
+	return {}
 
 
 func _fresh_monthly_reports(before: Dictionary, after: Dictionary, seen_report_keys: Dictionary) -> Array:

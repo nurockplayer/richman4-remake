@@ -54,7 +54,13 @@ event-log overlap 檢查，並防止同一 action 重複交付。一般 refresh�
   匯入 83／1 chunks；原有資源及所有非 UI manifest 欄位逐項保持相同。未更新 FULL lane。
 - 實際原生畫面已揭露 fallback 遮住利息背景、JSON logical metadata 被誤拒而使角色偏移，
   以及分紅黑底／公司標題位置問題；目前仍在修正。舊資產 fixture 也須補入新 required resources。
-  Actual-catalog 日曆測試與修正後的原版逐幕比對尚未完成，不宣稱呈現通過。
+- Actual catalog 的 Game:3／MultiverseJourney:7 皆由既有 `_default_setup_options`／`_new_game`
+  起局，使用支援的四人 AI 選項，未注入日期、位置、RNG 或報表事件。2026-09-11 開局、seed1，
+  分紅均在第 16 次 public AI action；利息分別在第 80／81 次。Headless 378／0；較早回合
+  加速省略移動呈現，產生報表的回合仍經過正常 invoke／handle，使用真實 presenter 與 viewport release。
+  初版測試 `74ccc37` 誤把起局系統日期要求為 1998-01-01；修正的是測試日期假設及等候時間，
+  沒有改動產品預設日期。新聞關閉後佇列停住則由上述獨立行為 RED 證明並修正。
+  修正後的原版逐幕比對仍未完成，不宣稱呈現通過。
 
 原生 SubViewport 不等於普通 OS 輸入；逐幕原版對照、獨立審查與目前套件 gate 均另行驗收。
 本文件不宣稱 S17／S18 或 Mission 完成。

@@ -99,6 +99,10 @@ var news_popup: PopupPanel
 var fate_popup: PopupPanel
 var bank_deposit_button: Button
 var bank_withdraw_button: Button
+var bank_deposit_amount: SpinBox
+var bank_withdraw_amount: SpinBox
+var bank_deposit_all_button: Button
+var bank_withdraw_all_button: Button
 var new_game_popup: PopupPanel
 var seed_input: LineEdit
 var player_count_option: OptionButton
@@ -193,7 +197,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_on_roll_pressed()
 				get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_N:
-			_restart_game()
+			if state.get("phase", "") == "game_over":
+				_restart_game()
+			else:
+				_on_new_game_pressed()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_S and event.ctrl_pressed:
 			_save_game()
@@ -638,15 +645,33 @@ func _build_popups() -> void:
 	new_game_actions.add_child(new_game_confirm_button)
 	_rebuild_character_controls(4)
 
-	bank_popup = _make_popup(Vector2i(430, 276))
+	bank_popup = _make_popup(Vector2i(520, 390))
 	var bank_box := _popup_box(bank_popup)
 	bank_box.add_child(_make_label("銀行帳戶", 19, TEXT_MAIN))
-	var bank_description := _make_label("管理現金與存款。每次操作金額為 $500。", 11, TEXT_MUTED)
+	var bank_description := _make_label("管理現金與存款。可選擇金額或使用全部。", 11, TEXT_MUTED)
 	bank_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bank_box.add_child(bank_description)
 	var bank_balance := _make_label("", 14, TEXT_GOLD)
 	bank_balance.name = "Balance"
 	bank_box.add_child(bank_balance)
+	var deposit_input_row := HBoxContainer.new()
+	deposit_input_row.add_theme_constant_override("separation", 8)
+	bank_box.add_child(deposit_input_row)
+	deposit_input_row.add_child(_make_label("存入金額", 11, TEXT_MAIN))
+	bank_deposit_amount = _make_bank_amount_input("BankDepositAmount")
+	deposit_input_row.add_child(bank_deposit_amount)
+	bank_deposit_all_button = _make_button("全部存入", _on_deposit_all_pressed)
+	bank_deposit_all_button.name = "BankDepositAll"
+	deposit_input_row.add_child(bank_deposit_all_button)
+	var withdraw_input_row := HBoxContainer.new()
+	withdraw_input_row.add_theme_constant_override("separation", 8)
+	bank_box.add_child(withdraw_input_row)
+	withdraw_input_row.add_child(_make_label("提取金額", 11, TEXT_MAIN))
+	bank_withdraw_amount = _make_bank_amount_input("BankWithdrawAmount")
+	withdraw_input_row.add_child(bank_withdraw_amount)
+	bank_withdraw_all_button = _make_button("全部提取", _on_withdraw_all_pressed)
+	bank_withdraw_all_button.name = "BankWithdrawAll"
+	withdraw_input_row.add_child(bank_withdraw_all_button)
 	var bank_actions := HBoxContainer.new()
 	bank_actions.add_theme_constant_override("separation", 8)
 	bank_box.add_child(bank_actions)
@@ -658,6 +683,8 @@ func _build_popups() -> void:
 	var withdraw := bank_withdraw_button
 	withdraw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bank_actions.add_child(withdraw)
+	bank_deposit_amount.value_changed.connect(_on_bank_deposit_amount_changed)
+	bank_withdraw_amount.value_changed.connect(_on_bank_withdraw_amount_changed)
 	bank_loan_status = _make_label("", 11, TEXT_GOLD)
 	bank_loan_status.name = "LoanStatus"
 	bank_box.add_child(bank_loan_status)
@@ -841,6 +868,20 @@ func _make_date_spinbox(low: int, high: int, width: float) -> SpinBox:
 	field.allow_lesser = false
 	field.custom_minimum_size = Vector2(width, 34.0)
 	field.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	field.add_theme_font_size_override("font_size", 11)
+	return field
+
+func _make_bank_amount_input(node_name: String) -> SpinBox:
+	var field := SpinBox.new()
+	field.name = node_name
+	field.min_value = 1
+	field.max_value = 1000000000000
+	field.step = 1
+	field.allow_greater = false
+	field.allow_lesser = false
+	field.value = 500
+	field.custom_minimum_size = Vector2(150.0, 34.0)
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	field.add_theme_font_size_override("font_size", 11)
 	return field
 
@@ -1665,7 +1706,7 @@ func _on_research_pressed() -> void:
 		button.name = "ResearchTool_%d" % (index + 9)
 		button.disabled = index >= level
 		if index > 0:
-			button.tooltip_text = "可生產並持有；此工具的使用效果尚未還原。"
+			button.tooltip_text = "可生產並持有；使用方式依目前對局能力與回合狀態決定。" if _item_implemented("tool", tool_id) else "可生產並持有；目前對局未提供可用的使用效果。"
 		research_popup_list.add_child(button)
 	research_popup.popup_centered(Vector2i(590, 430))
 	_settle_inventory_popup(research_popup, Vector2i(590, 430))
@@ -1678,7 +1719,7 @@ func _on_end_turn_pressed() -> void:
 	_handle_result(result)
 
 func _on_deposit_pressed() -> void:
-	var amount := mini(500, maxi(0, int(_current_player().get("cash", 0))))
+	var amount := _bank_deposit_input_amount()
 	if amount <= 0:
 		return
 	var result := _invoke_game("choose_action", ["deposit", {"amount": amount}])
@@ -1686,9 +1727,27 @@ func _on_deposit_pressed() -> void:
 	_handle_result(result)
 
 func _on_withdraw_pressed() -> void:
-	var amount := mini(500, int(_current_player().get("deposit", 0)))
+	var amount := _bank_withdraw_input_amount()
+	if amount <= 0:
+		return
 	var result := _invoke_game("choose_action", ["withdraw", {"amount": amount}])
 	_append_local_log("銀行提取 %s：%s" % [_format_money(amount), _result_text(result, "已送出提款指令。")])
+	_handle_result(result)
+
+func _on_deposit_all_pressed() -> void:
+	var amount := maxi(0, int(_current_player().get("cash", 0)))
+	if amount <= 0:
+		return
+	var result := _invoke_game("choose_action", ["deposit", {"amount": amount}])
+	_append_local_log("銀行存入全部 %s：%s" % [_format_money(amount), _result_text(result, "已送出存款指令。")])
+	_handle_result(result)
+
+func _on_withdraw_all_pressed() -> void:
+	var amount := _bank_withdraw_limit()
+	if amount <= 0:
+		return
+	var result := _invoke_game("choose_action", ["withdraw", {"amount": amount}])
+	_append_local_log("銀行提取全部 %s：%s" % [_format_money(amount), _result_text(result, "已送出提款指令。")])
 	_handle_result(result)
 
 func _on_loan_pressed() -> void:
@@ -1697,6 +1756,18 @@ func _on_loan_pressed() -> void:
 	var result := _invoke_game("choose_action", ["take_loan", {"amount": 10000}])
 	_append_local_log("申請貸款：%s" % _result_text(result, "已送出貸款申請。"))
 	_handle_result(result)
+
+func _on_bank_deposit_amount_changed(value: float) -> void:
+	if bank_deposit_button != null:
+		bank_deposit_button.text = "存入 %s" % _format_money(int(value))
+	if bank_deposit_amount != null and not bank_deposit_amount.get_line_edit().has_focus():
+		bank_deposit_amount.get_line_edit().text = str(int(value))
+
+func _on_bank_withdraw_amount_changed(value: float) -> void:
+	if bank_withdraw_button != null:
+		bank_withdraw_button.text = "提取 %s" % _format_money(int(value))
+	if bank_withdraw_amount != null and not bank_withdraw_amount.get_line_edit().has_focus():
+		bank_withdraw_amount.get_line_edit().text = str(int(value))
 
 func _on_cards_pressed() -> void:
 	if not _is_human_turn():
@@ -1737,17 +1808,54 @@ func _on_bank_pressed() -> void:
 	_update_bank_popup()
 	bank_popup.popup_centered()
 
+func _bank_deposit_limit() -> int:
+	return maxi(0, int(_current_player().get("cash", 0)))
+
+func _bank_withdraw_limit() -> int:
+	var player_limit := maxi(0, int(_current_player().get("deposit", 0)))
+	var bank_value: Variant = state.get("bank", {})
+	var bank_cash := maxi(0, int(bank_value.get("cash", 0))) if bank_value is Dictionary else 0
+	return mini(player_limit, bank_cash)
+
+func _bank_deposit_input_amount() -> int:
+	return _bank_input_amount(bank_deposit_amount, _bank_deposit_limit())
+
+func _bank_withdraw_input_amount() -> int:
+	return _bank_input_amount(bank_withdraw_amount, _bank_withdraw_limit())
+
+func _bank_input_amount(field: SpinBox, limit: int) -> int:
+	if field == null or limit <= 0:
+		return 0
+	var raw_text := field.get_line_edit().text.strip_edges()
+	if raw_text.is_empty() or not raw_text.is_valid_int():
+		return 0
+	var amount := int(raw_text)
+	return amount if amount > 0 and amount <= limit else 0
+
 func _update_bank_popup() -> void:
 	var balance: Label = bank_popup.get_node_or_null("MarginContainer/VBoxContainer/Balance")
 	var player := _current_player()
 	if balance != null:
 		balance.text = "現金 %s　·　存款 %s" % [_format_money(int(player.get("cash", 0))), _format_money(int(player.get("deposit", 0)))]
 	var options: Array = _as_array(state.get("action_options", []))
-	var deposit_amount := mini(500, maxi(0, int(player.get("cash", 0))))
-	bank_deposit_button.text = "存入 %s" % _format_money(deposit_amount)
-	bank_deposit_button.disabled = not _has_action_option(options, "deposit") or deposit_amount <= 0
-	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw")
-	bank_withdraw_button.text = "提取 %s" % _format_money(mini(500, int(player.get("deposit", 0))))
+	var deposit_limit := _bank_deposit_limit()
+	var withdraw_limit := _bank_withdraw_limit()
+	if bank_deposit_amount != null:
+		bank_deposit_amount.max_value = max(1, deposit_limit)
+		bank_deposit_amount.value = mini(500, deposit_limit) if deposit_limit > 0 else 1
+	if bank_withdraw_amount != null:
+		bank_withdraw_amount.max_value = max(1, withdraw_limit)
+		bank_withdraw_amount.value = mini(500, withdraw_limit) if withdraw_limit > 0 else 1
+	var deposit_input := int(bank_deposit_amount.value) if bank_deposit_amount != null else 0
+	var withdraw_input := int(bank_withdraw_amount.value) if bank_withdraw_amount != null else 0
+	bank_deposit_button.text = "存入 %s" % _format_money(deposit_input)
+	bank_deposit_button.disabled = not _has_action_option(options, "deposit") or deposit_limit <= 0
+	bank_deposit_all_button.disabled = not _has_action_option(options, "deposit") or deposit_limit <= 0
+	bank_withdraw_button.disabled = not _has_action_option(options, "withdraw") or withdraw_limit <= 0
+	bank_withdraw_all_button.disabled = not _has_action_option(options, "withdraw") or withdraw_limit <= 0
+	bank_deposit_amount.editable = not bank_deposit_button.disabled
+	bank_withdraw_amount.editable = not bank_withdraw_button.disabled
+	bank_withdraw_button.text = "提取 %s" % _format_money(withdraw_input)
 	var loan_block_days := int(player.get("loan_block_days", 0))
 	var loan_blocked := loan_block_days > 0 and loan_block_days < 128
 	bank_loan_status.text = "暫停貸款 · 剩餘自己的回合 %d 次" % loan_block_days if loan_blocked else "目前貸款 %s" % _format_money(int(player.get("loan", 0)))

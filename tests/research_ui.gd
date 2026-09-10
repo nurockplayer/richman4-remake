@@ -56,6 +56,14 @@ func run() -> void:
 	var high: Button = ui.find_child("ResearchTool_10", true, false)
 	expect(first != null and not first.disabled, "level-one tool can be selected")
 	expect(high != null and high.disabled, "higher-level product is disabled")
+	# Issue #98 acceptance: implemented research products must not advertise
+	# themselves as having an unrestored use effect. Availability by lab level
+	# is a separate concern from runtime implementation capability.
+	for tool_id in range(10, 14):
+		var tool_button := ui.find_child("ResearchTool_%d" % tool_id, true, false) as Button
+		expect(tool_button != null, "research picker exposes implemented product %d" % tool_id)
+		if tool_button != null:
+			expect(not tool_button.tooltip_text.contains("尚未還原"), "implemented research product %d does not show stale unrestored-effect text" % tool_id)
 	var before: Dictionary = game.to_dict()
 	var cancel: Button = ui.find_child("CancelResearch", true, false)
 	if cancel != null: cancel.pressed.emit()

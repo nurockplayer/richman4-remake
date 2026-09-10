@@ -64,6 +64,7 @@ func _run() -> void:
 	ui._on_deposit_pressed()
 	_expect(int(deposit_game.state.players[0].cash) == 0, "UI deposits sub-500 remaining cash")
 	_expect(int(deposit_game.state.players[0].deposit) == 250, "UI records exact sub-500 deposit")
+	_expect(ui.bank_deposit_button.disabled, "UI refreshes deposit availability after exhausting cash")
 	game = GameState.new_game(42, 2)
 	game.state.players[0].deposit = 250
 	game.state.bank.deposits = 250
@@ -78,8 +79,86 @@ func _run() -> void:
 	_expect(int(game.state.players[0].deposit) == 0, "UI withdraws sub-500 remaining deposit")
 	_expect(int(game.state.players[0].cash) == 15250, "UI returns exact remaining deposit to cash")
 	_expect(ui.bank_withdraw_button.disabled, "UI refreshes withdrawal availability after exhausting deposit")
+
+	# Issue #98 acceptance: a bare N key is an input-path request for a new game,
+	# not a destructive shortcut. The current match must stay exact until the
+	# player explicitly confirms the replacement.
+	var restart_game := GameState.new_game(701, 2)
+	restart_game.state.players[0].cash = 12345
+	restart_game._sync_state()
+	ui.game_state = restart_game
+	ui._refresh_from_state()
+	ui.new_game_popup.hide()
+	var restart_before: Dictionary = restart_game.to_dict()
+	var restart_key := InputEventKey.new()
+	restart_key.keycode = KEY_N
+	restart_key.pressed = true
+	restart_key.echo = false
+	ui._unhandled_input(restart_key)
+	_expect(ui.game_state == restart_game, "Bare N keeps the current game object until explicit confirmation")
+	_expect(ui._read_snapshot() == restart_before, "Bare N preserves the exact live snapshot and RNG continuation")
+	_expect(ui.new_game_popup.visible, "Bare N opens the explicit new-game flow instead of restarting immediately")
+	ui.new_game_popup.hide()
+	_expect(ui.game_state == restart_game and ui._read_snapshot() == restart_before, "Cancelling the N-key new-game flow preserves the current game exactly")
+
+	# Issue #98 acceptance: ordinary transfers must not require hundreds of
+	# fixed-$500 clicks. These node names are the stable UI contract for the
+	# implementation lane; amount ranges prevent zero/out-of-range submission.
+	var amount_game := GameState.new_game(702, 2)
+	amount_game.state.players[0].cash = 20000
+	amount_game.state.players[0].deposit = 3000
+	amount_game.state.bank.deposits = 3000
+	amount_game.state.phase = "await_action"
+	amount_game.state.bank_access = true
+	amount_game._set_action_options(0)
+	ui.game_state = amount_game
+	ui._refresh_from_state()
+	ui._on_bank_pressed()
+	var deposit_amount := ui.bank_popup.find_child("BankDepositAmount", true, false) as SpinBox
+	var withdraw_amount := ui.bank_popup.find_child("BankWithdrawAmount", true, false) as SpinBox
+	var deposit_all := ui.bank_popup.find_child("BankDepositAll", true, false) as Button
+	var withdraw_all := ui.bank_popup.find_child("BankWithdrawAll", true, false) as Button
+	_expect(deposit_amount != null, "Bank exposes a selectable deposit amount")
+	_expect(withdraw_amount != null, "Bank exposes a selectable withdrawal amount")
+	_expect(deposit_all != null, "Bank exposes an efficient deposit-all path")
+	_expect(withdraw_all != null, "Bank exposes an efficient withdraw-all path")
+	if deposit_amount != null:
+		var deposit_editor := deposit_amount.get_line_edit()
+		for invalid_text in ["0", "20001", "12.5"]:
+			deposit_editor.text = invalid_text
+			var before_invalid_deposit: Dictionary = amount_game.to_dict()
+			ui.bank_deposit_button.pressed.emit()
+			_expect(amount_game.to_dict() == before_invalid_deposit, "Invalid deposit input %s leaves state and RNG unchanged" % invalid_text)
+	if withdraw_amount != null:
+		var withdraw_editor := withdraw_amount.get_line_edit()
+		for invalid_text in ["0", "3001", "12.5"]:
+			withdraw_editor.text = invalid_text
+			var before_invalid_withdraw: Dictionary = amount_game.to_dict()
+			ui.bank_withdraw_button.pressed.emit()
+			_expect(amount_game.to_dict() == before_invalid_withdraw, "Invalid withdrawal input %s leaves state and RNG unchanged" % invalid_text)
+	if deposit_amount != null:
+		_expect(deposit_amount.min_value >= 1.0 and deposit_amount.max_value == 20000.0, "Deposit amount prevents zero/out-of-range entry and reflects available cash")
+		deposit_amount.value = 7000
+		ui.bank_deposit_button.pressed.emit()
+		_expect(int(amount_game.state.players[0].cash) == 13000, "Selectable deposit transfers the requested amount in one action")
+		_expect(int(amount_game.state.players[0].deposit) == 10000, "Selectable deposit credits the exact requested amount")
+	if withdraw_amount != null:
+		_expect(withdraw_amount.min_value >= 1.0 and withdraw_amount.max_value == 10000.0, "Withdrawal amount prevents zero/out-of-range entry and reflects available deposit")
+		withdraw_amount.value = 2500
+		ui.bank_withdraw_button.pressed.emit()
+		_expect(int(amount_game.state.players[0].cash) == 15500, "Selectable withdrawal transfers the requested amount in one action")
+		_expect(int(amount_game.state.players[0].deposit) == 7500, "Selectable withdrawal debits the exact requested amount")
+	if deposit_all != null:
+		deposit_all.pressed.emit()
+		_expect(int(amount_game.state.players[0].cash) == 0, "Deposit-all transfers all currently available cash")
+		_expect(int(amount_game.state.players[0].deposit) == 23000, "Deposit-all preserves the exact account total")
+	if withdraw_all != null:
+		withdraw_all.pressed.emit()
+		_expect(int(amount_game.state.players[0].deposit) == 0, "Withdraw-all empties the deposit balance")
+		_expect(int(amount_game.state.players[0].cash) == 23000, "Withdraw-all preserves the exact account total")
+
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	if failures == 0:
-		print("UI bankruptcy and AI scheduling checks passed")
+		print("UI bankruptcy, AI scheduling and Issue #98 acceptance checks passed")
 	quit(1 if failures else 0)

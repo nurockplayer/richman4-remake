@@ -116,3 +116,19 @@ fallback 滑桿圓點，`427df44` 只增加禁止該圖層的檢查，在當時�
 0／1／1700／3300 金額的左側實心、右側空白與離散寬度，沒有使用自訂全綠 baseline。
 ATM／calculator 的實際滑鼠按鍵還驗證重複零仍是一個0，接續1並ENTER可正確送出1；
 既有嚴格 amount parser、外部 malformed-input 拒絕和所有266／74 assertions保留。
+
+後續 exact-head review 確認 source 每次數字追加後會立即 cap 到 host 上限
+（rich4.asm28659–28692、rich4_ui_bank.asm4946–4982）。不變 tests-only84e681e
+取得48/20 RED；共享的純字串 digit helper 修正後48/0，原生含像素共96/0。
+同一來源 callback 的 calculator ENTER 以0返回 parent，故已清除的來源calculator
+按ENTER視為取消，不產生0元交易；ATM的0元ENTER仍不提交。直接注入的 malformed／
+超額字串繼續由原有 strict parser 拒絕；沒有移除或弱化原74／266／20項不變條件。
+來源9／10位顯示限制對既有重製帳務更大上限保留已記錄的縮放例外。
+
+Panel21 使用 nested `_Wait_0402_Message`（rich4.asm28951–29007；bank caller
+rich4_ui_bank.asm2023–2043），因此開啟期間必須封鎖背景的銀行按鈕與鍵盤焦點。
+tests-only6428873 的實際 SubViewport 滑鼠重現為48/24 RED（headless及native）；
+透明全銀行阻擋層、父按鈕停用與callback guard修正後74/0。取消返回同一前／後台；
+正數確認後也退出nested calculator並恢復銀行操作，保留原74項帳務送出斷言。
+calculator輸入callback中的移除採hide／queue_free，避免在自己的callback堆疊釋放。
+這些是元件輸入證據，仍不構成一般OS輸入、MainUI或打包成品驗收。

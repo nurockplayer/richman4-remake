@@ -14,6 +14,7 @@ func run() -> void:
 	for edition in ["Game", "MultiverseJourney"]:
 		await zero_prefix(edition)
 		await source_progress(edition)
+		await keypad_limit(edition)
 	print("Source bank amount regression checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 
@@ -78,3 +79,42 @@ func source_progress(edition: String) -> void:
 	if DisplayServer.get_name() == "headless": print("SKIP: source bar pixel comparison requires native rendering")
 	view.queue_free()
 	await settle()
+
+func keypad_limit(edition: String) -> void:
+	for maximum_value in [9, 123]:
+		var view := viewport()
+		var pad := Pad.new()
+		view.add_child(pad)
+		var amounts: Array = []
+		var cancellations: Array = []
+		pad.confirmed.connect(func(amount: int) -> void: amounts.append(amount))
+		pad.cancelled.connect(func() -> void: cancellations.append(true))
+		pad.set_visuals(Visuals.new(), edition)
+		pad.configure("take_loan", maximum_value)
+		await settle()
+		for point in [Vector2(24, 175), Vector2(64, 175), Vector2(104, 175), Vector2(24, 151)]: click(view, point)
+		check(pad.raw_text() == str(maximum_value), "calculator keypad caps each appended digit at the source limit")
+		check(amounts.is_empty(), "calculator capped digits do not submit before ENTER")
+		click(view, Vector2(92, 75))
+		check(amounts == [maximum_value], "calculator capped keypad amount confirms the exact limit")
+		# Original calculator ENTER returns zero to its caller as cancellation;
+		# it does not create a zero-valued banking transaction.
+		click(view, Vector2(24, 103))
+		click(view, Vector2(92, 75))
+		check(cancellations == [true] and amounts == [maximum_value], "calculator cleared zero ENTER cancels without another transaction")
+		pad.free()
+		var bank := Bank.new()
+		view.add_child(bank)
+		var requests: Array = []
+		bank.action_requested.connect(func(action: String, amount: int) -> void: requests.append([action, amount]))
+		bank.set_visuals(Visuals.new())
+		bank.set_view_model({"edition": edition, "entry_mode": "atm", "allowed_actions": ["withdraw"], "action_limits": {"withdraw": maximum_value}, "cash": 0, "deposit": maximum_value})
+		await settle()
+		click(view, Vector2(97, 69))
+		for point in [Vector2(74, 257), Vector2(113, 257), Vector2(152, 257), Vector2(74, 238)]: click(view, point)
+		check(bank.current_amount() == maximum_value, "ATM keypad caps each appended digit at the source limit")
+		check(requests.is_empty(), "ATM capped digits do not submit before ENTER")
+		click(view, Vector2(203, 272))
+		check(requests == [["withdraw", maximum_value]], "ATM capped keypad amount confirms the exact limit")
+		view.queue_free()
+		await settle()

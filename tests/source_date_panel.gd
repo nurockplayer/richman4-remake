@@ -248,9 +248,8 @@ func _test_geometry_and_art(panel: Control) -> void:
 			if call[0] == "Game" and call[1] == "Data" and int(call[2]) == 3 and int(call[3]) == chunk:
 				saw = true
 		_expect(saw, "resolver is asked for Data3 chunk %d" % chunk)
-	for index in range(12):
-		var label := _find(panel, "SourceDateMonth%d" % index) as Label
-		_expect(label != null and label.text == MONTH_LABELS[index], "month label %d keeps source text" % (index + 1))
+	var month_label := _find(panel, "SourceDateMonth") as Label
+	_expect(month_label != null and month_label.text == MONTH_LABELS[0], "current month label keeps source text")
 	_expect((_find(panel, "SourceDateYear") as Label) != null, "year label is present")
 	for name_value in ["SourceDateSystemLabel", "SourceDateCancelLabel", "SourceDateAcceptLabel"]:
 		var footer := _find(panel, name_value) as Label
@@ -341,11 +340,12 @@ func _test_press_release_and_invalid_date(panel: Control, viewport: SubViewport)
 func _test_lifecycle_and_suspension(panel: Control, viewport: SubViewport) -> void:
 	await _present(panel, _model({"year": 2024, "month": 2, "day": 29}))
 	var before: Dictionary = panel.call("draft_date")
+	var accepted_before := _accepted.size()
 	panel.call("suspend_input", true)
 	await _push_click(viewport, Vector2(74 + 2, 31 + 2))
 	await _push_click(viewport, Vector2(134 + 2, 180 + 2))
 	_expect_equal(panel.call("draft_date"), before, "suspended input keeps draft unchanged")
-	_expect(_accepted.is_empty(), "suspended input cannot emit acceptance")
+	_expect_equal(_accepted.size(), accepted_before, "suspended input cannot emit acceptance")
 	panel.call("suspend_input", false)
 	await _push_click(viewport, Vector2(74 + 2, 31 + 2))
 	_expect_equal(panel.call("draft_date")["month"], 3, "resumed input reaches presenter")

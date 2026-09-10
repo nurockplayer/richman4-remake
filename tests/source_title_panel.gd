@@ -97,7 +97,7 @@ func _move(viewport: SubViewport, point: Vector2) -> void:
 	await process_frame
 
 
-func _click(viewport: SubViewport, point: Vector2) -> void:
+func _click(viewport: SubViewport, point: Vector2, emissions: Array = [], expected_count: int = -1) -> void:
 	await _move(viewport, point)
 	for pressed in [true, false]:
 		var event := InputEventMouseButton.new()
@@ -106,6 +106,8 @@ func _click(viewport: SubViewport, point: Vector2) -> void:
 		event.button_index = MOUSE_BUTTON_LEFT
 		event.pressed = pressed
 		viewport.push_input(event, true)
+		if pressed and expected_count >= 0:
+			expect_equal(emissions.size(), expected_count, "source WM_LBUTTONDOWN activates before release")
 		await process_frame
 
 
@@ -192,10 +194,10 @@ func _test_game_geometry_and_input() -> void:
 	panel.load_requested.connect(func() -> void: loads.append(true))
 	panel.option_requested.connect(func() -> void: options.append(true))
 	panel.quit_requested.connect(func() -> void: quits.append(true))
-	await _click(viewport, start_rect.position + start_rect.size * 0.5)
-	await _click(viewport, load_rect.position + load_rect.size * 0.5)
-	await _click(viewport, option_rect.position + option_rect.size * 0.5)
-	await _click(viewport, exit_rect.position + exit_rect.size * 0.5)
+	await _click(viewport, start_rect.position + start_rect.size * 0.5, starts, 1)
+	await _click(viewport, load_rect.position + load_rect.size * 0.5, loads, 1)
+	await _click(viewport, option_rect.position + option_rect.size * 0.5, options, 1)
+	await _click(viewport, exit_rect.position + exit_rect.size * 0.5, quits, 1)
 	expect_equal(starts, [0], "START emits stage zero")
 	expect_equal(loads.size(), 1, "LOAD emits one intent")
 	expect_equal(options.size(), 1, "OPTION is enabled by default and emits intent")
@@ -263,7 +265,7 @@ func _test_multiverse_stage() -> void:
 	expect_equal(panel.get_hover_key(), "new_stage", "pointer enters MJ NEW STAGE")
 	expect_equal(panel.hover_art.get_meta("source_chunk"), 10, "MJ hover uses chunk ten")
 	expect_equal(panel.get_button_rect("new_stage"), before, "MJ hover keeps NEW STAGE hit bounds stable")
-	await _click(viewport, before.position + before.size * 0.5)
+	await _click(viewport, before.position + before.size * 0.5, starts, 1)
 	expect_equal(starts, [1], "NEW STAGE emits stage one")
 	panel.free()
 	viewport.free()

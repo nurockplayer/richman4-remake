@@ -23,9 +23,11 @@ var storage := SaveSlots.new("user://richman4-save-slots", "user://richman4_save
 
 ## 回傳狀態
 
-`preview(slot_id)` 會先讀 bytes、解析 JSON，再依序通過
-`GameState.validate_save()` 與 `GameState.from_dict()`。`read(slot_id)` 也會
-執行相同驗證，並回傳通過驗證的 snapshot；只有通過的 snapshot 才會產生
+`preview(slot_id)` 會先讀 bytes、解析 JSON，再由 `GameState.from_dict()`
+沿用既有 migration 與驗證，並對產生的 `to_dict()` snapshot 做嚴格驗證。
+`read(slot_id)` 也會執行相同流程，並回傳正規化且通過驗證的 snapshot；
+原始檔案不會因此重寫，save version 與 RNG continuation 仍保留。
+只有通過的 snapshot 才會產生
 metadata。讀取流程可傳入先前 preview 的 fingerprint：
 `read(slot_id, expected_fingerprint)` 會以同一次讀入的 bytes 計算 fingerprint，
 若不相符便回傳 `status: "stale"` 且不包含 snapshot，避免 preview 後被替換的
@@ -129,6 +131,19 @@ load 只允許 `valid` 列被選取；`empty`、`corrupt`、`invalid`、`unreada
 
 Presentation fidelity remains `UNACCEPTED` until a root render and fresh original
 comparison verify the combined screen.
+
+## Existing migration regression
+
+Sol found that strict validation before `from_dict()` rejected supported older
+news-road saves. Tests-only `181c3f9` preserves the original suite and adds row0
+and writable-row reads for the existing news/fate migrations: qualified RED
+244 checks /20 failures, with no script or invocation errors. The first draft
+also assumed old fate inputs failed strict validation; that fixture assertion
+was corrected before implementation and is not included as product RED.
+Reads now return the core's canonical migrated candidate while fingerprinting
+and preserving the original file bytes. Explicitly saving that candidate uses
+the unchanged strict-write contract. Forged source classifications remain
+invalid; no new migration or compatibility branch is introduced.
 
 ## Review repair evidence
 

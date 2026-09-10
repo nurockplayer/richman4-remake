@@ -1,6 +1,10 @@
 # 保真度狀態
 
-本頁只記載目前有本機位元組、解析結果或說明書頁面支持的內容。原始執行檔尚未提供可重現的跨平台執行時觀察，因此資料保真、規則保真、視覺保真與操作節奏分開記錄。
+本頁把兩種證據分開記錄：一種是擁有者授權的原作位元組、解析結果、反組譯與說明書頁面，另一種是 Godot 重製版目前的執行時行為。兩者都不能單獨推出「與原作完全相同」或一個保真度百分比。
+
+目前發行來源是 [`159aeb0`](https://github.com/nurockplayer/richman4-remake/commit/159aeb036a71194badc564a2064e750655bd7484)。[Issue #89](https://github.com/nurockplayer/richman4-remake/issues/89) 的最終 release acceptance 已通過：在 ARM64 M2 Pro 上以 plain packaged app 完成一名人類加三名 AI 的新局，並通過磁碟存檔／讀檔／再存檔相等、30 日／120 次操作的 AI settlement（第 121 回合由玩家 1 勝出）、production JSON encoding equality、重開、音樂 next-track，以及正常退出且沒有 engine errors。驗收也確認套件不依賴開發用素材路徑、`audio.cfg` 或環境變數；產物已移至 `/Users/tachikoma/Applications/大富翁 4 · 城市棋局.app` 並通過 codesign，且已還原 app／owner save。
+
+這是重製版套件與流程的 release 證據，不是原作等價證明。目前沒有原作執行檔在同一環境下的可重現 golden trace，也沒有量測出的保真度百分比；原作規則、媒體映射、鏡頭與操作節奏仍須以對應來源或可重現觀察逐項核對。
 
 ## 已由本機資料核對
 
@@ -29,11 +33,11 @@ Runtime loader 另外核對雙向鄰接、住宅參照唯一性與住宅從起�
 | --- | --- | --- |
 | 容器與地圖結構 | 已核對 | MKF 絕對 offset、16 位元組 resource header、40 位元組地圖標頭（10 個 32 位元欄位）、五種資料表與鄰接界線均由本機檔案驗證。 |
 | 原作規則 | 部分核對 | [manual-rules.md](manual-rules.md) 索引了說明書頁面；起始金額、完整租金表、事件順序與部分例外仍需原版執行觀察或更多資料對照。 |
-| 地圖內容 | 部分核對 | 12 張地圖的節點、座標、鄰接、原始名稱位元組、CP950 round-trip display name 與物件欄位已輸出；物件圖像、字型、地圖排序與原版 UI 顯示仍待驗證。 |
-| 其他內容資源 | 未完成 | `Data.mkf`、`Effect.mkf`、`help.mkf`、`jump.mkf`、`Panel.mkf`、`Speaking.mkf` 含私有壓縮記錄；目前只有 container inventory，沒有宣稱已完成解碼。 |
-| 音樂與音效 | 部分核對 | 本機播放路徑已成功載入並播放 25 個 OGG 曲目；`Midi.txt`、`InstOK.wav`、`InstSel.wav` 與版本目錄內的媒體已列入來源清單。曲目映射、混音曲線、播放時機與音效節奏尚未由原版執行證實。 |
-| UI、動畫與操作節奏 | 未完成 | Godot 目前可在沒有私有素材的 checkout 執行；這個 fallback 畫面不是原版 UI、動畫或時序的保真度證據。 |
-| 可重現遊戲狀態 | 部分核對 | Godot 端的 deterministic remake 測試仍在建立；原版骰子、回合、存檔、隨機數與事件序列尚未有 golden traces，因此不能宣稱與原作一致。 |
+| 地圖與靜態場景 | 已接入；原作差異未量化 | 12 張地圖的節點、座標、鄰接、名稱位元組與物件欄位已輸出；底圖、靜態住宅／地景／企業與角色八方向站姿可由本機素材呈現。設施升級圖像、原版 UI 顯示、屋主 palette 與地圖排序仍待驗證。 |
+| 其他內容資源 | 部分盤點；私有壓縮內容未解碼 | `Data.mkf`、`Effect.mkf`、`help.mkf`、`jump.mkf`、`Panel.mkf`、`Speaking.mkf` 已有 container inventory，但私有壓縮記錄仍沒有完成 codec、像素、音訊或語音驗證。 |
+| 音樂與音效 | 重製版已接入；原作映射未核對 | 套件內含經驗證的音樂，release acceptance 已確認播放 next-track；本機來源共有 25 個 OGG 曲目。`Midi.txt`、`InstOK.wav`、`InstSel.wav` 與版本目錄媒體已列入來源清單，但曲目映射、混音曲線、播放時機、音效與語音節奏仍是 Unknown。 |
+| UI、動畫與操作節奏 | 部分接入；原作差異未量化 | Board 目前以平面地圖、八方向站姿移動與既定路線呈現；沒有宣稱原版步態、交通工具動畫、原作 timing、透視或旋轉鏡頭已還原。缺素材時仍保留可操作路網 fallback。 |
+| 可重現遊戲狀態 | 重製版 release acceptance 已通過；原作對照 Unknown | 重製版已驗證固定 seed、存讀檔／再存檔、重開與長局 AI 流程；尚未有原版骰子、回合、存檔、隨機數與事件序列 golden trace，因此不能宣稱與原作一致。 |
 
 ## 重新核對規則
 
@@ -50,10 +54,12 @@ python3 tools/import_original.py \
 
 ## 目前可操作的重製版本
 
-Godot 桌面版本已具備 2–4 人新局、固定 seed、擲骰／買地／逐次加蓋、租金與破產、AI 接手、銀行／股票、已接通的卡片與道具效果、存讀檔、結算重開，以及從本機原版資料夾讀取音樂。測試涵蓋重製核心的可重現行為；這不等同原版 golden trace。
+Godot 桌面版本已具備 2–4 人新局、固定 seed、擲骰／買地／逐次加蓋、租金與破產、AI 接手、銀行／股票、已接入的卡片與道具效果、存讀檔、結算重開，以及隨 app 附帶的音樂。上述可操作範圍已納入 [Issue #89](https://github.com/nurockplayer/richman4-remake/issues/89) 的 release acceptance；它描述重製版行為，不等同原版 golden trace。
 
 原版 catalog 已接入選圖、座標路網、分岔選路與地圖身分存檔；沒有本機 catalog 時顯示明確標示的 40 格測試棋盤。住宅採來源地價、建屋成本及六級租金表；路口允許玩家選方向，AI 只走原始鄰接邊。經過卡片／點數／銀行格有對應處理，其他尚未還原的特殊格顯示「待還原」。
 
 v5 商業設施版本已在本機十二張來源地圖完成四位 AI 的三十日對局，並核對 JSON 存讀後的續玩一致。此為重製規則的對局與重播證據，並非原版執行軌跡對照；後續版本的最終驗證另記於各 PR。
 
-新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色站姿可由本機素材呈現，詳見 [original-scenes.md](original-scenes.md)。v4 已接完整 30 張卡片與 13 種工具目錄、有限供給、背包與點券商店，詳見 [original-inventory.md](original-inventory.md)；目錄完整不代表效果完整。v5 已接公園、旅館、購物中心與加油站，詳見 [original-facilities.md](original-facilities.md)。v6 已接神明附身、每日倒數、財神／窮神收費、福神建設、天使／惡魔／土地公停留結算及惡犬住院，詳見 [original-gods.md](original-gods.md)。v7 接入來源十二股、企業持股、服務、分紅與保險，詳見 [original-companies.md](original-companies.md)。v8 接入住院／入獄移動與自身回合，以及陷害、免罪、嫁禍與復仇流程，詳見 [original-statuses.md](original-statuses.md)。v9 接入地雷、定時炸彈與機器娃娃，修正最終落地觸發與道路物件供給守恆，詳見 [original-road-hazards.md](original-road-hazards.md)。v10 接入換地／換屋與可見目標選擇，詳見 [original-property-cards.md](original-property-cards.md)。v11 接入改建與住宅連鎖店、相應租金及既有建造／破壞路徑，詳見 [original-remodel.md](original-remodel.md)。v12 接入研究所建造、產品選擇與擁有者回合生產，詳見 [original-research.md](original-research.md)。v13 接入天使、惡魔與怪獸建物卡；送神符與請神符直接重用既有神明遊局，沒有新增存檔版本，見 [original-gods.md](original-gods.md)。Issue #81 接入時光機與傳送機的目標選擇、傳送效果、volatile anchor 與回合延續邊界，詳見 [original-time-transport.md](original-time-transport.md)。工程車沿既有背包與存檔模型接入，使用獨立載具規則模組，見 [original-engineering-vehicle.md](original-engineering-vehicle.md)。搶奪卡沿用現有有限背包，接入可見對手及物品選取、容量特例與 AI，見 [original-theft.md](original-theft.md)。Issue #78 拍賣卡沿用現有有限背包，接通住宅／設施出價、流標、成交與存讀檔續接，詳見 [original-auctions.md](original-auctions.md)。部分經濟參數與地產破產分配仍屬暫定，部分卡片／工具效果、特殊人物、其他企業服務、小遊戲、原作鏡頭與動畫仍有缺口。#1 保持未完成並持續推進。
+新局已接開局金額／角色選擇與真實日曆，詳見 [calendar-and-setup.md](calendar-and-setup.md)。原版場景與角色靜態站姿詳見 [original-scenes.md](original-scenes.md)。v4 已接 30 張卡片與 13 種工具的目錄、有限供給、背包、點券商店與目前已有的效果入口，詳見 [original-inventory.md](original-inventory.md)；目錄完整或存在效果入口，都不代表每個效果已按原作核對，未實作效果不得回報成功或消耗物品。v5 已接公園、旅館、購物中心與加油站，詳見 [original-facilities.md](original-facilities.md)。v6 已接神明附身、每日倒數、財神／窮神收費、福神建設、天使／惡魔／土地公停留結算及惡犬住院，詳見 [original-gods.md](original-gods.md)。v7 接入來源十二股、企業持股、服務、分紅與保險，詳見 [original-companies.md](original-companies.md)。v8 接入住院／入獄移動與自身回合，以及陷害、免罪、嫁禍與復仇流程，詳見 [original-statuses.md](original-statuses.md)。v9 接入地雷、定時炸彈與機器娃娃，修正最終落地觸發與道路物件供給守恆，詳見 [original-road-hazards.md](original-road-hazards.md)。v10 接入換地／換屋與可見目標選擇，詳見 [original-property-cards.md](original-property-cards.md)。v11 接入改建與住宅連鎖店、相應租金及既有建造／破壞路徑，詳見 [original-remodel.md](original-remodel.md)。v12 接入研究所建造、產品選擇與擁有者回合生產，詳見 [original-research.md](original-research.md)。v13 接入天使、惡魔與怪獸建物卡；送神符與請神符直接重用既有神明遊局，沒有新增存檔版本，見 [original-gods.md](original-gods.md)。Issue #81 接入時光機與傳送機的目標選擇、傳送效果、volatile anchor 與回合延續邊界，詳見 [original-time-transport.md](original-time-transport.md)。工程車沿既有背包與存檔模型接入，使用獨立載具規則模組，見 [original-engineering-vehicle.md](original-engineering-vehicle.md)。搶奪卡沿用現有有限背包，接入可見對手及物品選取、容量特例與 AI，見 [original-theft.md](original-theft.md)。Issue #78 拍賣卡沿用現有有限背包，接通住宅／設施出價、流標、成交與存讀檔續接，詳見 [original-auctions.md](original-auctions.md)。音樂來源與 fallback 規則詳見 [original-audio.md](original-audio.md)；移動呈現與目前 0.16 秒的重製版結果動畫詳見 [movement-presentation.md](movement-presentation.md)。
+
+部分經濟參數與地產破產分配仍屬暫定，部分卡片／工具效果、特殊人物、其他企業服務、小遊戲、原作鏡頭、步態與交通工具動畫仍有缺口。這些缺口與原版對照工作仍由 [Issue #1](https://github.com/nurockplayer/richman4-remake/issues/1) 追蹤。

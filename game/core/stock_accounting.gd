@@ -5,6 +5,18 @@ extends RefCounted
 ## accounting helpers never infer a cost for an already-held unknown position;
 ## they only create a known value when a new position is opened.
 
+# Known costs are source float32 values.  Market quotes are bounded by the
+# stock market's 1..9999 price range, while a company purchase uses
+# int(stock_value / 10000) and the existing company value/cash contract allows
+# stock_value up to 1e12.  Keep the larger face price as the accounting ceiling
+# and below INT64_MAX even at the save validator's one-billion-share bound.
+const MARKET_PRICE_MAX: float = 9999.0
+const COMPANY_STOCK_VALUE_MAX: int = 1000000000000
+const COMPANY_FACE_PRICE_SCALE: int = 10000
+const MAX_COMPANY_FACE_PRICE: float = float(COMPANY_STOCK_VALUE_MAX / COMPANY_FACE_PRICE_SCALE)
+const MAX_KNOWN_COST: float = MAX_COMPANY_FACE_PRICE if MAX_COMPANY_FACE_PRICE > MARKET_PRICE_MAX else MARKET_PRICE_MAX
+const MIN_KNOWN_COST: float = 1.0
+
 static func source_float(value: float) -> float:
 	return float(PackedFloat32Array([value])[0])
 
@@ -28,12 +40,27 @@ static func normalize_player(player: Dictionary, symbols: Array) -> void:
 	for symbol_value in symbols:
 		var symbol := str(symbol_value)
 		var average: Variant = costs.get(symbol, null)
-		if typeof(average) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(average)):
+		if _valid_cost_number(average):
 			costs[symbol] = source_float(float(average))
 
 
+static func _valid_cost_number(value: Variant) -> bool:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)):
+		return false
+	var raw := float(value)
+	if raw == 0.0:
+		return true
+	if raw < MIN_KNOWN_COST or raw > MAX_KNOWN_COST:
+		return false
+	var canonical := source_float(raw)
+	return is_finite(canonical) and canonical >= MIN_KNOWN_COST and canonical <= MAX_KNOWN_COST
+
+
 static func _known_cost(value: Variant) -> bool:
-	return typeof(value) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(value)) and float(value) >= 0.0
+	if not _valid_cost_number(value):
+		return false
+	var canonical := source_float(float(value))
+	return canonical >= MIN_KNOWN_COST and canonical <= MAX_KNOWN_COST
 
 
 static func _costs_for_mutation(player: Dictionary, symbols: Array) -> Dictionary:
@@ -141,12 +168,13 @@ static func validate_player(player: Dictionary, symbols: Array) -> Array:
 			if holding <= 0:
 				errors.append("unknown stock average cost with no holding %s" % symbol)
 			continue
-		if not _known_cost(average):
+		if not _valid_cost_number(average):
 			errors.append("invalid stock average cost %s" % symbol)
-		elif holding <= 0 and not is_zero_approx(float(average)):
+		elif source_float(float(average)) == 0.0:
+			if holding > 0:
+				errors.append("positive stock holding has zero average cost %s" % symbol)
+		elif holding <= 0:
 			errors.append("zero stock holding has nonzero average cost %s" % symbol)
-		elif holding > 0 and is_zero_approx(float(average)):
-			errors.append("positive stock holding has zero average cost %s" % symbol)
 	for key in costs.keys():
 		if not symbols.has(key):
 			errors.append("unknown stock average cost symbol %s" % str(key))

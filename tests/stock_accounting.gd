@@ -220,6 +220,17 @@ func test_metadata_validation() -> void:
 	positive_zero.players[0]["stock_average_costs"] = populated_costs()
 	positive_zero.players[0].stock_average_costs.s01 = 0.0
 	expect(not bool(Game.validate_save(positive_zero).get("ok", false)), "positive holding cannot use zero average")
+	var subunit_positive: Dictionary = saved.duplicate(true)
+	subunit_positive.players[0].stocks.s01 = 1
+	subunit_positive.players[0]["stock_average_costs"] = populated_costs()
+	subunit_positive.players[0].stock_average_costs.s01 = 0.5
+	expect(not bool(Game.validate_save(subunit_positive).get("ok", false)), "positive holding cannot use an impossible subunit average")
+	var huge_positive: Dictionary = saved.duplicate(true)
+	huge_positive.players[0].stocks.s01 = 1
+	huge_positive.players[0]["stock_average_costs"] = populated_costs()
+	huge_positive.players[0].stock_average_costs.s01 = 1e300
+	expect(not bool(Game.validate_save(huge_positive).get("ok", false)), "positive holding cannot use an arithmetic-unsafe average")
+	expect(Game.from_dict(huge_positive) == null, "arithmetic-unsafe average cannot be adopted by loading")
 	var missing_symbol: Dictionary = saved.duplicate(true)
 	missing_symbol.players[0]["stock_average_costs"] = populated_costs()
 	missing_symbol.players[0].stock_average_costs.erase("s01")
@@ -287,11 +298,37 @@ func test_price_limits_and_affordability() -> void:
 	expect(affordability.choose_action("buy_stock", {"symbol": "s01", "quantity": 2}).get("ok", false), "quantity within floor deposit over price succeeds")
 	expect(affordability.state.players[0].deposit == 100 - Market.quote(33.4, 2), "affordable purchase charges actual integer amount")
 
+func test_limit_state_boundaries() -> void:
+	var upper := Market.next_price(1000.0, 10.0)
+	var lower := Market.next_price(1000.0, -10.0)
+	expect(Market.limit_state(1000.0, 1099.99) == 0, "near-upper quote remains ordinary")
+	expect(Market.limit_state(1000.0, upper) == 1, "upper tick quote is upper-limit")
+	expect(Market.limit_state(1000.0, 1101.0) == 1, "beyond-upper quote remains upper-limit")
+	expect(Market.limit_state(1000.0, lower) == 3, "lower tick quote is lower-limit")
+	expect(Market.limit_state(1000.0, 89.99) == 3, "beyond-lower quote remains lower-limit")
+	expect(Market.limit_state(1000.0, 1000.0) == 4, "unchanged quote is flat state")
+	expect(Market.limit_state(1.0, 1.0) == 4, "lower clamp does not turn flat quote into lower-limit")
+	expect(Market.limit_state(9999.0, 9999.0) == 4, "upper clamp does not turn flat quote into upper-limit")
+	expect(Market.limit_state(1000.0, 950.0) == 0, "ordinary downward quote remains ordinary")
+	expect(Market.limit_state(1000.0, 1005.0) == 0, "ordinary upward quote remains ordinary")
+
+	var beyond_upper := make_game()
+	if beyond_upper == null:
+		return
+	prepare_market(beyond_upper, 1000.0, 1101.0, 100000, 1000)
+	expect_reject_atomic(beyond_upper, "buy_stock", {"symbol": "s01", "quantity": 1}, "beyond-upper public buy")
+	var near_upper := make_game()
+	if near_upper == null:
+		return
+	prepare_market(near_upper, 1000.0, 1099.99, 100000, 1000)
+	expect(near_upper.choose_action("buy_stock", {"symbol": "s01", "quantity": 1}).get("ok", false), "near-upper public buy remains valid")
+
 func _initialize() -> void:
 	test_market_average_and_roundtrip()
 	test_company_issue_uses_same_accounting()
 	test_legacy_unknown_and_bankruptcy_clear()
 	test_metadata_validation()
 	test_price_limits_and_affordability()
+	test_limit_state_boundaries()
 	print("Stock accounting checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

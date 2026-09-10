@@ -57,6 +57,18 @@ static func acquire(game: Object, tile: Dictionary) -> void:
 		tile[EXPIRY_KEY] = token
 
 
+static func transfer(game: Object, source: Dictionary, destination: Dictionary) -> void:
+	if not enabled(game.state):
+		return
+	var token: int = int(source.get(EXPIRY_KEY, 0))
+	if source.get("kind", "") == "facility":
+		game._update_facility_records(int(source.get("source_object_id", -1)), {EXPIRY_KEY: 0})
+		game._update_facility_records(int(destination.get("source_object_id", -1)), {EXPIRY_KEY: token})
+	else:
+		source[EXPIRY_KEY] = 0
+		destination[EXPIRY_KEY] = token
+
+
 static func expire_today(game: Object) -> void:
 	if not enabled(game.state) or not Calendar.is_valid(game.state.get("date", null)):
 		return

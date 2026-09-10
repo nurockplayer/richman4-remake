@@ -475,8 +475,8 @@ def update_ui_manifest(
                         )
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(staged, target)
                 created.append(target)
+                shutil.copyfile(staged, target)
 
             with tempfile.NamedTemporaryFile(
                 mode="w",

@@ -33,7 +33,19 @@ from decode_original_images import (
 
 # Source identity is kept separate from presentation coordinates.  These are
 # archive indices, not screen positions; see docs/original-ui-assets.md.
-UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
+UI_RESOURCES = {
+    "Data": (1, 2, 3),
+    "Panel": (0, 1, 2, 21, 23, 24, 75),
+}
+
+# S11–S13 use three source Panel entries in both editions.  Their complete
+# bounded chunk sets are retained so the scene background, pressed controls,
+# keypad and numerals remain source-addressable without importing Panel22.
+BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30}
+BANK_UI_REQUIRED_CHUNKS = {
+    resource_index: tuple(range(chunk_count))
+    for resource_index, chunk_count in BANK_UI_CHUNK_COUNTS.items()
+}
 
 # The two editions do not use the same jump resource numbers.  The first four
 # Game jump resources (and first eight MJ resources) are 640x480 map images;
@@ -102,6 +114,15 @@ RAW_RGB555_SIGNATURE = "RAW-RGB555"
 REQUIRED_UI_CHUNKS = {
     ("Game", "Data", 479): tuple(range(7)),
     ("MultiverseJourney", "Data", 520): tuple(range(11)),
+}
+for _edition in ("Game", "MultiverseJourney"):
+    for _resource_index, _required in BANK_UI_REQUIRED_CHUNKS.items():
+        REQUIRED_UI_CHUNKS[(_edition, "Panel", _resource_index)] = _required
+
+EXPECTED_UI_CHUNK_COUNTS = {
+    (_edition, "Panel", _resource_index): chunk_count
+    for _edition in ("Game", "MultiverseJourney")
+    for _resource_index, chunk_count in BANK_UI_CHUNK_COUNTS.items()
 }
 
 
@@ -227,6 +248,12 @@ def _export_resource(
         raise FormatError(
             f"UI resource at {archive.path}:{index} is missing chunk(s): "
             + ", ".join(str(chunk) for chunk in missing)
+        )
+    expected_count = EXPECTED_UI_CHUNK_COUNTS.get(binding)
+    if expected_count is not None and visual.chunk_count != expected_count:
+        raise FormatError(
+            f"UI resource at {archive.path}:{index} has {visual.chunk_count} "
+            f"chunks; expected {expected_count}"
         )
     if not selected:
         raise FormatError(f"UI resource at {archive.path}:{index} has no selected chunks")

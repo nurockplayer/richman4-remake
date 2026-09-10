@@ -12,6 +12,9 @@
 | Panel / 0 | 200×280 人物資訊面板與 tabs | 官方 Game 商店截圖主棋盤右側 |
 | Panel / 1 | 439×40 工具列與圖示 | 官方 Game 商店截圖上方；排列由 UI reference 決定 |
 | Panel / 2 | 四季日曆與星期覆蓋 | 官方手冊 PDF 第 11 頁；實際狀態另外綁定 |
+| Panel / 21 | S12／S13 金額計算器 | `SPR`，兩個 edition 均為完整 26 chunks；chunk 0 是 128×192 計算器底圖，其他 chunks 保留來源按鍵與數字素材 |
+| Panel / 23 | S12 貸款前台、S13 特殊融資後台與按鍵素材 | `SMP`，兩個 edition 均為完整 24 chunks；chunk 0／1／2 分別是貸款場景、遮罩與特殊融資場景，16–19 是後台操作／EXIT 狀態 |
+| Panel / 24 | S11 提款機與金額輸入素材 | `SMP`，兩個 edition 均為完整 30 chunks；chunk 0 是 320×338 ATM 底圖，1–18 是控制項，19–28 是數字，29 是來源禁止標記 |
 | Panel / 75 | 六欄股票價格、七欄持股、公司資訊底圖 | Game 與資料片三張底圖逐張 byte-identical；資料片實際截圖只支援共用構圖，不能證明 Game 公司數值 |
 | Game jump / 0–3 | 新局地圖背景 | 四張 headerless raw 640×480 RGB555 背景；來源 `jump[game_stage*4+game_map]`，Game 的 `game_stage=0`，`game_map=0..3`。零值是畫面上的不透明黑色，不作透明鍵 |
 | MultiverseJourney jump / 0–7 | 新局地圖背景 | 八張 headerless raw 640×480 RGB555 背景；保留 `game_stage=0/1` 的完整索引，`jump[game_stage*4+game_map]` 對應 `game_map=0..3`，不可把第二 stage 壓回前四張。`jump / 4` 為來源確認的全零背景，仍是不透明黑色 |
@@ -34,6 +37,8 @@
 SMP／SPR UI 圖以 RGB555 解碼，word zero 作透明背景，使不規則圖示能疊在原版底板；headerless raw 地圖／Loading 圖的 word zero 一律保持不透明黑底。這是依原版合成畫面作的明確呈現選擇；非零的黑色 word 0x8000 也保持不透明。原始素材不變，逐幕檢視若發現差異再縮小到該資源調整。
 
 `OriginalVisuals.ui(edition, archive, resource, chunk)` 回傳帶 logical bounds 的 frame，再由既有 `texture()` 驗證檔案雜湊及尺寸。每個 resource record 同時保留 `source`（edition、archive、entry、payload／archive SHA）與 `output`（PNG、pixel format、zero transparency policy）；frame 的 `path`／PNG SHA 只描述衍生輸出。這讓 reader 可以繼續使用同一個 accessor，而不把來源身份與顯示位置混在一起。
+
+S11–S13 的增量 exporter 只讀取每個 edition 的 `Panel.mkf` entry 21、23、24，並保留其完整 26／24／30 chunks；兩個 edition 的 decoded chunks 目前逐 chunk 相同，但 archive SHA 與來源身分仍分開記錄。Panel22 是非視覺輔助資源，沒有 UI resource record，因此不建立或假造任何圖像。來源 chunk 缺失或 bounded count 不符時會 fail closed；這些 metadata 與 logical bounds 不代表原版畫面、輸入時序或父層接線已通過驗收。
 
 `package_scene_images.py` 遞迴收集並檢查 UI PNG，只攜帶 manifest 實際引用的檔案。headerless Loading resource 使用 `signature: "RAW-RGB555"`、`format: "raw-rgb555"` 與單一 chunk 0；它不含 visual header，只有明確綁定的 640×480×2 bytes 來源大小才會輸出。所有受支援的 edition/index 與缺失 chunk 都 fail closed，避免把 Game / 479、MJ / 520 或 Game / 560、MJ / 601 互相替代。
 

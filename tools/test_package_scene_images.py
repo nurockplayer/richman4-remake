@@ -112,20 +112,22 @@ class PackageSceneTests(unittest.TestCase):
         panel21_count: int = 26,
         panel23_count: int = 24,
         panel24_count: int = 30,
+        common_payload: bytes | None = None,
     ) -> bytes:
         """Build Panel.mkf with the bounded source bank entries."""
 
         panel21 = cls._make_spr_chunks(panel21_count)
         panel23 = cls._make_smp_chunks(panel23_count)
         panel24 = cls._make_smp_chunks(panel24_count)
-        return cls._indexed_archive(
-            77,
-            {
-                21: (panel21, len(panel21), 12 + panel21_count * 12, 512),
-                23: (panel23, len(panel23), 12 + panel23_count * 12, 2 * panel23_count),
-                24: (panel24, len(panel24), 12 + panel24_count * 12, 2 * panel24_count),
-            },
-        )
+        replacements = {
+            21: (panel21, len(panel21), 12 + panel21_count * 12, 512),
+            23: (panel23, len(panel23), 12 + panel23_count * 12, 2 * panel23_count),
+            24: (panel24, len(panel24), 12 + panel24_count * 12, 2 * panel24_count),
+        }
+        if common_payload is not None:
+            common_item = (common_payload, len(common_payload), 24, len(common_payload) - 24)
+            replacements.update({index: common_item for index in (0, 1, 2, 75)})
+        return cls._indexed_archive(77, replacements)
 
     def test_edition_bindings_keep_setup_and_save_indices_separate(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -763,14 +765,16 @@ class PackageSceneTests(unittest.TestCase):
             source = root / "source"
             source.mkdir()
             payload = make_smp((0, 0x8000, 0x03E0))
-            item = (payload, len(payload), 24, 6)
-            archive = make_mkf([item] * 77)
+            archive = self._bank_panel_archive(common_payload=payload)
             (source / "Panel.mkf").write_bytes(archive)
             stage = root / "stage"
             group = export_ui_resources("Game", source, stage)
             self.assertEqual(set(group), {"Panel"})
             self.assertEqual(group["Panel"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
-            self.assertEqual(set(group["Panel"]["resources"]), {"0", "1", "2", "75"})
+            self.assertEqual(
+                set(group["Panel"]["resources"]),
+                {"0", "1", "2", "21", "23", "24", "75"},
+            )
             record = group["Panel"]["resources"]["75"]["chunks"]["0"]
             self.assertEqual(record["logical"], {"width": 3, "height": 1, "anchor_x": -2, "anchor_y": 5})
             width, height, pixels = read_png_rgba((stage / record["path"]).read_bytes())
@@ -782,7 +786,7 @@ class PackageSceneTests(unittest.TestCase):
             path = stage / "manifest.json"
             path.write_text(json.dumps(manifest))
             _, paths = validate(path)
-            self.assertEqual(len(paths), 4)
+            self.assertEqual(len(paths), 4 + sum(EXPECTED_BANK_UI_CHUNK_COUNTS.values()))
             (stage / group["Panel"]["resources"]["1"]["chunks"]["0"]["path"]).write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path)

@@ -1760,10 +1760,14 @@ func _on_loan_pressed() -> void:
 func _on_bank_deposit_amount_changed(value: float) -> void:
 	if bank_deposit_button != null:
 		bank_deposit_button.text = "存入 %s" % _format_money(int(value))
+	if bank_deposit_amount != null and not bank_deposit_amount.get_line_edit().has_focus():
+		bank_deposit_amount.get_line_edit().text = str(int(value))
 
 func _on_bank_withdraw_amount_changed(value: float) -> void:
 	if bank_withdraw_button != null:
 		bank_withdraw_button.text = "提取 %s" % _format_money(int(value))
+	if bank_withdraw_amount != null and not bank_withdraw_amount.get_line_edit().has_focus():
+		bank_withdraw_amount.get_line_edit().text = str(int(value))
 
 func _on_cards_pressed() -> void:
 	if not _is_human_turn():
@@ -1814,17 +1818,18 @@ func _bank_withdraw_limit() -> int:
 	return mini(player_limit, bank_cash)
 
 func _bank_deposit_input_amount() -> int:
-	var limit := _bank_deposit_limit()
-	if bank_deposit_amount == null or limit <= 0:
-		return 0
-	var amount := int(bank_deposit_amount.value)
-	return amount if amount > 0 and amount <= limit else 0
+	return _bank_input_amount(bank_deposit_amount, _bank_deposit_limit())
 
 func _bank_withdraw_input_amount() -> int:
-	var limit := _bank_withdraw_limit()
-	if bank_withdraw_amount == null or limit <= 0:
+	return _bank_input_amount(bank_withdraw_amount, _bank_withdraw_limit())
+
+func _bank_input_amount(field: SpinBox, limit: int) -> int:
+	if field == null or limit <= 0:
 		return 0
-	var amount := int(bank_withdraw_amount.value)
+	var raw_text := field.get_line_edit().text.strip_edges()
+	if raw_text.is_empty() or not raw_text.is_valid_int():
+		return 0
+	var amount := int(raw_text)
 	return amount if amount > 0 and amount <= limit else 0
 
 func _update_bank_popup() -> void:

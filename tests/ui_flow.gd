@@ -123,6 +123,20 @@ func _run() -> void:
 	_expect(deposit_all != null, "Bank exposes an efficient deposit-all path")
 	_expect(withdraw_all != null, "Bank exposes an efficient withdraw-all path")
 	if deposit_amount != null:
+		var deposit_editor := deposit_amount.get_line_edit()
+		for invalid_text in ["0", "20001", "12.5"]:
+			deposit_editor.text = invalid_text
+			var before_invalid_deposit: Dictionary = amount_game.to_dict()
+			ui.bank_deposit_button.pressed.emit()
+			_expect(amount_game.to_dict() == before_invalid_deposit, "Invalid deposit input %s leaves state and RNG unchanged" % invalid_text)
+	if withdraw_amount != null:
+		var withdraw_editor := withdraw_amount.get_line_edit()
+		for invalid_text in ["0", "3001", "12.5"]:
+			withdraw_editor.text = invalid_text
+			var before_invalid_withdraw: Dictionary = amount_game.to_dict()
+			ui.bank_withdraw_button.pressed.emit()
+			_expect(amount_game.to_dict() == before_invalid_withdraw, "Invalid withdrawal input %s leaves state and RNG unchanged" % invalid_text)
+	if deposit_amount != null:
 		_expect(deposit_amount.min_value >= 1.0 and deposit_amount.max_value == 20000.0, "Deposit amount prevents zero/out-of-range entry and reflects available cash")
 		deposit_amount.value = 7000
 		ui.bank_deposit_button.pressed.emit()

@@ -1,0 +1,171 @@
+extends SceneTree
+
+const Game = preload("res://game/core/game_state.gd")
+const Fixture = preload("res://tests/fixtures/company_fixture.gd")
+const StockPanel = preload("res://game/ui/stock_panel.gd")
+const QuantityPad = preload("res://game/ui/source_quantity_pad.gd")
+const Chart = preload("res://game/ui/stock_chart.gd")
+
+var checks := 0
+var failures := 0
+
+
+func _initialize() -> void:
+	call_deferred("run")
+
+
+func expect(condition: bool, message: String) -> void:
+	checks += 1
+	if not condition:
+		failures += 1
+		push_error(message)
+
+
+func make_game() -> Object:
+	var game := Game.new_game_on_board(90101, 4, Fixture.definition(), {
+		"original_facilities": true,
+		"original_gods": true,
+		"original_companies": true,
+		"start_date": {"year": 1998, "month": 1, "day": 1},
+	})
+	expect(game != null, "stock presentation fixture creates a source game")
+	if game == null:
+		return null
+	game.state.god_objects = []
+	game.state.phase = "await_action"
+	game.state.current_player = 0
+	game.state.weekday = 1
+	game.state.market.open = true
+	game.state.players[0].deposit = 1000
+	game.state.players[0].stocks.s01 = 2
+	game.state.players[0].stock_average_costs.s01 = 74.5
+	game.state.players[1].stocks.s01 = 3
+	game.state.players[2].stocks.s01 = 4
+	game.state.players[3].stocks.s01 = 5
+	for index in range(12):
+		var symbol := "s%02d" % (index + 1)
+		var row: Dictionary = game.state.market.rows[symbol]
+		row.turn_supply = 120 + index
+		row.market_supply = 5000 if index == 0 else 10000
+		row.price = 12.5 + float(index) * 20.0
+		row.previous_price = row.price - 1.0
+		game.state.market.prices[symbol] = row.price
+		game.state.market.history[symbol] = []
+		for value in range(1, 145):
+			game.state.market.history[symbol].append(float(value + index))
+		game.state.market.history[symbol][143] = row.price
+	game._sync_state()
+	game._set_action_options(0)
+	return game
+
+
+func run() -> void:
+	var game := make_game()
+	if game == null:
+		quit(1)
+		return
+	var snapshot: Dictionary = game.get_snapshot()
+	var panel := StockPanel.new()
+	root.add_child(panel)
+	await process_frame
+	panel.set_snapshot(snapshot, Fixture.definition())
+	await process_frame
+
+	expect(panel.custom_minimum_size == Vector2(640, 480), "stock panel keeps 640x480 reference container")
+	expect(StockPanel.stock_symbols(snapshot, Fixture.definition()).size() == 12, "source snapshot exposes twelve ordered stocks")
+	expect(panel.find_child("StockRow_s12", true, false) != null, "overview renders twelfth row")
+	expect(panel.find_child("StockHeader_5", true, false) != null, "overview renders six column headers")
+	expect(panel.find_child("StockRow_s01", true, false).find_child("StockSelect_s01", true, false) != null, "rows have real selectable controls")
+	expect(panel.find_child("StockDeposit", true, false).text.contains("1,000"), "deposit is read-only projection")
+	expect(panel.find_child("StockRow_s01", true, false).get_children().size() > 2, "row contains projected source values")
+	var original_snapshot: Dictionary = snapshot.duplicate(true)
+	panel.set_snapshot(snapshot, Fixture.definition())
+	snapshot.market.rows.s01.price = 9999.0
+	expect(panel.get_snapshot().market.rows.s01.price != 9999.0, "panel deep copies caller snapshot")
+	expect(snapshot.market.rows.s01.price == 9999.0 and original_snapshot.market.rows.s01.price != 9999.0, "caller snapshot remains independently mutable")
+	panel.set_snapshot(original_snapshot, Fixture.definition())
+
+	expect(StockPanel.format_price(12.5) == "12.50", "source price under 15 uses two decimals")
+	expect(StockPanel.format_price(33.4) == "33.4", "source price under 150 uses one decimal")
+	expect(StockPanel.format_price(388.0) == "388", "source price at 150 or above uses integer format")
+	expect(StockPanel.buy_limit(original_snapshot, "s01") == 80, "buy limit combines deposit floor, turn supply and market supply")
+	expect(StockPanel.sell_limit(original_snapshot, "s01") == 2, "sell limit uses current player holdings")
+
+	panel.select_symbol("s01")
+	expect(panel.selected_symbol() == "s01", "first selection stays on selected stock")
+	var buy_button: Button = panel.find_child("StockBuy", true, false)
+	var sell_button: Button = panel.find_child("StockSell", true, false)
+	expect(buy_button != null and not buy_button.disabled, "legal selected buy is enabled")
+	expect(sell_button != null and not sell_button.disabled, "legal selected sell is enabled")
+	panel.show_holdings()
+	expect(panel.current_screen() == "holdings" and panel.find_child("StockHeader_5", true, false) != null, "holdings table toggles in place")
+	panel.show_overview()
+	panel.select_symbol("s01")
+	expect(panel.current_screen() == "detail", "selecting the same row opens company detail")
+	expect(panel.find_child("StockDetailChart", true, false) != null, "detail owns a real history chart")
+	expect(panel.find_child("DetailCompanyName", true, false).text == "股票 1", "detail company title comes from source row")
+	var statistics := StockPanel.history_statistics(original_snapshot.market.history.s01)
+	expect(int(statistics.sample_count) == 144, "history keeps the existing 144 samples")
+	expect(statistics.weekly_mean != null and is_equal_approx(float(statistics.weekly_mean), 119.583333), "weekly mean uses latest six samples")
+	expect(statistics.monthly_mean != null and is_equal_approx(float(statistics.monthly_mean), 127.020833), "monthly mean uses latest 24 samples")
+	expect(statistics.historical_high != null and is_equal_approx(float(statistics.historical_high), 143.0), "historical high uses existing history only")
+	expect(statistics.historical_low != null and is_equal_approx(float(statistics.historical_low), 1.0), "historical low uses existing history only")
+	panel.show_overview()
+
+	var projection_before_trade: String = game.to_json()
+	var requested: Array = []
+	panel.trade_requested.connect(func(action: String, symbol: String, quantity: int) -> void: requested.append([action, symbol, quantity]))
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	buy_button.pressed.emit()
+	await process_frame
+	var pad: Node = panel.find_child("SourceQuantityPad", true, false)
+	expect(pad != null and pad.visible, "buy opens source quantity pad")
+	if pad != null:
+		var input: LineEdit = pad.find_child("QuantityInput", true, false)
+		input.text = "2"
+		pad.find_child("QuantitySubmit", true, false).pressed.emit()
+		expect(requested.size() == 1 and requested[0] == ["buy_stock", "s01", 2], "valid raw quantity emits trade request")
+		for invalid in [" 2", "2.5", "-2", "0", "81", "0002"]:
+			input.text = invalid
+			pad.find_child("QuantitySubmit", true, false).pressed.emit()
+			expect(requested.size() == 1, "blank/space/fraction/negative/zero never emit trade")
+	expect(not bool(QuantityPad.parse_quantity("81", 80).get("ok", false)), "raw quantity over the buy limit is rejected")
+	expect(bool(QuantityPad.parse_quantity("0", 80).get("cancel", false)), "raw zero quantity remains the source cancel action")
+	expect(game.to_json() == projection_before_trade, "stock projection and trade request do not mutate game state")
+
+	var result: Dictionary = game.choose_action("buy_stock", {"symbol": "s01", "quantity": 2})
+	panel.apply_trade_result(result, Fixture.definition())
+	expect(pad == null or not pad.visible, "successful trade result closes quantity pad")
+	expect(panel.selected_symbol() == "s01", "successful trade keeps selected symbol")
+	var failed: Dictionary = {"ok": false, "message": "銀行存款不足", "state": game.get_snapshot()}
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	buy_button.pressed.emit()
+	await process_frame
+	if pad != null:
+		panel.apply_trade_result(failed, Fixture.definition())
+		expect(pad.visible, "failed trade result keeps quantity pad open")
+		pad.find_child("QuantityClear", true, false).pressed.emit()
+
+	game.state.market.closed_days = 128
+	game._sync_state()
+	panel.set_snapshot(game.get_snapshot(), Fixture.definition())
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	expect(panel.trade_limit("buy_stock").error == "本日休市", "closed market is a visible domain gate")
+	game.state.market.closed_days = 0
+	game.state.market.open = true
+	game.state.market.rows.s01.suspension = 2
+	game._sync_state()
+	panel.set_snapshot(game.get_snapshot(), Fixture.definition())
+	panel.select_symbol("s01")
+	expect(panel.trade_limit("buy_stock").error == "這檔股票暫停交易", "suspended row is a visible domain gate")
+
+	panel.close_panel()
+	expect(not panel.visible, "explicit close hides panel")
+	expect(game.to_json() != "", "panel close does not erase game state")
+	panel.queue_free()
+	await process_frame
+	print("Stock presentation checks: %d, failures: %d" % [checks, failures])
+	quit(1 if failures else 0)

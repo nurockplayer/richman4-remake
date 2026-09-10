@@ -88,6 +88,12 @@ func sync(
 		visuals: Variant,
 		blocked: bool = false,
 ) -> void:
+	var core_replaced := _core != null and core != _core
+	if core_replaced:
+		# A new GameState can expose the same token values.  Treat it as a new
+		# modal owner so old amount input and deferred callbacks cannot cross the
+		# game boundary.
+		_cancel_local()
 	_core = core
 	_snapshot = snapshot.duplicate(true)
 	_edition = _canonical_edition(edition)
@@ -95,16 +101,20 @@ func sync(
 	_blocked = blocked
 	var token := _read_pending_token(core)
 	var valid := _valid_ingress(token, _snapshot)
+	var should_open := false
 	if _open:
 		if not valid or token != _active_token:
 			_cancel_local()
 			if blocked or not valid:
 				return
+			should_open = true
 		if blocked:
 			return
 	else:
 		if blocked or not valid:
 			return
+		should_open = true
+	if should_open:
 		_active_token = token.duplicate(true)
 		_entry_kind = str(token.get("kind", ""))
 		_panel_mode = "atm"
@@ -241,6 +251,19 @@ func _build_model(token: Dictionary, snapshot: Dictionary, front: bool) -> Dicti
 	var node_id := int(token.get("node_id", -1))
 	var player := _player_record(snapshot, actor)
 	var model: Dictionary = player.duplicate(true)
+	# These values belong to the public accounting projection.  Do not reuse
+	# stale or legacy player fields when the host cannot provide that query.
+	model["due_date"] = "—"
+	model["other_deposits"] = "—"
+	model["special_principal"] = "—"
+	var account_summary := _bank_account_summary(actor)
+	var due_date := _format_loan_due_date(account_summary.get("loan_due_date", {}))
+	if not due_date.is_empty():
+		model["due_date"] = due_date
+	for key in ["special_principal", "other_deposits"]:
+		var value: Variant = account_summary.get(key, null)
+		if typeof(value) == TYPE_INT:
+			model[key] = value
 	model["edition"] = _edition
 	model["entry_mode"] = "loan" if front else "atm"
 	model["allowed_actions"] = []
@@ -269,6 +292,25 @@ func _build_model(token: Dictionary, snapshot: Dictionary, front: bool) -> Dicti
 	if str(token.get("kind", "")) == "pass":
 		model["can_special"] = false
 	return model
+
+
+func _bank_account_summary(actor: int) -> Dictionary:
+	if _core == null or not _core.has_method("bank_account_summary"):
+		return {}
+	var value: Variant = _call_with_actor("bank_account_summary", [actor])
+	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func _format_loan_due_date(value: Variant) -> String:
+	if typeof(value) != TYPE_DICTIONARY:
+		return "—"
+	var due_date: Dictionary = value
+	if due_date.is_empty():
+		return "—"
+	for key in ["year", "month", "day"]:
+		if typeof(due_date.get(key, null)) != TYPE_INT:
+			return "—"
+	return "%04d-%02d-%02d" % [int(due_date.year), int(due_date.month), int(due_date.day)]
 
 
 func _action_in_snapshot(action_options: Variant, action: String) -> bool:
@@ -373,9 +415,11 @@ func _finish_action(result: Dictionary, generation: int) -> void:
 		return
 	_action_pending = false
 	if not bool(result.get("ok", false)):
-		_show_error(str(result.get("message", "銀行操作未完成。")))
 		if handle_result.is_valid():
 			handle_result.call(result)
+		if generation != _generation:
+			return
+		_show_error(str(result.get("message", "銀行操作未完成。")))
 		return
 	_clear_error()
 	if handle_result.is_valid():
@@ -433,8 +477,8 @@ func _invoke_core_close(method: String, generation: int) -> void:
 	if generation != _generation:
 		return
 	var result: Variant = null
-	if _core != null and _core.has_method(method):
-		result = _core.call(method)
+	if invoke_game.is_valid():
+		result = invoke_game.call(method, [])
 	else:
 		result = {"ok": false, "message": "模擬核心缺少銀行結束介面。"}
 	if typeof(result) != TYPE_DICTIONARY:

@@ -34,7 +34,7 @@ Runtime loader 另外核對雙向鄰接、住宅參照唯一性與住宅從起�
 | 容器與地圖結構 | 已核對 | MKF 絕對 offset、16 位元組 resource header、40 位元組地圖標頭（10 個 32 位元欄位）、五種資料表與鄰接界線均由本機檔案驗證。 |
 | 原作規則 | 部分核對 | [manual-rules.md](manual-rules.md) 索引了說明書頁面；起始金額、完整租金表、事件順序與部分例外仍需原版執行觀察或更多資料對照。 |
 | 地圖與靜態場景 | 已接入；原作差異未量化 | 12 張地圖的節點、座標、鄰接、名稱位元組與物件欄位已輸出；底圖、靜態住宅／地景／企業與角色八方向站姿可由本機素材呈現。設施升級圖像、原版 UI 顯示、屋主 palette 與地圖排序仍待驗證。 |
-| 其他內容資源 | 部分盤點；私有壓縮內容未解碼 | `Data.mkf`、`Effect.mkf`、`help.mkf`、`jump.mkf`、`Panel.mkf`、`Speaking.mkf` 已有 container inventory，但私有壓縮記錄仍沒有完成 codec、像素、音訊或語音驗證。 |
+| 其他內容資源 | 壓縮解碼已驗證；資源語意部分核對 | 兩個版本全部 878 筆壓縮資源的解碼位元組已與研究用 C oracle 逐筆比對一致；Panel 樣本亦已輸出 SPR/SMP 與 PNG，見 [image-format.md](image-format.md)。這不代表所有像素色彩、透明、資源組合／用途、音訊或語音均已核對。 |
 | 音樂與音效 | 重製版已接入；原作映射未核對 | 套件內含經驗證的音樂，release acceptance 已確認播放 next-track；本機來源共有 25 個 OGG 曲目。`Midi.txt`、`InstOK.wav`、`InstSel.wav` 與版本目錄媒體已列入來源清單，但曲目映射、混音曲線、播放時機、音效與語音節奏仍是 Unknown。 |
 | UI、動畫與操作節奏 | 部分接入；原作差異未量化 | Board 目前以平面地圖、八方向站姿移動與既定路線呈現；沒有宣稱原版步態、交通工具動畫、原作 timing、透視或旋轉鏡頭已還原。缺素材時仍保留可操作路網 fallback。 |
 | 可重現遊戲狀態 | 重製版 release acceptance 已通過；原作對照 Unknown | 重製版已驗證固定 seed、存讀檔／再存檔、重開與長局 AI 流程；尚未有原版骰子、回合、存檔、隨機數與事件序列 golden trace，因此不能宣稱與原作一致。 |

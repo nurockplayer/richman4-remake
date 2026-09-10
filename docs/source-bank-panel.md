@@ -15,7 +15,7 @@ view model。
 | `entry_mode` | `atm` 顯示提款機，`loan` 一律先顯示 Panel23 前台 |
 | `allowed_actions` | 正式允許的 action 陣列，或 action→bool 字典 |
 | `action_limits` | 正式 action→非負整數上限；元件不自行推算額度 |
-| `cash`, `deposit`, `loan`, `due_date` | 前台／提款機要顯示的 host 數值 |
+| `cash`, `deposit`, `loan`, `due_date` | 無來源圖時的 fallback 資訊；原版 art 模式不加畫常駐餘額標籤 |
 | `special_principal`, `other_deposits` | 後台特殊融資摘要的 host 數值 |
 | `can_special` | 銀行主席 gate；不是 `true` 時特殊融資控制保持停用 |
 
@@ -33,7 +33,7 @@ view model。
 | ATM 金額 | 同上 | 金額條 `(53,137,215,29)`；數字按鍵 x=`58/97/136`、y=`211/230/249/268`、`33×17`；MAX `(183,233,49,25)`；ENTER `(175,260,57,25)` |
 | Panel23 前台 | `640×480` | 申請貸款 `(282,324,126,42)`、償還貸款 `(470,326,120,40)`、EXIT `(548,431,80,40)` |
 | Panel23 後台 | `640×480` | 週轉現金／歸還款項 `(11,305,114,40)`／`(11,362,114,40)`；EXIT `(11,419,80,40)` |
-| Panel21 calculator | `128×192`，疊在銀行場景 `(256,144)` | 由 `RichmanSourceAmountPad` 顯示 MAX／ENTER 與數字鍵 |
+| Panel21 calculator | `128×192`，疊在銀行場景 `(256,144)` | MAX `(8,63,49,25)`、ENTER `(64,63,57,25)`；C／0／退格 x=`8/48/88`、y=`95`，數字列 y=`119/143/167`、`33×17` |
 
 `loan` 的前台／後台是同一流程內的 scene state，不由 `edition` 或
 `allowed_actions` 推導。`can_special=true` 時，前台才建立 owner-only 透明入口
@@ -51,7 +51,7 @@ y=`163/211/259`。`週轉現金` 是原版文字；正式 action 是
 `ui(edition, archive, resource, chunk)` 與 `texture(frame)` 的 resolver。前者可用
 `Game.Panel24`、`Game.Panel23.front`、`Game.Panel23.rear`、`Game.Panel23.chunk1`、
 `Game.Panel23.chunk20`、`Game.Panel21` 等 key；後者會查詢 Panel24／23／21 的指定
-chunk。來源圖存在時，按鈕是透明 hit target，獨立 labels 疊在來源 art 上；缺少主圖時
+chunk。來源圖存在時，按鈕是透明 hit target，只有原版動態 labels 疊在來源 art 上；缺少主圖時
 才保留來源座標 fallback controls。Panel22 沒有視覺資源，因此不會建立或假造 Panel22
 圖像。原圖、匯出器與 full cache 由父層另行接入。
 
@@ -63,8 +63,9 @@ chunk。來源圖存在時，按鈕是透明 hit target，獨立 labels 疊在�
 `repay_special_finance`。選取提款／存款或貸款按鈕本身不會送出 action；MAX、金額條、
 數字鍵、清除、退格與鍵盤數字也只改 presenter 狀態。
 
-空白、零、負數、含空白、非數字、非整數與超過上限的輸入會留在畫面上並顯示錯誤，
-不會發出訊號。ATM 的提款在左、存款在右，且 MAX 只填入該 action 的 host 上限。
+空白、零、負數、含空白、非數字、非整數與超過上限的輸入不會發出 action 訊號。
+來源模式保留 source amount display／停用確認；fallback 模式另顯示文字錯誤。
+ATM 的提款在左、存款在右，且 MAX 只填入該 action 的 host 上限。
 貸款／特殊融資按鈕會開啟獨立 Panel21 calculator；calculator 的取消只返回目前銀行
 scene。ATM 與 calculator 只有在自身可見時才攔截鍵盤事件。銀行前台 EXIT 或沒有選取
 金額時的 Escape 才發出 `closed()`；後台 EXIT 只返回前台，由父層決定返回上一個流程。
@@ -81,3 +82,28 @@ texture 做像素檢查；Godot dummy headless renderer 會明確 SKIP 該像素
 native lane 重跑。這些測試證明 Godot 控制項事件邊界，不宣稱作業系統實體輸入、原生
 視窗時序、原版素材完整匯入或畫面相似度已驗收；來源動畫時序的微小不確定性仍依契約
 記錄，待父層素材／MainUI 接線後另做整合與視覺審查。
+
+## 實際原圖修正與界線
+
+原版 art 模式隱藏 fallback HSlider、LineEdit 與泛用常駐說明，避免滑桿圓點或重複字樣
+覆蓋來源圖。ATM 使用 Panel24 chunks19–28 的數字，末位 `(244,101)`，步距20；
+chunk4 的百分比列在 `(58,139)`，寬度依34階比例裁切。Calculator 使用 Panel21
+chunks16–25 的數字，末位 `(107,11)`，步距12；百分比列 `(10,42,108,12)` 採原版
+34個 threshold 對應 `floor(limit * index / 33)`。MAX、ENTER、C、0、退格與數字鍵
+的 pressed art 分別使用 Panel21 chunks2–15。ATM 使用 Panel24 chunks1–18。
+
+前台動態貸款文字中心 `(345,345)`／`(530,345)`，26px 黑色；主席入口文字中心
+`(492,245)`，14px 灰色。後台按鈕以 chunks16–19 組成，摘要金額保留 `$` 與千分位，
+下方「特別融資」中心 `(443,427)`、26px 黑色。元件使用目前可用的中文字型；
+原作 GDI 字型筆畫與場景動畫／對話出現時序尚未宣稱完全一致。
+
+測試-only `828567d` 先取得 `Source bank visual checks: 218, failures: 174`，
+修正後同一份測試為264/0（條件式後續檢查在節點存在時才執行）。人工對照仍看到
+fallback 滑桿圓點，`427df44` 只增加禁止該圖層的檢查，在當時未提交的修正工作樹
+得到266/2；隱藏滑桿後266/0。原有 bank presenter74項與原生像素76項保持不變。
+`tools/check.sh` 執行 presenter 與 visual 兩套測試。
+
+以 pinned 私有素材、隔離 SubViewport 拍攝 Game／MultiverseJourney 的提款機、前台、
+後台、非主席前台及 calculator，並與原版 article22–24／來源繪製座標比對。
+這些影像只支持元件構圖方向；MainUI 入口、帳務後續、原生實體輸入與目前 package
+仍需另外驗收，不能將此元件或 headless 全綠視為 S11–S13 完整 PASS。

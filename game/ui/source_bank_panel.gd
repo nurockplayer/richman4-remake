@@ -30,6 +30,9 @@ var _amount_pad: Node = null
 var _feedback: Label
 var _amount_bar: HSlider
 var _amount_value: Label
+var _source_digits: Control
+var _source_progress: Control
+var _source_percent: Control
 
 
 func _init() -> void:
@@ -177,6 +180,9 @@ func _build_screen() -> void:
 	_amount_bar = null
 	_amount_value = null
 	_feedback = null
+	_source_digits = null
+	_source_progress = null
+	_source_percent = null
 	_add_source_background(_visual_key(), screen_size)
 	if not _model_valid:
 		_feedback = _make_label("資料格式無法顯示", Rect2(24, 24, screen_size.x - 48, 34), 16, Color("#ffb3a4"))
@@ -217,6 +223,25 @@ func _build_atm() -> void:
 		_set_slider_transparent(_amount_bar)
 	_amount_bar.value_changed.connect(_on_amount_bar_changed)
 	add_child(_amount_bar)
+	if _has_source_visual:
+		_amount_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_amount_bar.hide()
+		_source_digits = Control.new()
+		_source_digits.name = "ATMSourceDigits"
+		_source_digits.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_source_digits)
+		_source_progress = Control.new()
+		_source_progress.name = "ATMSourceProgress"
+		_source_progress.position = Vector2(58, 139)
+		_source_progress.clip_contents = true
+		_source_progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_source_progress)
+		_source_percent = Control.new()
+		_source_percent.name = "ATMPercent"
+		_source_percent.position = Vector2(53, 137)
+		_source_percent.size = Vector2(215, 29)
+		_source_percent.gui_input.connect(_on_source_percent_input)
+		add_child(_source_percent)
 	_amount_value = _make_label("金額 —", Rect2(53, 168, 215, 22), 11, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "ATMAmountValue")
 	add_child(_amount_value)
 
@@ -274,6 +299,11 @@ func _build_loan_scene() -> void:
 	exit.pressed.connect(_close_flow)
 	add_child(exit)
 	_add_rear_entry_target()
+	if _has_source_visual:
+		_centered_label("申請貸款", "LoanBorrowLabel", Vector2(345, 345), Vector2(160, 40), 26, Color("#101010"))
+		_centered_label("償還貸款", "LoanRepayLabel", Vector2(530, 345), Vector2(160, 40), 26, Color("#101010"))
+		if _can_enter_rear():
+			_centered_label("特別融資", "BankRearEntryLabel", Vector2(492, 245), Vector2(150, 24), 14, Color("#808080"))
 	_feedback = _make_label("請選擇銀行操作", Rect2(250, 252, 270, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "BankFeedback")
 	add_child(_feedback)
 	_refresh_action_buttons()
@@ -281,13 +311,10 @@ func _build_loan_scene() -> void:
 
 func _build_special_scene() -> void:
 	_add_special_summary()
-	add_child(_make_label("銀行", Rect2(8, 22, 180, 28), 21, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_LEFT, "SpecialTitle"))
-	add_child(_make_label("客戶存款總額", Rect2(10, 136, 136, 22), 12, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "SpecialOtherDepositsLabel"))
-	add_child(_make_label(_display_value("other_deposits"), Rect2(10, 153, 118, 20), 16, Color("#fff2b6"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialOtherDeposits"))
-	add_child(_make_label("目前融資金額", Rect2(10, 184, 136, 22), 12, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "SpecialPrincipalLabel"))
-	add_child(_make_label(_display_value("special_principal"), Rect2(10, 201, 118, 20), 16, Color("#fff2b6"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialPrincipal"))
-	add_child(_make_label("尚可融資金額", Rect2(10, 232, 136, 22), 12, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, "SpecialAvailableLabel"))
-	add_child(_make_label(_display_value_for_limit("take_special_finance"), Rect2(10, 249, 118, 20), 16, Color("#fff2b6"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialAvailable"))
+	for item in [["客戶存款總額", "SpecialOtherDepositsLabel", 147], ["目前融資金額", "SpecialPrincipalLabel", 195], ["尚可融資金額", "SpecialAvailableLabel", 243]]:
+		_centered_label(item[0], item[1], Vector2(78, item[2]), Vector2(136, 24), 16, Color("#202020"))
+	for item in [[_display_value("other_deposits"), "SpecialOtherDeposits", 163], [_display_value("special_principal"), "SpecialPrincipal", 211], [_display_value_for_limit("take_special_finance"), "SpecialAvailable", 259]]:
+		add_child(_make_label(_source_money(item[0]) if _has_source_visual else item[0], Rect2(10, int(item[2]) - 12, 118, 24), 16, Color("#f0f0f0"), HORIZONTAL_ALIGNMENT_RIGHT, item[1]))
 	var borrow := _make_source_button("週轉現金", "SpecialBorrow", Rect2(11, 305, 114, 40))
 	borrow.pressed.connect(func() -> void: _select_action("take_special_finance"))
 	add_child(borrow)
@@ -297,9 +324,10 @@ func _build_special_scene() -> void:
 	var exit := _make_source_button("EXIT", "BankExit", Rect2(11, 419, 80, 40))
 	exit.pressed.connect(_exit_bank_scene)
 	add_child(exit)
-	add_child(_make_label("特別融資", Rect2(443, 427, 190, 24), 14, Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_RIGHT, "SpecialWindowTitle"))
-	_feedback = _make_label("僅銀行主席可用", Rect2(162, 294, 280, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_LEFT, "BankFeedback")
-	add_child(_feedback)
+	if _has_source_visual:
+		_centered_label("週轉現金", "SpecialBorrowLabel", Vector2(67, 324), Vector2(112, 32), 20, Color("#f0f0f0"))
+		_centered_label("歸還款項", "SpecialRepayLabel", Vector2(67, 382), Vector2(112, 32), 20, Color("#f0f0f0"))
+	_centered_label("特別融資", "SpecialWindowTitle", Vector2(443, 427), Vector2(220, 40), 26, Color("#101010"))
 	_refresh_action_buttons()
 
 
@@ -316,23 +344,23 @@ func _add_nonowner_rear_blind() -> void:
 		return
 	var visual: Variant = _resolve_chunk_visual(23, 1, "%s.Panel23.chunk1" % _source_edition())
 	if visual is Texture2D:
-		_add_source_layer("SourceRearBlind", visual, Vector2(258, 42))
+		_add_source_layer("SourceRearBlind", visual, Vector2(258, 42), Vector2(344, 240))
 
 
 func _add_special_summary() -> void:
 	var visual: Variant = _resolve_chunk_visual(23, 20, "%s.Panel23.chunk20" % _source_edition())
 	if visual is Texture2D:
-		_add_source_layer("SourceSpecialSummary", visual, Vector2(10, 125))
+		_add_source_layer("SourceSpecialSummary", visual, Vector2(10, 125), Vector2(137, 165))
 
 
-func _add_source_layer(node_name: String, visual: Texture2D, origin: Vector2) -> TextureRect:
+func _add_source_layer(node_name: String, visual: Texture2D, origin: Vector2, logical_size: Vector2) -> TextureRect:
 	var texture_rect := TextureRect.new()
 	texture_rect.name = node_name
 	texture_rect.position = origin
-	texture_rect.size = visual.get_size()
+	texture_rect.size = logical_size
 	texture_rect.texture = visual
 	texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	texture_rect.stretch_mode = TextureRect.STRETCH_KEEP
+	texture_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(texture_rect)
@@ -713,6 +741,7 @@ func _refresh_action_buttons() -> void:
 		if button is Button:
 			if _has_source_visual:
 				_set_button_transparent(button as Button)
+				_refresh_source_button(button)
 			else:
 				(button as Button).add_theme_stylebox_override("normal", _style(Color("#3a5d57"), Color("#c5c889"), 1))
 				if action == _selected_action:
@@ -773,6 +802,7 @@ func _refresh_amount_display() -> void:
 		_amount_bar.editable = can_enter
 	if _feedback != null and _selected_action.is_empty():
 		_feedback.text = "請先選擇提款或存款"
+	_refresh_atm_source_art()
 
 
 func _show_feedback(message: String) -> void:
@@ -799,7 +829,8 @@ func _clear_children() -> void:
 func _make_source_button(text_value: String, node_name: String, button_rect: Rect2) -> Button:
 	var button := Button.new()
 	button.name = node_name
-	button.text = text_value
+	button.text = "" if _has_source_visual else text_value
+	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.position = button_rect.position
 	button.size = button_rect.size
 	button.custom_minimum_size = button_rect.size
@@ -812,6 +843,7 @@ func _make_source_button(text_value: String, node_name: String, button_rect: Rec
 	button.add_theme_stylebox_override("disabled", _style(Color("#2a3736"), Color("#657469"), 1))
 	if _has_source_visual:
 		_set_button_transparent(button)
+		_bind_source_button(button)
 	return button
 
 
@@ -852,6 +884,8 @@ func _make_label(text_value: String, label_rect: Rect2, font_size: int, color: C
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _has_source_visual and node_name in ["ATMTitle", "ATMCash", "ATMDepositValue", "ATMAmountValue", "ATMFeedback", "LoanTitle", "LoanCash", "LoanDeposit", "LoanBalance", "LoanDueDate", "BankFeedback", "SpecialTitle"]:
+		label.hide()
 	return label
 
 
@@ -862,3 +896,106 @@ func _style(background: Color, border: Color, width: int) -> StyleBoxFlat:
 	style.set_border_width_all(width)
 	style.set_corner_radius_all(1)
 	return style
+
+
+func _centered_label(text: String, key: String, center: Vector2, box: Vector2, font: int, color: Color) -> void:
+	add_child(_make_label(text, Rect2(center - box * 0.5, box), font, color if _has_source_visual else Color("#f4e7ae"), HORIZONTAL_ALIGNMENT_CENTER, key))
+
+
+func _source_money(value: String) -> String:
+	if not value.is_valid_int(): return "—"
+	var grouped := ""
+	while value.length() > 3:
+		grouped = "," + value.right(3) + grouped
+		value = value.left(value.length() - 3)
+	return "$" + value + grouped
+
+
+func _sprite(texture: Texture2D, logical_size: Vector2) -> TextureRect:
+	var art := TextureRect.new()
+	art.texture = texture
+	art.size = logical_size
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_SCALE
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return art
+
+
+func _refresh_atm_source_art() -> void:
+	if _source_digits == null: return
+	for child in _source_digits.get_children(): child.free()
+	for child in _source_progress.get_children(): child.free()
+	var text := _amount_text
+	if text.is_empty() or not text.is_valid_int() or int(text) < 0: text = "0"
+	# Source-sized balances use their original ten glyph positions. Exceptional
+	# larger remake balances retain every digit within the same display width.
+	var ratio := minf(1.0, 10.0 / float(text.length()))
+	for index in range(text.length()):
+		var chunk := 19 + int(text[text.length() - 1 - index])
+		var texture: Variant = _resolve_chunk_visual(24, chunk, "%s.Panel24.chunk%d" % [_edition, chunk])
+		if texture is Texture2D:
+			var art := _sprite(texture, Vector2(18 * ratio, 32))
+			art.position = Vector2(244 + 18 * (1.0 - ratio) - index * 20 * ratio, 101)
+			art.set_meta("source_chunk", chunk)
+			_source_digits.add_child(art)
+	var width := floori(clampf(float(current_amount()) / float(maxi(1, _current_limit())), 0.0, 1.0) * 34.0) * 6
+	_source_progress.size = Vector2(width, 26)
+	var bar: Variant = _resolve_chunk_visual(24, 4, "%s.Panel24.chunk4" % _edition)
+	if bar is Texture2D: _source_progress.add_child(_sprite(bar, Vector2(204, 26)))
+
+
+func _on_source_percent_input(event: InputEvent) -> void:
+	if _selected_action.is_empty() or _current_limit() <= 0: return
+	var active: bool = event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+	active = active or (event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0)
+	if not active: return
+	var x: float = event.position.x + 53.0
+	var limit := _current_limit()
+	var amount := 0
+	if x >= 262.0: amount = limit
+	elif x > 58.0: amount = mini(limit, (floori((x - 58.0) / 6.0) + 1) * (floori(float(limit) / 34.0) + 1))
+	set_amount_text(str(amount))
+	_source_percent.accept_event()
+
+
+func _source_button_spec(key: String) -> Dictionary:
+	if _mode == "atm":
+		var names := ["ATMWithdraw", "ATMDeposit", "ATMExit"]
+		if key in names: return {"resource": 24, "normal": -1, "active": names.find(key) + 1}
+		names = ["ATMDigit7", "ATMDigit8", "ATMDigit9", "ATMDigit4", "ATMDigit5", "ATMDigit6", "ATMDigit1", "ATMDigit2", "ATMDigit3", "ATMClear", "ATMDigit0", "ATMBackspace", "ATMMax", "ATMEnter"]
+		if key in names: return {"resource": 24, "normal": -1, "active": names.find(key) + 5}
+	elif _bank_scene == "rear":
+		if key in ["SpecialBorrow", "SpecialRepay"]: return {"resource": 23, "normal": 16, "active": 17}
+		if key == "BankExit": return {"resource": 23, "normal": 18, "active": 19}
+	return {}
+
+
+func _bind_source_button(button: Button) -> void:
+	var spec := _source_button_spec(str(button.name))
+	if spec.is_empty(): return
+	var art := _sprite(null, button.size)
+	art.name = "SourceButtonArt"
+	button.add_child(art)
+	button.mouse_entered.connect(func() -> void:
+		button.set_meta("source_hot", true)
+		_refresh_source_button(button))
+	button.mouse_exited.connect(func() -> void:
+		button.set_meta("source_hot", false)
+		_refresh_source_button(button))
+	button.button_down.connect(func() -> void: _refresh_source_button(button))
+	button.button_up.connect(func() -> void: _refresh_source_button(button))
+	_refresh_source_button(button)
+
+
+func _refresh_source_button(button: Button) -> void:
+	var spec := _source_button_spec(str(button.name))
+	var art := button.get_node_or_null("SourceButtonArt") as TextureRect
+	if spec.is_empty() or art == null: return
+	var selected := (button.name == "ATMWithdraw" and _selected_action == "withdraw") or (button.name == "ATMDeposit" and _selected_action == "deposit")
+	var active := selected or button.button_pressed or bool(button.get_meta("source_hot", false))
+	var chunk := int(spec.active if active and not button.disabled else spec.normal)
+	art.visible = chunk >= 0
+	if chunk >= 0:
+		art.texture = _resolve_chunk_visual(int(spec.resource), chunk, "%s.Panel%d.chunk%d" % [_edition, spec.resource, chunk]) as Texture2D
+		art.set_meta("source_chunk", chunk)

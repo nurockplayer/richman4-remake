@@ -24,6 +24,9 @@ var _availability_message := ""
 var _visual_accessor: Variant = null
 var _edition := "Game"
 var _has_source_visual := false
+var _percent: Control
+var _progress: Control
+var _digits: Control
 
 
 func _init() -> void:
@@ -93,11 +96,11 @@ func _build() -> void:
 	# Panel21 的按鍵直接放在來源座標附近，避免使用會改變視覺層次的
 	# 現代表單版面。Panel22 沒有視覺資源，這裡不會捏造它的圖像。
 	for key in [
-		["C", "AmountClear", Vector2(7, 76)],
-		["0", "AmountDigit0", Vector2(36, 76)],
-		["←", "AmountBackspace", Vector2(65, 76)],
+		["C", "AmountClear", Vector2(8, 95)],
+		["0", "AmountDigit0", Vector2(48, 95)],
+		["←", "AmountBackspace", Vector2(88, 95)],
 	]:
-		var button := _make_button(str(key[0]), str(key[1]), Rect2(key[2], Vector2(26, 18)))
+		var button := _make_button(str(key[0]), str(key[1]), Rect2(key[2], Vector2(33, 17)))
 		add_child(button)
 		if button.name == "AmountClear":
 			button.pressed.connect(_clear)
@@ -111,15 +114,15 @@ func _build() -> void:
 		for column_index in rows[row_index].size():
 			var digit: String = rows[row_index][column_index]
 			var button_name := "AmountDigit" + digit
-			var button_position := Vector2(7 + column_index * 29, 97 + row_index * 19)
-			var button := _make_button(digit, button_name, Rect2(button_position, Vector2(26, 18)))
+			var button_position := Vector2(8 + column_index * 40, 119 + row_index * 24)
+			var button := _make_button(digit, button_name, Rect2(button_position, Vector2(33, 17)))
 			add_child(button)
 			button.pressed.connect(func() -> void: _append_digit(digit))
 
-	max_button = _make_button("MAX", "AmountMax", Rect2(Vector2(7, 155), Vector2(52, 25)))
+	max_button = _make_button("MAX", "AmountMax", Rect2(Vector2(8, 63), Vector2(49, 25)))
 	max_button.pressed.connect(_fill_maximum)
 	add_child(max_button)
-	submit_button = _make_button("ENTER", "AmountEnter", Rect2(Vector2(64, 155), Vector2(57, 25)))
+	submit_button = _make_button("ENTER", "AmountEnter", Rect2(Vector2(64, 63), Vector2(57, 25)))
 	submit_button.pressed.connect(_submit)
 	add_child(submit_button)
 
@@ -134,6 +137,24 @@ func _build() -> void:
 	error_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(error_label)
 
+	_digits = Control.new()
+	_digits.name = "AmountSourceDigits"
+	_digits.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_digits)
+	_progress = Control.new()
+	_progress.name = "AmountSourceProgress"
+	_progress.position = Vector2(10, 42)
+	_progress.clip_contents = true
+	_progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_progress)
+	_percent = Control.new()
+	_percent.name = "AmountPercent"
+	_percent.position = Vector2(10, 42)
+	_percent.size = Vector2(108, 12)
+	_percent.mouse_filter = Control.MOUSE_FILTER_STOP
+	_percent.gui_input.connect(_on_percent_input)
+	add_child(_percent)
+	_percent.hide()
 	_refresh_display()
 
 
@@ -147,7 +168,7 @@ func configure(action_value: String, maximum_value: int, initial_amount: int = 0
 		input_field.text = str(initial_amount)
 	_refresh_display()
 	if is_inside_tree():
-		input_field.grab_focus()
+		_focus_entry()
 
 
 func set_available(available: bool, message: String = "") -> void:
@@ -215,12 +236,14 @@ func _apply_visual() -> void:
 		var stale := get_node_or_null("AmountPadSourceVisual")
 		if stale != null:
 			stale.free()
+		_refresh_source_art()
 		return
 	_has_source_visual = true
 	_set_source_layering(true)
 	var existing := get_node_or_null("AmountPadSourceVisual") as TextureRect
 	if existing != null:
 		existing.texture = visual
+		_refresh_source_art()
 		return
 	var texture_rect := TextureRect.new()
 	texture_rect.name = "AmountPadSourceVisual"
@@ -233,12 +256,13 @@ func _apply_visual() -> void:
 	texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(texture_rect)
 	move_child(texture_rect, 0)
+	_refresh_source_art()
 
 
-func _resolve_visual() -> Variant:
+func _resolve_visual(chunk: int = 0) -> Variant:
 	if _visual_accessor == null:
 		return null
-	var key := "%s.Panel21" % _edition
+	var key := "%s.Panel21" % _edition if chunk == 0 else "%s.Panel21.chunk%d" % [_edition, chunk]
 	if _visual_accessor is Dictionary:
 		var visuals: Dictionary = _visual_accessor
 		var aliases := [key, key.to_lower(), key.to_upper(), key.replace(".", "/"), key.replace(".", "_")]
@@ -252,7 +276,7 @@ func _resolve_visual() -> Variant:
 		return _visual_accessor.call(key)
 	if _visual_accessor is Object:
 		if _visual_accessor.has_method("ui") and _visual_accessor.has_method("texture"):
-			var frame: Variant = _visual_accessor.call("ui", _edition, "Panel", 21, 0)
+			var frame: Variant = _visual_accessor.call("ui", _edition, "Panel", 21, chunk)
 			if frame is Dictionary:
 				return _visual_accessor.call("texture", frame)
 		for method in ["texture", "get_texture", "visual", "resolve"]:
@@ -268,12 +292,18 @@ func _set_source_layering(enabled: bool) -> void:
 	if input_field != null:
 		input_field.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if enabled else _style(Color("#d9e5af"), Color("#f4e7ae"), 1))
 		input_field.add_theme_stylebox_override("focus", StyleBoxEmpty.new() if enabled else _style(Color("#d9e5af"), Color("#f4e7ae"), 1))
+	for key in ["AmountPadTitle", "AmountInput", "AmountValue", "AmountLimit", "AmountError"]:
+		var child := get_node_or_null(key) as CanvasItem
+		if child != null: child.visible = not enabled
 	for child in get_children():
 		if child is Button:
+			child.text = "" if enabled else str(child.get_meta("fallback_text", ""))
 			if enabled:
 				_set_button_transparent(child as Button)
 			else:
 				_restore_button_style(child as Button)
+				var art := child.get_node_or_null("SourceButtonArt") as CanvasItem
+				if art != null: art.hide()
 
 
 func _set_button_transparent(button: Button) -> void:
@@ -332,7 +362,7 @@ func _digit_from_event(event: InputEventKey) -> String:
 func _append_digit(digit: String) -> void:
 	input_field.text += digit
 	input_field.caret_column = input_field.text.length()
-	input_field.grab_focus()
+	_focus_entry()
 	_refresh_display()
 
 
@@ -342,14 +372,14 @@ func _fill_maximum() -> void:
 		return
 	input_field.text = str(maximum)
 	input_field.caret_column = input_field.text.length()
-	input_field.grab_focus()
+	_focus_entry()
 	_refresh_display()
 
 
 func _clear() -> void:
 	input_field.text = ""
 	input_field.caret_column = 0
-	input_field.grab_focus()
+	_focus_entry()
 	_refresh_display()
 
 
@@ -357,7 +387,7 @@ func _backspace() -> void:
 	if not input_field.text.is_empty():
 		input_field.text = input_field.text.left(input_field.text.length() - 1)
 	input_field.caret_column = input_field.text.length()
-	input_field.grab_focus()
+	_focus_entry()
 	_refresh_display()
 
 
@@ -397,12 +427,15 @@ func _refresh_display() -> void:
 		max_button.disabled = not _available
 	if submit_button != null:
 		submit_button.disabled = not _available
+	_refresh_source_art()
 
 
 func _make_button(text_value: String, node_name: String, button_rect: Rect2) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = text_value
+	button.set_meta("fallback_text", text_value)
+	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.position = button_rect.position
 	button.size = button_rect.size
 	button.custom_minimum_size = button_rect.size
@@ -423,3 +456,77 @@ func _style(background: Color, border: Color, width: int) -> StyleBoxFlat:
 	style.set_border_width_all(width)
 	style.set_corner_radius_all(1)
 	return style
+
+
+func _focus_entry() -> void:
+	if not is_inside_tree(): return
+	if _has_source_visual: grab_focus()
+	else: input_field.grab_focus()
+
+
+func _sprite(texture: Texture2D, logical_size: Vector2) -> TextureRect:
+	var art := TextureRect.new()
+	art.texture = texture
+	art.size = logical_size
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_SCALE
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return art
+
+
+func _refresh_source_art() -> void:
+	if _digits == null: return
+	_digits.visible = _has_source_visual
+	_progress.visible = _has_source_visual
+	_percent.visible = _has_source_visual
+	for child in _digits.get_children(): child.free()
+	for child in _progress.get_children(): child.free()
+	if not _has_source_visual: return
+	var text := raw_text()
+	if text.is_empty() or not text.is_valid_int() or int(text) < 0: text = "0"
+	# Existing remake balances can exceed the source's nine-digit width. Keep
+	# every entered digit visible, compressing only that exceptional display.
+	var ratio := minf(1.0, 9.0 / float(text.length()))
+	for index in range(text.length()):
+		var chunk := 16 + int(text[text.length() - 1 - index])
+		var texture: Variant = _resolve_visual(chunk)
+		if texture is Texture2D:
+			var art := _sprite(texture, Vector2(9 * ratio, 19))
+			art.position = Vector2(107 + 9 * (1.0 - ratio) - index * 12 * ratio, 11)
+			art.set_meta("source_chunk", chunk)
+			_digits.add_child(art)
+	var value := int(parsed_amount().get("amount", 0))
+	var width := floori(108.0 * clampf(float(value) / float(maxi(1, maximum)), 0.0, 1.0))
+	_progress.size = Vector2(width, 12)
+	var bar: Variant = _resolve_visual(1)
+	if bar is Texture2D: _progress.add_child(_sprite(bar, Vector2(108, 12)))
+	var names := ["AmountMax", "AmountEnter", "AmountClear", "AmountDigit0", "AmountBackspace", "AmountDigit7", "AmountDigit8", "AmountDigit9", "AmountDigit4", "AmountDigit5", "AmountDigit6", "AmountDigit1", "AmountDigit2", "AmountDigit3"]
+	for index in range(names.size()):
+		var button := get_node_or_null(names[index]) as Button
+		if button == null: continue
+		var art := button.get_node_or_null("SourceButtonArt") as TextureRect
+		var texture: Variant = _resolve_visual(index + 2)
+		if art == null:
+			art = _sprite(texture as Texture2D, button.size)
+			art.name = "SourceButtonArt"
+			art.set_meta("source_chunk", index + 2)
+			button.add_child(art)
+			button.button_down.connect(func() -> void: art.visible = _has_source_visual)
+			button.button_up.connect(func() -> void: art.hide())
+		art.texture = texture as Texture2D
+		art.visible = button.button_pressed and _has_source_visual
+
+
+func _on_percent_input(event: InputEvent) -> void:
+	if not _has_source_visual or not _available: return
+	var active: bool = event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+	active = active or (event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0)
+	if not active: return
+	var offset := clampf(event.position.x, 0.0, 107.0)
+	var thresholds := [3, 6, 9, 12, 15, 19, 22, 25, 28, 31, 34, 38, 41, 44, 47, 50, 53, 57, 60, 63, 66, 69, 73, 76, 79, 82, 85, 88, 92, 95, 98, 101, 104, 107]
+	var index := 0
+	while index < 33 and float(thresholds[index]) < offset: index += 1
+	set_amount_text(str(int(floor(float(maximum) * float(index) / 33.0))))
+	_percent.accept_event()
+	_focus_entry()

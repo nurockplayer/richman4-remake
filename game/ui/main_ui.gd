@@ -217,7 +217,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _legacy_save_modal_open():
 		return
-	if source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible():
+	if _source_modal_open():
 		return
 	_maybe_schedule_ai_turn()
 
@@ -226,6 +226,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 			_cancel_legacy_save_load()
 		get_viewport().set_input_as_handled()
+		return
+	if _source_modal_open():
+		# Source title and stock controls own their local input.  Stop the
+		# legacy keyboard shortcuts from reaching the hidden adapter while a
+		# source surface is open; StockPanel still receives its _input() phase.
 		return
 	if _presentation_busy:
 		return
@@ -366,7 +371,8 @@ func _on_source_save_requested() -> void:
 	_save_game()
 
 func _on_source_option_requested() -> void:
-	_on_new_game_pressed()
+	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
+	_refresh_log_only()
 
 func _on_source_help_requested() -> void:
 	_append_local_log("說明功能將在後續原版指令頁接入。")
@@ -391,10 +397,14 @@ func _on_source_cards_requested() -> void:
 	_on_cards_pressed()
 
 func _on_source_sale_requested() -> void:
-	_on_stocks_pressed()
+	_append_local_log("出售功能請從來源股市畫面操作；目前此指令保留待接入。")
+	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
 	if source_stock_panel == null:
+		_on_stocks_pressed()
+		return
+	if not _has_original_companies():
 		_on_stocks_pressed()
 		return
 	if not _is_human_turn():
@@ -1879,6 +1889,11 @@ func _save_game() -> void:
 func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
+func _source_modal_open() -> bool:
+	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
+	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
+	return title_open or stocks_open
+
 func _load_blocked_by_presentation() -> bool:
 	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
@@ -2509,13 +2524,15 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):
+		source_shell.call("set_toolbar_enabled", "help", false)
+		source_shell.call("set_toolbar_enabled", "options", false)
+		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
 		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy)
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
-		source_shell.call("set_toolbar_enabled", "cards", not cards_button.disabled)
-		source_shell.call("set_toolbar_enabled", "tools", not cards_button.disabled)
-		source_shell.call("set_toolbar_enabled", "sale", not stocks_button.disabled)
-		source_shell.call("set_toolbar_enabled", "ai", not _presentation_busy and not _legacy_save_modal_open())
+		source_shell.call("set_toolbar_enabled", "cards", false)
+		source_shell.call("set_toolbar_enabled", "tools", false)
+		source_shell.call("set_toolbar_enabled", "sale", false)
 	_last_rendered_phase = phase
 
 func _update_load_gate() -> void:
@@ -2931,6 +2948,8 @@ func _respond_to_trap(decline: bool) -> void:
 func _maybe_schedule_ai_turn() -> void:
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
+	if _source_modal_open():
+		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
 	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
@@ -2963,6 +2982,8 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 		return
 	_ai_pending = false
 	if _presentation_busy:
+		return
+	if _source_modal_open():
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return

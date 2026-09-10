@@ -4,6 +4,8 @@ class_name RichmanSourceMinimap
 ## Small source-oriented map view.  It only projects the public board snapshot;
 ## panning is sent back to MainUI so this module never mutates simulation data.
 
+const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
+
 signal pan_requested(delta: Vector2)
 signal node_selected(index: int)
 
@@ -17,6 +19,9 @@ const PLAYER_COLORS := [
 var snapshot: Dictionary = {}
 var map_definition: Dictionary = {}
 var board_view: Control
+var _visuals = OriginalVisuals.new()
+var _source_scene: Dictionary = {}
+var _source_scene_texture: Texture2D
 var _dragging := false
 var _last_pointer := Vector2.ZERO
 
@@ -36,6 +41,8 @@ func set_board_view(view: Control) -> void:
 func set_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}) -> void:
 	snapshot = next_snapshot.duplicate(true)
 	map_definition = next_definition.duplicate(true)
+	_source_scene = _visuals.scene_for(map_definition)
+	_source_scene_texture = _visuals.texture(_source_scene.get("image", {}))
 	queue_redraw()
 
 
@@ -71,15 +78,9 @@ func _focus_at(pointer: Vector2) -> void:
 			nearest = index
 	if nearest >= 0:
 		node_selected.emit(nearest)
-	if board_view == null or not board_view.has_method("pan_by"):
-		return
-	var center := size * 0.5
-	var scale := maxf(0.01, minf(size.x, size.y) / 2.0)
-	var offset := (pointer - center) / scale
-	var board_size := board_view.size
-	if board_size.x <= 0.0 or board_size.y <= 0.0:
-		return
-	pan_requested.emit(-Vector2(offset.x * board_size.x, offset.y * board_size.y))
+	# MainUI owns the board camera and centers the selected node in response to
+	# node_selected.  Do not emit a second approximate pan from the minimap;
+	# that would apply the camera movement twice and drift after rotation.
 
 
 func _board_points() -> Array[Vector2]:
@@ -88,6 +89,24 @@ func _board_points() -> Array[Vector2]:
 		board = snapshot.get("board", [])
 	if not board is Array or board.is_empty():
 		return []
+	if board_view != null and board_view.has_method("get_map_bounds") and board_view.has_method("map_to_minimap"):
+		var map_bounds: Variant = board_view.call("get_map_bounds")
+		if map_bounds is Rect2 and map_bounds.has_area():
+			var projected: Array[Vector2] = []
+			var minimap_rect := Rect2(Vector2.ZERO, size)
+			for value in board:
+				if not value is Dictionary or not value.has("x") or not value.has("y"):
+					projected.clear()
+					break
+				var tile: Dictionary = value
+				var coordinate := Vector2(float(tile.get("x", 0)), float(tile.get("y", 0)))
+				var point: Variant = board_view.call("map_to_minimap", coordinate, minimap_rect)
+				if not point is Vector2:
+					projected.clear()
+					break
+				projected.append(point)
+			if projected.size() == board.size():
+				return projected
 	var coordinates: Array[Vector2] = []
 	var has_coordinates := false
 	for value in board:
@@ -139,6 +158,10 @@ func _draw() -> void:
 		board = snapshot.get("board", [])
 	if points.is_empty() or not board is Array:
 		return
+	if _source_scene_texture != null and _visuals.world_rect(_source_scene).has_area():
+		draw_texture_rect(_source_scene_texture, Rect2(Vector2.ZERO, size), false)
+	else:
+		draw_rect(Rect2(Vector2.ZERO, size), Color("#183f42"), true)
 	for index in range(board.size()):
 		var tile: Dictionary = board[index] if board[index] is Dictionary else {}
 		for neighbor_value in tile.get("adjacent", []):
@@ -160,24 +183,27 @@ func _draw() -> void:
 		if position < 0 or position >= points.size():
 			continue
 		draw_circle(points[position], 4.0, PLAYER_COLORS[player_index % PLAYER_COLORS.size()])
-	var visible: Array = []
-	if board_view != null and board_view.has_method("visible_node_indices"):
-		var candidate: Variant = board_view.call("visible_node_indices")
-		if candidate is Array:
-			visible = candidate
-	if visible.is_empty() or visible.size() >= points.size():
+	var viewport_polygon: Array[Vector2] = _viewport_polygon()
+	if viewport_polygon.size() < 3:
 		draw_rect(Rect2(Vector2(10.0, 10.0), size - Vector2(20.0, 20.0)), Color("#f1d28a"), false, 1.0)
 	else:
-		var minimum := Vector2(INF, INF)
-		var maximum := Vector2(-INF, -INF)
-		for value in visible:
-			var index := int(value)
-			if index < 0 or index >= points.size():
-				continue
-			minimum.x = minf(minimum.x, points[index].x)
-			minimum.y = minf(minimum.y, points[index].y)
-			maximum.x = maxf(maximum.x, points[index].x)
-			maximum.y = maxf(maximum.y, points[index].y)
-		if minimum.x != INF:
-			var viewport := Rect2(minimum - Vector2(6.0, 6.0), maximum - minimum + Vector2(12.0, 12.0))
-			draw_rect(viewport, Color("#f1d28a"), false, 1.4)
+		var outline := PackedVector2Array(viewport_polygon)
+		outline.append(viewport_polygon[0])
+		draw_polyline(outline, Color("#f1d28a"), 1.4, true)
+
+
+func _viewport_polygon() -> Array[Vector2]:
+	if board_view == null or not board_view.has_method("get_minimap_viewport_polygon") or not board_view.has_method("get_map_bounds"):
+		return []
+	var map_bounds: Variant = board_view.call("get_map_bounds")
+	if not map_bounds is Rect2 or not map_bounds.has_area():
+		return []
+	var polygon_value: Variant = board_view.call("get_minimap_viewport_polygon", Rect2(Vector2.ZERO, size))
+	if not polygon_value is Array or polygon_value.size() < 3:
+		return []
+	var polygon: Array[Vector2] = []
+	for point_value in polygon_value:
+		if not point_value is Vector2:
+			return []
+		polygon.append(point_value)
+	return polygon

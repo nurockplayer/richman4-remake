@@ -4,6 +4,7 @@ const GameState = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
+const CompanyFixture = preload("res://tests/fixtures/company_fixture.gd")
 
 var checks := 0
 var failures := 0
@@ -91,6 +92,10 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	game._sync_state()
 	ui._refresh_from_state()
 	_expect(not shell.is_title_visible(), "new game enters the source board screen")
+	for key in ["help", "options", "ai", "tools", "cards", "sale"]:
+		var pending_control: Button = shell.toolbar_buttons.get(key) as Button
+		_expect(pending_control != null and pending_control.visible and pending_control.disabled, "source %s command stays visibly pending" % key)
+	_expect(shell.title_option_button.disabled, "source title options stays visibly pending")
 	_expect(shell.action_strip.get_parent() == shell.game_screen, "context actions live on the board screen")
 	_expect(shell.roll_button.get_parent() == shell.action_strip and shell.roll_button.get_parent() != shell.hud_panel, "roll is a board-context action")
 	_expect(shell.buy_button.get_parent() == shell.action_strip and shell.upgrade_button.get_parent() == shell.action_strip and shell.end_turn_button.get_parent() == shell.action_strip, "landing actions share the board context strip")
@@ -125,18 +130,25 @@ func _test_stock_names(shell: Control) -> void:
 
 func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	var before_state: String = game.to_json()
-	var before_pan: Vector2 = shell.board_host.get_child(0).map_pan if shell.board_host.get_child_count() > 0 and shell.board_host.get_child(0).get("map_pan") is Vector2 else Vector2.ZERO
+	shell.toggle_map_view()
+	var view: Control = shell.board_host.get_child(0)
+	var points: Array[Vector2] = shell.minimap.call("_board_points")
+	var target_index: int = mini(2, points.size() - 1)
+	var before_pan: Vector2 = view.map_pan if view.get("map_pan") is Vector2 else Vector2.ZERO
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
-	click.position = Vector2(100.0, 100.0)
+	click.position = points[target_index] if target_index >= 0 else Vector2(100.0, 100.0)
 	shell.minimap._gui_input(click)
 	click.pressed = false
 	shell.minimap._gui_input(click)
 	_expect(game.to_json() == before_state, "minimap click does not mutate simulation")
-	var view: Control = shell.board_host.get_child(0)
 	if view.has_method("pan_by"):
 		_expect(view.map_pan != before_pan, "minimap click pans the board view")
+	if target_index >= 0 and view.has_method("get_screen_position_for_index"):
+		var focused_position: Vector2 = view.call("get_screen_position_for_index", target_index)
+		_expect(focused_position.distance_to(view.size * 0.5) < 1.5, "minimap node selection centers the board camera once")
+	shell.toggle_map_view()
 
 
 func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
@@ -179,6 +191,104 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
 
 
+func _test_source_stock_modal_gate(ui: Control, shell: Control) -> void:
+	var definition: Dictionary = CompanyFixture.definition()
+	var started: bool = ui._new_game(90101, 4, definition)
+	_expect(started, "source stock fixture starts through the public new-game path")
+	ui.set_process(false)
+	ui.board_view.set_process(false)
+	var game: Object = ui.game_state
+	game.state.current_player = 0
+	game.state.phase = "await_action"
+	game.state.players[0].is_human = true
+	game.state.players[0].is_ai = false
+	game.state.players[0].deposit = 1000
+	game.state.players[0].stocks["s01"] = 0
+	game.state.market.open = true
+	game.state.market.closed_days = 0
+	var row: Dictionary = game.state.market.rows.s01
+	row.price = 100.0
+	row.previous_price = 100.0
+	row.turn_supply = 20
+	row.market_supply = 5000
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	var source_stocks: Button = shell.toolbar_buttons.get("stocks") as Button
+	_expect(source_stocks != null and source_stocks.visible and not source_stocks.disabled, "visible source stocks control is enabled before opening")
+	var before_open: String = game.to_json()
+	source_stocks.pressed.emit()
+	await process_frame
+	var panel: Control = ui.source_stock_panel
+	_expect(panel != null and panel.visible, "source stocks control opens the source stock panel")
+	var space := InputEventKey.new()
+	space.keycode = KEY_SPACE
+	space.pressed = true
+	ui._unhandled_input(space)
+	var new_game_key := InputEventKey.new()
+	new_game_key.keycode = KEY_N
+	new_game_key.pressed = true
+	ui._unhandled_input(new_game_key)
+	ui._ai_pending = true
+	ui._on_ai_timer_timeout()
+	_expect(game.to_json() == before_open, "source stock panel blocks Space/N and queued AI mutation")
+	_expect(not ui.new_game_popup.visible, "source stock panel keeps the legacy new-game popup closed")
+	_expect(ui._ai_pending == false, "source stock panel drains a queued AI callback without acting")
+	panel.call("close_panel")
+	await process_frame
+	_expect(not panel.visible, "source stock panel closes through its own EXIT control")
+	source_stocks.pressed.emit()
+	await process_frame
+	panel.call("open_for", game.get_snapshot(), definition)
+	panel.call("select_symbol", "s01")
+	var buy: Button = panel.find_child("StockBuy", true, false) as Button
+	_expect(buy != null and buy.visible and not buy.disabled, "source stock buy control is enabled for a selected share")
+	if buy != null and not buy.disabled:
+		buy.pressed.emit()
+		await process_frame
+		var buy_pad: Control = panel.find_child("SourceQuantityPad", true, false) as Control
+		var buy_input: LineEdit = buy_pad.find_child("QuantityInput", true, false) as LineEdit if buy_pad != null else null
+		if buy_input != null:
+			buy_input.text = "1"
+			buy_pad.find_child("QuantitySubmit", true, false).pressed.emit()
+		await process_frame
+	_expect(int(game.state.players[0].stocks.get("s01", 0)) == 1, "source stock buy reaches the existing choose_action path")
+	_expect(int(game.state.players[0].deposit) == 900, "source stock buy uses the existing deposit accounting")
+	panel.call("clear_selection")
+	panel.call("select_symbol", "s01")
+	var sell: Button = panel.find_child("StockSell", true, false) as Button
+	_expect(sell != null and sell.visible and not sell.disabled, "source stock sell control is enabled after buying")
+	if sell != null and not sell.disabled:
+		sell.pressed.emit()
+		await process_frame
+		var sell_pad: Control = panel.find_child("SourceQuantityPad", true, false) as Control
+		var sell_input: LineEdit = sell_pad.find_child("QuantityInput", true, false) as LineEdit if sell_pad != null else null
+		if sell_input != null:
+			sell_input.text = "1"
+			sell_pad.find_child("QuantitySubmit", true, false).pressed.emit()
+		await process_frame
+	_expect(int(game.state.players[0].stocks.get("s01", 0)) == 0, "source stock sell reaches the existing choose_action path")
+	_expect(int(game.state.players[0].deposit) == 1000, "source stock sell returns the existing deposit accounting")
+	panel.call("close_panel")
+	await process_frame
+	_expect(not panel.visible, "source stock panel closes after the completed trade flow")
+
+
+func _test_legacy_stock_source_route(ui: Control, shell: Control) -> void:
+	var legacy: Object = GameState.new_game(204, 2)
+	legacy.state.current_player = 0
+	legacy.state.phase = "await_action"
+	legacy._set_action_options(0)
+	ui.game_state = legacy
+	ui._active_map_definition = {}
+	ui._refresh_from_state()
+	var source_stocks: Button = shell.toolbar_buttons.get("stocks") as Button
+	_expect(source_stocks != null and not source_stocks.disabled, "legacy source stocks control remains available")
+	source_stocks.pressed.emit()
+	_expect(ui.stocks_popup.visible and not ui.source_stock_panel.visible, "legacy source stocks stays on the legacy three-stock popup")
+	ui.stocks_popup.hide()
+
+
 func _run() -> void:
 	var ui: Control = MainScene.instantiate()
 	root.add_child(ui)
@@ -193,8 +303,10 @@ func _run() -> void:
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
 	_test_hud_tabs_and_actions(ui, shell, game)
-	_test_source_roll_presentation_gate(ui, shell)
 	_test_minimap_input(ui, shell, game)
+	_test_source_roll_presentation_gate(ui, shell)
+	await _test_source_stock_modal_gate(ui, shell)
+	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)
 	ui.queue_free()
 	await create_timer(0.15).timeout

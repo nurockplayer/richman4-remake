@@ -189,6 +189,7 @@ func _build_title_screen() -> void:
 	menu.add_child(title_load_button)
 	title_option_button = _title_button("OPTION", "選項")
 	_configure_title_hit_area(title_option_button, "option", Rect2(408.0, 322.0, 118.0, 112.0))
+	title_option_button.disabled = true
 	title_option_button.pressed.connect(func() -> void: option_requested.emit())
 	menu.add_child(title_option_button)
 
@@ -536,6 +537,8 @@ func set_toolbar_enabled(key: String, enabled: bool) -> void:
 		(toolbar_buttons[key] as Button).disabled = not enabled
 	if key == "load" and title_load_button != null:
 		title_load_button.disabled = not enabled
+	if key == "options" and title_option_button != null:
+		title_option_button.disabled = not enabled
 
 
 func _render_hud() -> void:

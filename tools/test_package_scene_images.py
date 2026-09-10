@@ -94,7 +94,8 @@ class PackageSceneTests(unittest.TestCase):
             mj = root / "MultiverseJourney"
             game.mkdir()
             mj.mkdir()
-            save_load = self._make_smp_chunks(2)
+            game_save_load = self._make_smp_chunks(7)
+            mj_save_load = self._make_smp_chunks(11)
             raw = self._make_raw_rgb555()
             game_jump = self._jump_archive("Game")
             mj_jump = self._jump_archive("MultiverseJourney")
@@ -103,14 +104,14 @@ class PackageSceneTests(unittest.TestCase):
             game_data = self._indexed_archive(
                 561,
                 {
-                    479: (save_load, len(save_load), 12 + 2 * 12, 4),
+                    479: (game_save_load, len(game_save_load), 12 + 7 * 12, 14),
                     560: (raw, len(raw), 4, len(raw) - 4),
                 },
             )
             mj_data = self._indexed_archive(
                 602,
                 {
-                    520: (save_load, len(save_load), 12 + 2 * 12, 4),
+                    520: (mj_save_load, len(mj_save_load), 12 + 11 * 12, 22),
                     601: (raw, len(raw), 4, len(raw) - 4),
                 },
             )
@@ -172,6 +173,8 @@ class PackageSceneTests(unittest.TestCase):
                         self.assertIn(index, ranges["character_previews"])
             self.assertEqual(set(game_group["Data"]["resources"]), {"1", "2", "3", "479", "560"})
             self.assertEqual(set(mj_group["Data"]["resources"]), {"1", "2", "3", "520", "601"})
+            self.assertEqual(set(game_group["Data"]["resources"]["479"]["chunks"]), {str(i) for i in range(7)})
+            self.assertEqual(set(mj_group["Data"]["resources"]["520"]["chunks"]), {str(i) for i in range(11)})
             self.assertNotIn("520", game_group["Data"]["resources"])
             self.assertNotIn("479", mj_group["Data"]["resources"])
             self.assertEqual(game_group["Data"]["resources"]["479"]["source"]["resource_index"], 479)

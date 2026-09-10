@@ -54,6 +54,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_sc
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller_host.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_catalog.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd

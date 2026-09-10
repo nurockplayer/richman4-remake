@@ -1250,6 +1250,17 @@ func _update_company_owners() -> void:
 		_settling_special_finance = false
 
 
+func _finish_company_trade(player_id: int) -> void:
+	# A chair loss can liquidate the trading actor. Movement bankruptcy may
+	# already have admitted its successor; action-phase bankruptcy has not.
+	# Keep end-turn/dividend ordering with those callers and finish only this
+	# immediate trade boundary, without replacing a successor's legal actions.
+	if state.get("phase", "") != "game_over" and int(state.current_player) == player_id and not bool(_player(player_id).get("alive", false)):
+		_advance_to_next_alive(player_id)
+	else:
+		_set_action_options(int(state.current_player))
+
+
 func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 	if state.get("phase", "") == "game_over": return _error("遊戲已結束")
 	if not bool(state.market.open): return _error("證券市場休市")
@@ -1288,7 +1299,7 @@ func _trade_company_market(action: String, params: Dictionary) -> Dictionary:
 		StockAccounting.record_sale(player, stock_symbol, quantity, get_stock_symbols())
 	_update_company_owners()
 	_record_event("stock_bought" if action == "buy_stock" else "stock_sold", {"player_id":player_id,"symbol":stock_symbol,"stock_name":str(row.name),"quantity":quantity,"price":float(row.price),"amount":amount,"account":"deposit"})
-	_set_action_options(player_id)
+	_finish_company_trade(player_id)
 	return _result(true,"股票交易完成")
 
 
@@ -1311,7 +1322,7 @@ func _buy_company_stock(player_id: int, params: Dictionary) -> Dictionary:
 	state.company_purchase_remaining = int(state.company_purchase_remaining) - quantity
 	_update_company_owners()
 	_record_event("company_shares_bought", {"player_id":player_id,"company_id":int(company.id),"company_name":str(company.display_name),"symbol":stock_symbol,"quantity":quantity,"price":face_price,"amount":amount})
-	_set_action_options(player_id)
+	_finish_company_trade(player_id)
 	return _result(true,"已購入企業股份")
 
 

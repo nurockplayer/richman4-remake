@@ -38,6 +38,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_loans.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance_boundaries.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance_actor.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd

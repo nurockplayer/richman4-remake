@@ -34,8 +34,9 @@ const HITBOXES := {
 	"daygrid": Rect2(15.0, 70.0, 166.0, 107.0),
 }
 
-# Data3 chunk 2 is the opaque idle date frame.  Chunks 12/13 are the pressed
-# month/year arrow overlays; chunk 14 is shared by all three footer buttons.
+# Data3 chunk 2 is the opaque idle date frame.  Chunk 12 is the pressed
+# down-arrow overlay and chunk 13 is the pressed up-arrow overlay for both
+# month and year controls; chunk 14 is shared by all three footer buttons.
 const CHUNKS := {
 	"frame": 2,
 	"month_pressed": 12,
@@ -648,39 +649,23 @@ func _draw_date() -> void:
 		label.set_meta("source_center", center)
 		day_labels.append(label)
 
-	var footer_records := [
-		{"name": "SourceDateSystemLabel", "text": "系 統", "center": Vector2(38.0, 196.0), "action": "system"},
-		{"name": "SourceDateCancelLabel", "text": "取 消", "center": Vector2(101.0, 196.0), "action": "cancel"},
-		{"name": "SourceDateAcceptLabel", "text": "確 定", "center": Vector2(163.0, 196.0), "action": "accept"},
-	]
-	for record in footer_records:
-		var footer := _make_centered_label(
-			str(record["name"]),
-			str(record["text"]),
-			record["center"],
-			Vector2(55.0, 20.0),
-			15,
-		)
-		footer.set_meta("source_action", str(record["action"]))
-		footer_labels.append(footer)
-
-	if _pressed_action in ["month_down", "month_up"]:
+	if _pressed_action in ["month_down", "year_down"]:
 		_add_art(
 			resolved["month_pressed"],
-			"SourceDateMonth%sPressed" % ("Down" if _pressed_action == "month_down" else "Up"),
+			"SourceDate%sPressed" % ("MonthDown" if _pressed_action == "month_down" else "YearDown"),
 			_hitbox(_pressed_action).position,
 			Vector2(17.0, 11.0),
 			int(CHUNKS["month_pressed"]),
 		)
-	elif _pressed_action in ["year_down", "year_up"]:
+	elif _pressed_action in ["month_up", "year_up"]:
 		_add_art(
 			resolved["year_pressed"],
-			"SourceDateYear%sPressed" % ("Down" if _pressed_action == "year_down" else "Up"),
+			"SourceDate%sPressed" % ("MonthUp" if _pressed_action == "month_up" else "YearUp"),
 			_hitbox(_pressed_action).position,
 			Vector2(17.0, 11.0),
 			int(CHUNKS["year_pressed"]),
 		)
-	elif _pressed_action in ["system", "cancel", "accept"]:
+	if _pressed_action in ["system", "cancel", "accept"]:
 		_add_art(
 			resolved["footer_pressed"],
 			"SourceDate%sPressed" % ("System" if _pressed_action == "system" else "Cancel" if _pressed_action == "cancel" else "Accept"),
@@ -688,6 +673,23 @@ func _draw_date() -> void:
 			Vector2(56.0, 31.0),
 			int(CHUNKS["footer_pressed"]),
 		)
+
+	var footer_records := [
+		{"name": "SourceDateSystemLabel", "text": "系 統", "center": Vector2(38.0, 196.0), "action": "system"},
+		{"name": "SourceDateCancelLabel", "text": "取 消", "center": Vector2(101.0, 196.0), "action": "cancel"},
+		{"name": "SourceDateAcceptLabel", "text": "確 定", "center": Vector2(163.0, 196.0), "action": "accept"},
+	]
+	for record in footer_records:
+		var caption_offset := Vector2.ONE if _pressed_action == str(record["action"]) else Vector2.ZERO
+		var footer := _make_centered_label(
+			str(record["name"]),
+			str(record["text"]),
+			record["center"] + caption_offset,
+			Vector2(55.0, 20.0),
+			15,
+		)
+		footer.set_meta("source_action", str(record["action"]))
+		footer_labels.append(footer)
 
 	if not _invalid_confirm_text.is_empty():
 		_invalid_confirm.visible = true
@@ -894,17 +896,29 @@ func _canonical_date(value: Variant) -> Dictionary:
 
 
 func _validate_model(value: Dictionary) -> bool:
-	if _edition.is_empty():
+	if _edition.is_empty() or value.size() != 3:
 		return false
 	if not value.has("edition") or not value.has("date") or not value.has("system_date"):
 		return false
 	if typeof(value.get("edition")) != TYPE_STRING:
 		return false
-	if not GameCalendar.is_valid(value.get("date", null)):
+	if not _valid_public_date(value.get("date", null)):
 		return false
-	if not GameCalendar.is_valid(value.get("system_date", null)):
+	if not _valid_public_date(value.get("system_date", null)):
 		return false
 	return true
+
+
+func _valid_public_date(value: Variant) -> bool:
+	if not value is Dictionary:
+		return false
+	var date_value: Dictionary = value
+	if date_value.size() != 3:
+		return false
+	for key in ["year", "month", "day"]:
+		if not date_value.has(key) or typeof(date_value[key]) != TYPE_INT:
+			return false
+	return GameCalendar.is_valid(date_value)
 
 
 func _deep_equal(left: Variant, right: Variant) -> bool:

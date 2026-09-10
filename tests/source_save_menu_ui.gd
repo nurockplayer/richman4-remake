@@ -75,6 +75,18 @@ func run() -> void:
 	check(store.write(1, snapshot_a).get("ok", false), "source-capability slot A writes")
 	check(ui._new_game(12922, 4, ui._selected_map_definition, ui._default_setup_options(4, ui._selected_map_definition)), "second live game constructs")
 	var before_b: String = ui.game_state.to_json()
+	# Ordinary source-board shortcuts must use the same picker as HUD controls.
+	# The legacy overrides count attempted owner-path access without doing I/O.
+	for mode in ["save", "load"]:
+		_ctrl_shortcut(viewport, KEY_S if mode == "save" else KEY_L)
+		check(menu.visible and menu.get("picker").get_mode() == mode, "Ctrl shortcut opens source " + mode + " chooser")
+		check(ui.direct_save_calls == 0 and ui.direct_load_calls == 0, "Ctrl shortcut never reaches direct owner-path " + mode + " adapter")
+		check(ui.game_state.to_json() == before_b, "Ctrl shortcut preserves current state and RNG for " + mode)
+		if menu.visible:
+			menu.cancel()
+		# Isolate failures from subsequent, already existing entry assertions.
+		ui.direct_save_calls = 0
+		ui.direct_load_calls = 0
 	shell.load_requested.emit()
 	check(menu.visible and not shell.is_title_visible(), "HUD LOAD opens chooser over current game")
 	_press_row(viewport, menu, 1)
@@ -214,4 +226,14 @@ func _secondary_cancel(viewport: SubViewport, menu: Control) -> void:
 		event.position = point
 		event.global_position = point
 		event.pressed = pressed
+		viewport.push_input(event, true)
+
+
+func _ctrl_shortcut(viewport: SubViewport, key: Key) -> void:
+	for down in [true, false]:
+		var event := InputEventKey.new()
+		event.keycode = key
+		event.physical_keycode = key
+		event.ctrl_pressed = true
+		event.pressed = down
 		viewport.push_input(event, true)

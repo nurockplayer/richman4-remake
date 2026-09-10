@@ -30,7 +30,7 @@ from original_ui_assets import (
 from test_decode_original_images import make_mkf, make_smp, make_spr, read_png_rgba
 from package_scene_images import validate
 
-EXPECTED_BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30}
+EXPECTED_BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30, 25: 83, 76: 1}
 
 
 class PackageSceneTests(unittest.TestCase):
@@ -112,6 +112,8 @@ class PackageSceneTests(unittest.TestCase):
         panel21_count: int = 26,
         panel23_count: int = 24,
         panel24_count: int = 30,
+        panel25_count: int = 83,
+        panel76_count: int = 1,
         common_payload: bytes | None = None,
     ) -> bytes:
         """Build Panel.mkf with the bounded source bank entries."""
@@ -119,10 +121,14 @@ class PackageSceneTests(unittest.TestCase):
         panel21 = cls._make_spr_chunks(panel21_count)
         panel23 = cls._make_smp_chunks(panel23_count)
         panel24 = cls._make_smp_chunks(panel24_count)
+        panel25 = cls._make_smp_chunks(panel25_count)
+        panel76 = cls._make_smp_chunks(panel76_count)
         replacements = {
             21: (panel21, len(panel21), 12 + panel21_count * 12, 512),
             23: (panel23, len(panel23), 12 + panel23_count * 12, 2 * panel23_count),
             24: (panel24, len(panel24), 12 + panel24_count * 12, 2 * panel24_count),
+            25: (panel25, len(panel25), 12 + panel25_count * 12, 2 * panel25_count),
+            76: (panel76, len(panel76), 12 + panel76_count * 12, 2 * panel76_count),
         }
         if common_payload is not None:
             common_item = (common_payload, len(common_payload), 24, len(common_payload) - 24)
@@ -223,7 +229,7 @@ class PackageSceneTests(unittest.TestCase):
             self.assertEqual(mj_group["Data"]["resources"]["520"]["source"]["resource_index"], 520)
 
     def test_bank_source_resources_are_bound_for_both_editions(self):
-        expected_resources = {"0", "1", "2", "21", "23", "24", "75"}
+        expected_resources = {"0", "1", "2", "21", "23", "24", "25", "75", "76"}
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for edition in ("Game", "MultiverseJourney"):
@@ -773,7 +779,7 @@ class PackageSceneTests(unittest.TestCase):
             self.assertEqual(group["Panel"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
             self.assertEqual(
                 set(group["Panel"]["resources"]),
-                {"0", "1", "2", "21", "23", "24", "75"},
+                {"0", "1", "2", "21", "23", "24", "25", "75", "76"},
             )
             record = group["Panel"]["resources"]["75"]["chunks"]["0"]
             self.assertEqual(record["logical"], {"width": 3, "height": 1, "anchor_x": -2, "anchor_y": 5})

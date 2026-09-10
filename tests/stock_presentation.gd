@@ -102,6 +102,13 @@ func run() -> void:
 	var sell_button: Button = panel.find_child("StockSell", true, false)
 	expect(buy_button != null and not buy_button.disabled, "legal selected buy is enabled")
 	expect(sell_button != null and not sell_button.disabled, "legal selected sell is enabled")
+	panel.clear_selection()
+	var row_button: Button = panel.find_child("StockSelect_s01", true, false)
+	expect(row_button != null, "stock row exposes its source click control")
+	if row_button != null:
+		row_button.pressed.emit()
+		await process_frame
+	expect(panel.selected_symbol() == "s01" and panel.current_screen() == "overview", "actual row button click refreshes selection safely")
 	var guard_panel := StockPanel.new()
 	root.add_child(guard_panel)
 	await process_frame

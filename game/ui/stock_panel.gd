@@ -449,7 +449,10 @@ func _refresh_action_buttons() -> void:
 
 func _clear_table() -> void:
 	for child in _table_root.get_children():
-		child.free()
+		# Detach immediately so the refresh sees only the new projection, then
+		# defer destruction until a row button's pressed signal has unwound.
+		_table_root.remove_child(child)
+		child.queue_free()
 
 
 func _refresh_overview() -> void:

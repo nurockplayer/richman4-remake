@@ -34,6 +34,8 @@ func run() -> void:
 		return
 	var panel: Control = controller.help_panel
 	check(panel != null and panel.visible and panel.has_method("is_model_valid"), "help uses the real presenter including its explicit unavailable state")
+	if not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
+		check(panel.is_model_valid() and panel.view_model().get("edition") == "Game", "supplied help bundle must present valid Game content")
 	check(ui._source_modal_open() and ui._load_blocked_by_presentation(), "help participates in modal and load guards")
 	check(game.to_json() == before, "opening help preserves the full ledger and RNG")
 	ui._on_source_help_requested()
@@ -75,6 +77,8 @@ func run() -> void:
 	await settle()
 	check(controller.is_open() and controller.help_panel != old_panel, "replacement game creates a new help session")
 	check(controller.current_edition() == "MultiverseJourney", "help content follows the adopted edition")
+	if not OS.get_environment("RICHMAN4_HELP_MANIFEST").is_empty():
+		check(controller.help_panel.is_model_valid() and controller.help_panel.view_model().get("edition") == "MultiverseJourney", "supplied help bundle must present valid replacement edition content")
 	controller.cancel()
 	viewport.queue_free()
 	await settle()

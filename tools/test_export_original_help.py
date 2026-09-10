@@ -176,6 +176,13 @@ class HelpBundleTestCase(unittest.TestCase):
 
 
 class ExportContentTests(HelpBundleTestCase):
+    def test_help_only_archives_do_not_require_map_data(self) -> None:
+        for edition in ("Game", "MultiverseJourney"):
+            (self.root / edition / "map.mkf").unlink()
+        self.export()
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+        self.assertEqual(len(self.topics()), 99)
+
     def test_export_writes_index_and_both_edition_files(self) -> None:
         manifest = self.export()
         self.assertEqual(manifest["schema"], SCHEMA_INDEX)

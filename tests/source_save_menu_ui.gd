@@ -111,6 +111,7 @@ func run() -> void:
 	await settle()
 	check(not menu.visible, "successful save returns to board")
 	check(store.read(1).snapshot.seed == ui.state.seed, "confirmed slot receives current snapshot")
+	check(JSON.parse_string(JSON.stringify(store.read(1).snapshot)) == JSON.parse_string(ui.game_state.to_json()), "slot payload is exactly the core snapshot without presentation or controller metadata")
 	check(FileAccess.get_file_as_bytes(store.default_path()) == default_bytes, "slot writes leave existing default untouched")
 	check(ui.game_state.to_json() == unchanged, "save and confirmations preserve live state and RNG")
 
@@ -155,6 +156,18 @@ func run() -> void:
 	menu.cancel()
 	await settle()
 	check(not menu.visible and ui.game_state.to_json() == prior, "cancel invalidates deferred read")
+	ui.game_state.set_player_ai(int(ui.state.current_player), true)
+	ui._refresh_from_state()
+	var ai_before: String = ui.game_state.to_json()
+	shell.save_requested.emit()
+	check(menu.visible and menu.get("picker").get_mode() == "save", "stable AI turn can be saved without issuing a player action")
+	if menu.visible:
+		ui._on_ai_timer_timeout(ui._presentation_generation)
+		check(ui.game_state.to_json() == ai_before, "queued AI timer cannot advance while the save chooser is open")
+		menu.get("picker").row_buttons[2].pressed.emit()
+		menu.get("picker").confirm_button.pressed.emit()
+		check(JSON.parse_string(JSON.stringify(store.read(2).snapshot)) == JSON.parse_string(ai_before), "AI save preserves the exact core snapshot")
+		check(ui.game_state.to_json() == ai_before, "AI save never advances state or RNG")
 
 	ui.queue_free()
 	await settle()

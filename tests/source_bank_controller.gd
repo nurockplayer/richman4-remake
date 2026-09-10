@@ -55,6 +55,7 @@ var _host: Control = null
 var _core := FakeCore.new()
 var _invocations: Array = []
 var _handled: Array = []
+var _invoke_result: Dictionary = {"ok": false, "message": "測試未設定結果"}
 
 
 func _initialize() -> void:
@@ -163,6 +164,7 @@ func _snapshot(
 			"properties": [],
 		},
 	]
+	var is_pass := phase == "await_bank"
 	return {
 		"version": 1,
 		"edition": "Game",
@@ -173,8 +175,8 @@ func _snapshot(
 		"bank_access": true,
 		"bank_landing": phase == "await_action",
 		"route_options": [],
-		"pending_movement": {},
-		"remaining_steps": 0,
+		"pending_movement": {"player_id": actor, "current_node": node_id, "previous_node": 0} if is_pass else {},
+		"remaining_steps": 1 if is_pass else 0,
 		"bank": {"cash": 1000, "deposits": 200},
 	}
 
@@ -281,7 +283,7 @@ func _test_action_result_boundary() -> void:
 	_invocations.clear()
 	_handled.clear()
 	var denied := {"ok": false, "message": "拒絕：測試", "state": model.duplicate(true)}
-	_controller.set("_test_invoke_result", denied)
+	_invoke_result = denied
 	panel.call("select_action", "deposit")
 	panel.call("set_amount_text", "12")
 	panel.call("confirm_amount")
@@ -299,7 +301,7 @@ func _test_action_result_boundary() -> void:
 	var accepted_model := model.duplicate(true)
 	accepted_model["players"][0]["deposit"] = 112
 	var accepted := {"ok": true, "message": "已存款", "state": accepted_model}
-	_controller.set("_test_invoke_result", accepted)
+	_invoke_result = accepted
 	panel.call("confirm_amount")
 	await process_frame
 	await process_frame
@@ -408,8 +410,7 @@ func _test_edition_alias() -> void:
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	_invocations.append([method, args.duplicate(true)])
-	var result: Variant = _controller.get("_test_invoke_result")
-	return result.duplicate(true) if result is Dictionary else {"ok": false, "message": "測試未設定結果"}
+	return _invoke_result.duplicate(true)
 
 
 func _handle_result(result: Dictionary) -> void:

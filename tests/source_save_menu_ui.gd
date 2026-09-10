@@ -10,6 +10,9 @@ class TestUI extends "res://game/ui/main_ui.gd":
 	func _load_game() -> void: direct_load_calls += 1
 	func _save_game() -> void: direct_save_calls += 1
 	func _load_map_catalog(_path: String = "", _fallback: bool = false) -> void:
+		if not OS.get_environment("RICHMAN4_MAP_CATALOG").is_empty():
+			super._load_map_catalog(_path)
+			return
 		_map_catalog = [preload("res://tests/fixtures/company_fixture.gd").definition()]
 		_map_catalog_complete = _catalog_has_complete_original_content(_map_catalog)
 		_map_catalog_ok = _map_catalog_complete
@@ -111,7 +114,8 @@ func run() -> void:
 	await settle()
 	check(not menu.visible, "successful save returns to board")
 	check(store.read(1).snapshot.seed == ui.state.seed, "confirmed slot receives current snapshot")
-	check(JSON.parse_string(JSON.stringify(store.read(1).snapshot)) == JSON.parse_string(ui.game_state.to_json()), "slot payload is exactly the core snapshot without presentation or controller metadata")
+	var saved_game: Object = Game.from_dict(store.read(1).snapshot)
+	check(saved_game != null and saved_game.to_json() == ui.game_state.to_json(), "slot payload is exactly the core snapshot without presentation or controller metadata")
 	check(FileAccess.get_file_as_bytes(store.default_path()) == default_bytes, "slot writes leave existing default untouched")
 	check(ui.game_state.to_json() == unchanged, "save and confirmations preserve live state and RNG")
 
@@ -166,7 +170,8 @@ func run() -> void:
 		check(ui.game_state.to_json() == ai_before, "queued AI timer cannot advance while the save chooser is open")
 		menu.get("picker").row_buttons[2].pressed.emit()
 		menu.get("picker").confirm_button.pressed.emit()
-		check(JSON.parse_string(JSON.stringify(store.read(2).snapshot)) == JSON.parse_string(ai_before), "AI save preserves the exact core snapshot")
+		var saved_ai: Object = Game.from_dict(store.read(2).snapshot)
+		check(saved_ai != null and saved_ai.to_json() == ai_before, "AI save preserves the exact core snapshot")
 		check(ui.game_state.to_json() == ai_before, "AI save never advances state or RNG")
 
 	ui.queue_free()

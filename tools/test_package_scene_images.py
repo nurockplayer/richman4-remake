@@ -22,6 +22,7 @@ from original_ui_assets import (
     RAW_RGB555_BYTES,
     RAW_RGB555_HEIGHT,
     RAW_RGB555_WIDTH,
+    REQUIRED_UI_CHUNKS,
     export_ui_resources,
     update_ui_manifest,
 )
@@ -186,11 +187,11 @@ class PackageSceneTests(unittest.TestCase):
             source = root / "Game"
             source.mkdir()
             raw = self._make_raw_rgb555()
-            save_load = self._make_smp_chunks(2)
+            save_load = self._make_smp_chunks(7)
             archive = self._indexed_archive(
                 561,
                 {
-                    479: (save_load, len(save_load), 12 + 2 * 12, 4),
+                    479: (save_load, len(save_load), 12 + 7 * 12, 14),
                     560: (raw, len(raw), 4, len(raw) - 4),
                 },
             )
@@ -217,11 +218,11 @@ class PackageSceneTests(unittest.TestCase):
             root = Path(temp)
             source = root / "Game"
             source.mkdir()
-            setup = self._make_smp_chunks(2)
+            setup = self._make_smp_chunks(7)
             archive = self._indexed_archive(
                 561,
                 {
-                    479: (setup, len(setup), 12 + 2 * 12, 4),
+                    479: (setup, len(setup), 12 + 7 * 12, 14),
                     560: (self._make_raw_rgb555(), RAW_RGB555_BYTES, 4, RAW_RGB555_BYTES - 4),
                 },
             )
@@ -242,12 +243,12 @@ class PackageSceneTests(unittest.TestCase):
             source = root / "Game"
             source.mkdir()
             short_raw = b"\0" * (RAW_RGB555_BYTES - 2)
-            save_load = self._make_smp_chunks(2)
+            save_load = self._make_smp_chunks(7)
             (source / "Data.mkf").write_bytes(
                 self._indexed_archive(
                     561,
                     {
-                        479: (save_load, len(save_load), 12 + 2 * 12, 4),
+                        479: (save_load, len(save_load), 12 + 7 * 12, 14),
                         560: (short_raw, len(short_raw), 0, 0),
                     },
                 )
@@ -277,13 +278,37 @@ class PackageSceneTests(unittest.TestCase):
             with self.assertRaisesRegex(FormatError, "index table|stored size|outside file"):
                 export_ui_resources("Game", source, root / "truncated-stage")
 
+    def test_save_load_requires_complete_source_chunk_ranges(self):
+        self.assertEqual(REQUIRED_UI_CHUNKS[("Game", "Data", 479)], tuple(range(7)))
+        self.assertEqual(
+            REQUIRED_UI_CHUNKS[("MultiverseJourney", "Data", 520)], tuple(range(11))
+        )
+        cases = (
+            ("Game", 479, 561, 7),
+            ("MultiverseJourney", 520, 602, 11),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for edition, index, archive_count, required_count in cases:
+                source = root / edition
+                source.mkdir()
+                partial = self._make_smp_chunks(2)
+                (source / "Data.mkf").write_bytes(
+                    self._indexed_archive(
+                        archive_count,
+                        {index: (partial, len(partial), 12 + 2 * 12, 4)},
+                    )
+                )
+                with self.assertRaisesRegex(FormatError, r"missing chunk\(s\): 2"):
+                    export_ui_resources(edition, source, root / f"{edition}-stage")
+
     def test_ui_manifest_update_is_incremental_and_preserves_existing_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source" / "Game"
             source.mkdir(parents=True)
             raw = self._make_raw_rgb555()
-            save_load = self._make_smp_chunks(2)
+            save_load = self._make_smp_chunks(7)
             (source / "map.mkf").write_bytes(
                 make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
             )
@@ -291,7 +316,7 @@ class PackageSceneTests(unittest.TestCase):
                 self._indexed_archive(
                     561,
                     {
-                        479: (save_load, len(save_load), 12 + 2 * 12, 4),
+                        479: (save_load, len(save_load), 12 + 7 * 12, 14),
                         560: (raw, len(raw), 4, len(raw) - 4),
                     },
                 )
@@ -342,6 +367,169 @@ class PackageSceneTests(unittest.TestCase):
                 )
             self.assertEqual(manifest_path.read_bytes(), before_missing)
             self.assertEqual(preserved_temp.read_bytes(), b"leave this unrelated file alone")
+
+    def test_ui_manifest_merges_resources_with_matching_archive_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "Game"
+            source.mkdir(parents=True)
+            save_load = self._make_smp_chunks(7)
+            raw = self._make_raw_rgb555()
+            archive = self._indexed_archive(
+                561,
+                {
+                    479: (save_load, len(save_load), 12 + 7 * 12, 14),
+                    560: (raw, len(raw), 4, len(raw) - 4),
+                },
+            )
+            (source / "map.mkf").write_bytes(
+                make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
+            )
+            (source / "Data.mkf").write_bytes(archive)
+
+            output = root / "scene"
+            output.mkdir()
+            existing = output / "images/Game/ui/Data/999/0.png"
+            existing_chunk = VisualChunk(0, 1, 1, 0, 0, struct.pack("<H", 0x03E0))
+            existing_visual = VisualResource("SMP", 1, 0, None, (existing_chunk,))
+            write_png(existing, existing_chunk, existing_visual, pixel_format="rgb555")
+            existing_bytes = existing.read_bytes()
+            existing_record = {
+                "path": "images/Game/ui/Data/999/0.png",
+                "sha256": hashlib.sha256(existing_bytes).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            base = output / "images/base.png"
+            write_png(base, existing_chunk, existing_visual, pixel_format="rgb555")
+            base_record = {
+                "path": "images/base.png",
+                "sha256": hashlib.sha256(base.read_bytes()).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            data_group = {
+                "archive": "Data.mkf",
+                "archive_sha256": hashlib.sha256(archive).hexdigest(),
+                "resources": {"999": {"chunks": {"0": existing_record}}},
+            }
+            manifest = {
+                "schema": "richman4.scene-images/v1",
+                "version": 1,
+                "pixel_format": "rgb555",
+                "maps": [
+                    {
+                        "world_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "image": base_record,
+                    }
+                ],
+                "characters": {},
+                "ui": {"Game": {"Data": data_group}},
+            }
+            manifest_path = output / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            updated = update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+            self.assertIn("999", updated["ui"]["Game"]["Data"]["resources"])
+            self.assertEqual(existing.read_bytes(), existing_bytes)
+
+    def test_ui_manifest_rejects_archive_hash_mismatch_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "Game"
+            source.mkdir(parents=True)
+            save_load = self._make_smp_chunks(7)
+            raw = self._make_raw_rgb555()
+            archive = self._indexed_archive(
+                561,
+                {
+                    479: (save_load, len(save_load), 12 + 7 * 12, 14),
+                    560: (raw, len(raw), 4, len(raw) - 4),
+                },
+            )
+            (source / "map.mkf").write_bytes(
+                make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
+            )
+            data_path = source / "Data.mkf"
+            data_path.write_bytes(archive)
+            changed = bytearray(archive)
+            changed[archive.index(raw) + 4] ^= 1
+            data_path.write_bytes(changed)
+
+            output = root / "scene"
+            output.mkdir()
+            existing = output / "images/Game/ui/Data/999/0.png"
+            existing_chunk = VisualChunk(0, 1, 1, 0, 0, struct.pack("<H", 0x03E0))
+            existing_visual = VisualResource("SMP", 1, 0, None, (existing_chunk,))
+            write_png(existing, existing_chunk, existing_visual, pixel_format="rgb555")
+            existing_bytes = existing.read_bytes()
+            existing_record = {
+                "path": "images/Game/ui/Data/999/0.png",
+                "sha256": hashlib.sha256(existing_bytes).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            base = output / "images/base.png"
+            write_png(base, existing_chunk, existing_visual, pixel_format="rgb555")
+            base_record = {
+                "path": "images/base.png",
+                "sha256": hashlib.sha256(base.read_bytes()).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            manifest = {
+                "schema": "richman4.scene-images/v1",
+                "version": 1,
+                "pixel_format": "rgb555",
+                "maps": [
+                    {
+                        "world_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "image": base_record,
+                    }
+                ],
+                "characters": {},
+                "ui": {
+                    "Game": {
+                        "Data": {
+                            "archive": "Data.mkf",
+                            "archive_sha256": hashlib.sha256(archive).hexdigest(),
+                            "resources": {"999": {"chunks": {"0": existing_record}}},
+                        }
+                    }
+                },
+            }
+            manifest_path = output / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            before_manifest = manifest_path.read_bytes()
+
+            with self.assertRaisesRegex(InputError, "archive SHA"):
+                update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+            self.assertEqual(manifest_path.read_bytes(), before_manifest)
+            self.assertEqual(existing.read_bytes(), existing_bytes)
+            self.assertFalse((output / "images/Game/ui/Data/479/0.png").exists())
+
+    def test_invalid_destination_manifest_has_zero_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "Game"
+            source.mkdir(parents=True)
+            save_load = self._make_smp_chunks(7)
+            (source / "Data.mkf").write_bytes(
+                self._indexed_archive(
+                    561,
+                    {479: (save_load, len(save_load), 12 + 7 * 12, 14)},
+                )
+            )
+            output = root / "scene"
+            output.mkdir()
+            manifest_path = output / "manifest.json"
+            manifest_path.write_bytes(b"{invalid json")
+            before_manifest = manifest_path.read_bytes()
+
+            with self.assertRaises(ValueError):
+                update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+            self.assertEqual(manifest_path.read_bytes(), before_manifest)
+            self.assertFalse((output / "images/Game/ui/Data/479/0.png").exists())
 
     def test_ui_export_is_bounded_provenanced_and_packaged(self):
         with tempfile.TemporaryDirectory() as temp:

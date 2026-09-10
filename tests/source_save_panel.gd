@@ -75,6 +75,7 @@ func _valid_preview(slot_id: int, fingerprint: String = "") -> Dictionary:
 			"date_text": "1998-01-01",
 			"date": {"year": 1998, "month": 1, "day": 1},
 			"map_name": "臺北市",
+			"map_edition": "Game",
 			"map_number": 2,
 			"player_names": ["約翰喬", "沙隆巴斯"],
 			"player_character_ids": [0, 1],
@@ -120,6 +121,13 @@ func _test_load_rows_and_geometry() -> void:
 	expect(panel.select_slot(1) == false, "disabled invalid load row cannot be selected")
 	expect(panel.select_slot(0), "valid load row can be selected")
 	expect_equal(panel.selected_fingerprint(), "c".repeat(64), "selection retains preview fingerprint")
+	var reference_canvas_rect := Rect2(Vector2.ZERO, Vector2(640.0, 480.0))
+	var load_confirm_rect := Rect2(panel.action_bar.position + panel.confirm_button.position, panel.confirm_button.size * panel.confirm_button.scale)
+	var load_cancel_rect := Rect2(panel.action_bar.position + panel.cancel_button.position, panel.cancel_button.size * panel.cancel_button.scale)
+	expect_equal(load_confirm_rect, Rect2(222, 456, 94, 24), "load confirm action rect is anchored to the source footer")
+	expect_equal(load_cancel_rect, Rect2(324, 456, 94, 24), "load cancel action rect is anchored to the source footer")
+	expect(reference_canvas_rect.encloses(load_confirm_rect), "load confirm action rect stays inside the source canvas")
+	expect(reference_canvas_rect.encloses(load_cancel_rect), "load cancel action rect stays inside the source canvas")
 	expect(visuals.ui_calls.size() > 0 and visuals.ui_calls[0].resource == 479 and visuals.ui_calls[0].chunk == 0, "Game load uses mapped Data479 chunk zero")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 6), "Game load uses mapped Data479 slot label chunk")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 3), "Game load maps source map number two to Data479 chunk three")
@@ -157,6 +165,15 @@ func _test_save_selection_and_overwrite() -> void:
 	var save_geometry: Dictionary = panel.get_source_geometry()
 	expect_equal(save_geometry.get("image_position"), Vector2(40, 48), "save art uses the source (40,48) placement")
 	expect_equal(save_geometry.get("image_size"), Vector2(555, 381), "save art keeps the source dimensions")
+	var save_canvas_rect := Rect2(Vector2.ZERO, Vector2(640.0, 480.0))
+	var save_confirm_rect := Rect2(panel.action_bar.position + panel.confirm_button.position, panel.confirm_button.size * panel.confirm_button.scale)
+	var save_cancel_rect := Rect2(panel.action_bar.position + panel.cancel_button.position, panel.cancel_button.size * panel.cancel_button.scale)
+	expect_equal(save_confirm_rect, Rect2(222, 438, 94, 24), "save confirm action rect is anchored to the source footer")
+	expect_equal(save_cancel_rect, Rect2(324, 438, 94, 24), "save cancel action rect is anchored to the source footer")
+	expect(save_canvas_rect.encloses(save_confirm_rect), "save confirm action rect stays inside the source canvas")
+	expect(save_canvas_rect.encloses(save_cancel_rect), "save cancel action rect stays inside the source canvas")
+	expect(visuals.ui_calls.size() > 0 and visuals.ui_calls[0].edition == "MultiverseJourney" and visuals.ui_calls[0].resource == 520 and visuals.ui_calls[0].chunk == 1, "save frame stays on the panel edition")
+	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.edition == "Game" and call.resource == 479 and call.chunk == 3), "save row uses each preview's Game map atlas")
 	expect_equal(panel.get_row_rect(1), Rect2(129, 57, 448, 72), "save row one uses source y 0x39")
 	expect_equal(panel.get_row_rect(5), Rect2(129, 345, 448, 72), "save row five uses source y 0x39 plus four rows")
 	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "save action controls do not occlude the final row hit region")
@@ -223,28 +240,36 @@ func _test_real_scan_consumer_and_source_atlas() -> void:
 	if game == null:
 		return
 	var payload: Dictionary = game.to_dict()
-	var fixture_players: Array = payload.get("players", []).duplicate(true)
-	for index in range(4):
-		var fixture_player: Dictionary = fixture_players[index].duplicate(true)
-		fixture_player["character_id"] = index
-		fixture_player["name"] = ["約翰喬", "沙隆巴斯", "忍太郎", "錢夫人"][index]
-		fixture_players[index] = fixture_player
-	payload["players"] = fixture_players
-	payload["map_id"] = "Game:2"
-	payload["map_name"] = "臺北市"
-	payload["map_source"] = {"edition": "Game", "map_number": 2}
+	payload = _with_fixture_identity(payload, "Game", 2, "臺北市")
 	var write_result: Dictionary = store.write(1, payload, "")
 	expect(bool(write_result.get("ok", false)), "integration fixture writes through SaveSlots")
 	if not bool(write_result.get("ok", false)):
 		DirAccess.remove_absolute(root_path)
 		return
+	var multiverse_payload: Dictionary = _with_fixture_identity(payload, "MultiverseJourney", 5, "異界都市")
+	var multiverse_write := store.write(2, multiverse_payload, "")
+	expect(bool(multiverse_write.get("ok", false)), "integration fixture writes a mixed-edition SaveSlots row")
+	var unknown_payload: Dictionary = payload.duplicate(true)
+	unknown_payload.erase("map_id")
+	unknown_payload.erase("map_name")
+	unknown_payload.erase("map_source")
+	var unknown_write := store.write(3, unknown_payload, "")
+	expect(bool(unknown_write.get("ok", false)), "integration fixture writes an explicit unknown-source row")
 	var scan: Dictionary = store.scan()
 	expect(bool(scan.get("ok", false)), "integration consumer receives a successful scan")
 	var row: Dictionary = scan.get("slots", [])[1]
 	expect_equal(row.get("status"), SaveSlotsScript.STATUS_VALID, "integration scan row is valid")
 	expect_equal(row.get("metadata", {}).get("player_character_ids"), [0, 1, 2, 3], "metadata preserves all four explicit character ids")
+	expect_equal(row.get("metadata", {}).get("map_edition"), "Game", "metadata preserves the Game source edition")
 	expect_equal(row.get("metadata", {}).get("map_number"), 2, "metadata preserves source map number")
 	expect_equal(row.get("metadata", {}).get("map_preview_chunk"), 3, "metadata maps source map number to the atlas chunk")
+	var mixed_row: Dictionary = scan.get("slots", [])[2]
+	expect_equal(mixed_row.get("status"), SaveSlotsScript.STATUS_VALID, "mixed-edition scan row is valid")
+	expect_equal(mixed_row.get("metadata", {}).get("map_edition"), "MultiverseJourney", "metadata preserves the MultiverseJourney source edition")
+	expect_equal(mixed_row.get("metadata", {}).get("map_number"), 5, "mixed-edition metadata preserves its source map number")
+	var unknown_row: Dictionary = scan.get("slots", [])[3]
+	expect_equal(unknown_row.get("metadata", {}).get("map_edition"), "", "metadata leaves unknown source edition empty")
+	expect_equal(unknown_row.get("metadata", {}).get("map_preview_chunk"), -1, "metadata leaves unknown map preview unavailable")
 	var panel := _panel()
 	var visuals := FakeVisuals.new()
 	panel.configure("Game", "load", scan, visuals)
@@ -260,9 +285,32 @@ func _test_real_scan_consumer_and_source_atlas() -> void:
 	expect_equal(panel.get_row_visual_rect(1, "map"), Rect2(209, 96, 72, 72), "integrated map preview remains source aligned")
 	for index in range(4):
 		expect_equal(panel.get_row_visual_rect(1, "portrait_%d" % index), Rect2(289 + index * 72, 96, 72, 72), "integrated portrait %d remains source aligned" % index)
+	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.edition == "MultiverseJourney" and call.resource == 520 and call.chunk == 6), "panel selects mixed row map atlas from row metadata")
+	for chunk in range(4):
+		expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.edition == "MultiverseJourney" and call.resource == 2 and call.chunk == chunk), "mixed row requests source portrait chunk %d from row edition" % chunk)
+	expect_equal(panel.get_row_visual_rect(2, "map"), Rect2(209, 168, 72, 72), "mixed row map preview remains source aligned")
+	for index in range(4):
+		expect_equal(panel.get_row_visual_rect(2, "portrait_%d" % index), Rect2(289 + index * 72, 168, 72, 72), "mixed row portrait %d remains source aligned" % index)
+	expect_equal(panel.get_row_visual_rect(3, "map"), Rect2(), "unknown row source does not guess a map atlas")
+	expect_equal(panel.get_row_visual_rect(3, "portrait_0"), Rect2(), "unknown row source does not guess a portrait atlas")
 	expect(panel.row_content[1].find_child("SlotNumber", true, false) == null, "integrated row does not duplicate source slot number")
 	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "integrated footer remains outside the final row hit region")
 	panel.queue_free()
 	DirAccess.remove_absolute(store.slot_path(1))
 	DirAccess.remove_absolute(slots_path)
 	DirAccess.remove_absolute(root_path)
+
+
+func _with_fixture_identity(payload: Dictionary, source_edition: String, map_number: int, map_name: String) -> Dictionary:
+	var result := payload.duplicate(true)
+	var fixture_players: Array = result.get("players", []).duplicate(true)
+	for index in range(4):
+		var fixture_player: Dictionary = fixture_players[index].duplicate(true)
+		fixture_player["character_id"] = index
+		fixture_player["name"] = ["約翰喬", "沙隆巴斯", "忍太郎", "錢夫人"][index]
+		fixture_players[index] = fixture_player
+	result["players"] = fixture_players
+	result["map_id"] = "%s:%d" % [source_edition, map_number]
+	result["map_name"] = map_name
+	result["map_source"] = {"edition": source_edition, "map_number": map_number}
+	return result

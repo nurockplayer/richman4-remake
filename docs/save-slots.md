@@ -102,7 +102,9 @@ callback 的 hit geometry 為 x `129..577`。來源 frame 已含檔位數字；p
 的 x `209`、y `row`、尺寸 `72×72`，以及 Data resource `2` 肖像的
 x `289 + 72*i`、y `row`、尺寸 `72×72`。地圖縮圖只依明確的
 `map_number`／`map_preview_chunk` 對應來源 chunk `2..5`（Game）或 `2..9`
-（MultiverseJourney）。
+（MultiverseJourney）。外框與檔位背景固定跟隨 panel 的 `edition`；每一列的
+地圖與肖像則跟隨該列已驗證 metadata 的 `map_edition`。若列沒有可辨識的
+來源 edition，panel 不猜測另一套 atlas，也不畫出動態地圖／肖像。
 
 ```gdscript
 picker.slot_selected.connect(_on_slot_selected)

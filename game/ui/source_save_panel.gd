@@ -505,12 +505,27 @@ func _render() -> void:
 	# remain clickable even when the source texture has transparent pixels.
 	action_bar.position = Vector2(0.0, 458.0 if mode == MODE_LOAD else 436.0)
 	action_bar.size = Vector2(640.0, 22.0 if mode == MODE_LOAD else 44.0)
+	_layout_action_buttons()
 	if source_art != null:
 		source_art.position = Vector2.ZERO
 		source_art.size = REFERENCE_SIZE
 	if overwrite_overlay != null:
 		overwrite_overlay.visible = _overwrite_open
 	_update_selection_visuals()
+
+
+func _layout_action_buttons() -> void:
+	if confirm_button == null or cancel_button == null:
+		return
+	# Godot's default Button minimum height is taller than the 24px source
+	# control.  Scale the source buttons to their intended visual rect so the
+	# load footer remains inside the 640x480 reference canvas.
+	var button_y := -2.0 if mode == MODE_LOAD else 2.0
+	for button in [confirm_button, cancel_button]:
+		button.position.y = button_y
+		button.size = Vector2(94.0, 24.0)
+		button.pivot_offset = Vector2.ZERO
+		button.scale = Vector2(1.0, 24.0 / maxf(button.size.y, 1.0))
 
 
 func _render_source_art() -> void:
@@ -748,11 +763,12 @@ func _render_slot_label_background(content: Control, slot_id: int) -> void:
 
 func _render_portraits(content: Control, metadata: Dictionary, preview: Dictionary, slot_id: int) -> void:
 	var portrait_chunks := _portrait_chunks(metadata, preview)
-	if portrait_chunks.is_empty():
+	var source_edition := _row_source_edition(metadata, preview)
+	if portrait_chunks.is_empty() or source_edition.is_empty():
 		return
 	for index in range(mini(portrait_chunks.size(), 4)):
 		var chunk := int(portrait_chunks[index])
-		var frame := _source_portrait_frame(chunk)
+		var frame := _source_portrait_frame(source_edition, chunk)
 		if frame.is_empty() or visuals == null or not visuals.has_method("texture"):
 			continue
 		var texture_value: Variant = visuals.call("texture", frame)
@@ -1001,47 +1017,64 @@ func _source_slot_label_frame() -> Dictionary:
 func _source_map_frame(metadata: Dictionary, preview: Dictionary) -> Dictionary:
 	if visuals == null or not visuals.has_method("ui"):
 		return {}
-	var chunk := _map_preview_chunk(metadata, preview)
+	var source_edition := _row_source_edition(metadata, preview)
+	if source_edition.is_empty():
+		return {}
+	var chunk := _map_preview_chunk(metadata, preview, source_edition)
 	if chunk < SOURCE_MAP_PREVIEW_START_CHUNK:
 		return {}
-	var resource := int(SOURCE_DATA_RESOURCE.get(edition, SOURCE_DATA_RESOURCE["Game"]))
-	var frame_value: Variant = visuals.call("ui", edition, "Data", resource, chunk)
+	var resource := int(SOURCE_DATA_RESOURCE[source_edition])
+	var frame_value: Variant = visuals.call("ui", source_edition, "Data", resource, chunk)
 	return frame_value if frame_value is Dictionary else {}
 
 
-func _map_preview_chunk(metadata: Dictionary, preview: Dictionary) -> int:
+func _row_source_edition(metadata: Dictionary, preview: Dictionary) -> String:
+	var raw_edition: Variant = metadata.get("map_edition", preview.get("map_edition", null))
+	if raw_edition == null or str(raw_edition).strip_edges().is_empty():
+		var raw_source: Variant = metadata.get("map_source", preview.get("map_source", {}))
+		if raw_source is Dictionary:
+			raw_edition = raw_source.get("edition", "")
+	var source_edition := str(raw_edition).strip_edges()
+	return source_edition if SOURCE_DATA_RESOURCE.has(source_edition) else ""
+
+
+func _map_preview_chunk(metadata: Dictionary, preview: Dictionary, source_edition: String) -> int:
 	var raw_chunk: Variant = metadata.get("map_preview_chunk", preview.get("map_preview_chunk", null))
-	if typeof(raw_chunk) == TYPE_INT and _valid_map_chunk(int(raw_chunk)):
+	if typeof(raw_chunk) == TYPE_INT and _valid_map_chunk(int(raw_chunk), source_edition):
 		return int(raw_chunk)
 	var raw_number: Variant = metadata.get("map_number", preview.get("map_number", null))
 	var number := -1
 	if typeof(raw_number) == TYPE_INT:
 		number = int(raw_number)
 	var raw_source: Variant = metadata.get("map_source", preview.get("map_source", {}))
-	if raw_source is Dictionary and typeof(raw_source.get("map_number", null)) == TYPE_INT:
-		number = int(raw_source.get("map_number"))
+	if raw_source is Dictionary:
+		var raw_source_edition := str(raw_source.get("edition", "")).strip_edges()
+		if not raw_source_edition.is_empty() and raw_source_edition != source_edition:
+			return -1
+		if typeof(raw_source.get("map_number", null)) == TYPE_INT:
+			number = int(raw_source.get("map_number"))
 	if number < 1:
 		var map_id := str(metadata.get("map_id", preview.get("map_id", "")))
 		var map_id_parts := map_id.split(":", false, 1)
-		if map_id_parts.size() == 2 and str(map_id_parts[0]) == edition and str(map_id_parts[1]).is_valid_int():
+		if map_id_parts.size() == 2 and str(map_id_parts[0]) == source_edition and str(map_id_parts[1]).is_valid_int():
 			number = int(map_id_parts[1])
 	if number < 1:
 		return -1
 	var candidate := number + 1
-	return candidate if _valid_map_chunk(candidate) else -1
+	return candidate if _valid_map_chunk(candidate, source_edition) else -1
 
 
-func _valid_map_chunk(chunk: int) -> bool:
-	var count := int(SOURCE_MAP_PREVIEW_COUNT.get(edition, 0))
+func _valid_map_chunk(chunk: int, source_edition: String) -> bool:
+	var count := int(SOURCE_MAP_PREVIEW_COUNT.get(source_edition, 0))
 	return chunk >= SOURCE_MAP_PREVIEW_START_CHUNK and chunk < SOURCE_MAP_PREVIEW_START_CHUNK + count
 
 
-func _source_portrait_frame(chunk: int) -> Dictionary:
+func _source_portrait_frame(source_edition: String, chunk: int) -> Dictionary:
 	if visuals == null or not visuals.has_method("ui"):
 		return {}
-	if chunk < 0 or chunk >= SOURCE_PORTRAIT_CHUNK_COUNT:
+	if not SOURCE_DATA_RESOURCE.has(source_edition) or chunk < 0 or chunk >= SOURCE_PORTRAIT_CHUNK_COUNT:
 		return {}
-	var frame_value: Variant = visuals.call("ui", edition, "Data", SOURCE_PORTRAIT_RESOURCE, chunk)
+	var frame_value: Variant = visuals.call("ui", source_edition, "Data", SOURCE_PORTRAIT_RESOURCE, chunk)
 	return frame_value if frame_value is Dictionary else {}
 
 

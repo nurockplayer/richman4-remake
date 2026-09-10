@@ -261,6 +261,9 @@ func _test_copy_and_fixed_slots(panel: Control, viewport: SubViewport, platform:
 
 func _test_editing_rules(panel: Control, viewport: SubViewport, platform: Object) -> void:
 	await _present(panel, _model(platform))
+	# This interaction suite controls lifecycle events, including in native
+	# rendering mode. Real OS focus is checked by source_hotkeys_focus.gd.
+	panel.notification(Node.NOTIFICATION_APPLICATION_FOCUS_IN)
 	var defaults: Array = platform.defaults()
 	# Ctrl-only is source's sticky 0x1100 prefix and remains editable.
 	await _left_down_up(viewport, Vector2(105 + 1, 25 + 8 * 16 + 1))
@@ -274,7 +277,12 @@ func _test_editing_rules(panel: Control, viewport: SubViewport, platform: Object
 	viewport.push_input(_event_key(KEY_CTRL, false), true)
 	await _settle()
 	_expect_equal((panel.call("draft_bindings") as Array)[8], 0x1100, "Ctrl-only stores the sticky source prefix")
+	# The source timer is free-running: an arbitrary sample may be its valid
+	# off phase. Observe both phases rather than assuming a particular tick.
+	await _wait_blink_phase(panel, true)
 	_expect(bool(panel.call("pending_blink_visible")), "pending field blinks while active and focused")
+	await _wait_blink_phase(panel, false)
+	_expect(not bool(panel.call("pending_blink_visible")) and bool(panel.get("_application_active")), "active pending field also reaches the hidden blink phase")
 	# A fresh allowed key commits and exits the edit state.
 	viewport.push_input(_event_key(KEY_Z, true), true)
 	await _settle()
@@ -296,6 +304,12 @@ func _test_editing_rules(panel: Control, viewport: SubViewport, platform: Object
 	_expect_equal((panel.call("draft_bindings") as Array)[8], 0, "unsupported modifier key is rejected")
 	# Avoid an unused local warning while keeping the default source snapshot explicit.
 	_expect(defaults.size() == 28, "source defaults contain exactly 28 slots")
+
+
+func _wait_blink_phase(panel: Control, visible_phase: bool) -> void:
+	var deadline := Time.get_ticks_msec() + 800
+	while bool(panel.call("pending_blink_visible")) != visible_phase and Time.get_ticks_msec() < deadline:
+		await create_timer(0.01).timeout
 
 
 func _test_footer_and_lifecycle(panel: Control, viewport: SubViewport, platform: Object) -> void:

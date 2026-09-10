@@ -95,6 +95,17 @@ func run() -> void:
 	await _run_frames()
 	check(close_enough(board.get_player_screen_position(0), board.size * 0.5), "movement follow keeps the moving player in view")
 
+	board.set_map_rotation(0.0)
+	var rotate_right := InputEventKey.new()
+	rotate_right.keycode = KEY_E
+	rotate_right.pressed = true
+	board._gui_input(rotate_right)
+	check(is_equal_approx(board.get_camera_rotation(), PI / 4.0), "clockwise input rotates 45 degrees as the original manual specifies")
+	var rotate_left := InputEventKey.new()
+	rotate_left.keycode = KEY_Q
+	rotate_left.pressed = true
+	board._gui_input(rotate_left)
+	check(is_zero_approx(board.get_camera_rotation()), "counterclockwise input returns through the same 45-degree step")
 	var map_point := Vector2(960, 960)
 	board.set_map_rotation(PI / 4.0, board.size * 0.5)
 	var rotated_screen := board.map_to_screen(map_point)

@@ -20,10 +20,9 @@ const MAX_ZOOM := 3.2
 # 440px board region in the reference capture, not a recovered runtime
 # canonical.
 const REFERENCE_BOARD_SIZE := Vector2(440.0, 440.0)
-# Provisional input increment; no original-runtime camera rotation evidence
-# establishes a canonical step size.
 const SOURCE_CROP_WORLD_SPAN := 440.0
-const ROTATION_STEP := PI / 12.0
+# Original manual, printed page 12: each map rotation command turns 45 degrees.
+const ROTATION_STEP := PI / 4.0
 const PLAYER_COLORS := [
 	Color("#ef6a65"),
 	Color("#4ba6e8"),

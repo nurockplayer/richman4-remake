@@ -412,6 +412,17 @@ func _add_source_background(key: String, screen_size: Vector2) -> void:
 		texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if _mode == "loan":
+			# The source copies the full bank background including zero RGB555
+			# words. Keep atlas transparency for sprites, but render those bank
+			# background words as opaque black instead of exposing the board.
+			var opaque := ColorRect.new()
+			opaque.name = "OpaqueSourceBackground"
+			opaque.size = screen_size
+			opaque.color = Color.BLACK
+			opaque.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			opaque.show_behind_parent = true
+			texture_rect.add_child(opaque)
 		add_child(texture_rect)
 		move_child(texture_rect, 0)
 		_has_source_visual = true

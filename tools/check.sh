@@ -48,6 +48,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visual.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_amount_regressions.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_modal.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_opaque_background.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_effects.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_schema.gd

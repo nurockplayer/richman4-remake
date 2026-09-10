@@ -30,3 +30,5 @@ ATM 邏輯位置為 `(60,71)`、尺寸 `320×338`；前後台使用 `640×480` r
 原生圖形測試使用隔離 SubViewport、安靜音效與合成或明確提供的 catalog，不修改擁有者存檔。實際 catalog 的正常入口另由 `source_bank_catalog.gd` 驗證：Game:3 的 seed 4、MultiverseJourney:7 的 seed 6，從公開新局工廠與擲骰／選路進入 ATM，再到前台並返回棋盤；不注入位置、銀行決策或完整能力 fixture。58 項檢查在 headless 與原生圖形模式皆通過；未提供 catalog 時明確 SKIP。整批核心／schema 更動另通過完整 `tools/check.sh`（197 次 Godot 執行、82 個 Python 測試，沒有 Godot 錯誤），之後只增加實際 catalog 測試及 runner。
 
 程式、隔離圖形與實際 catalog 證據不等同作業系統實體輸入或完整新套件驗收；S11–S13 與 Mission 必須等逐幕原版對照、獨立審查與整合 gate。
+
+實際地圖前台畫面另揭露原本隔離黑底未顯出的合成問題：UI atlas 的零色值透明像素會透出棋盤。原作 `rich4_ui_bank.asm:876` 經 `rich4_drawing_utils2.asm:338` 呼叫整塊影像複製，包含零色值；因此前後台來源背景補上不透明黑底，sprite atlas 的透明度維持原樣。先提交的 `6f3b499` 原生回歸案例，在兩版前後台、藍／綠底板間重現 16 項／8 個失敗；所有來源影像有效性檢查先通過。修復後原生像素案例必須全數通過，headless 明示 SKIP，不冒充像素驗證。

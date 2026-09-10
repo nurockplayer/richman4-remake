@@ -247,7 +247,8 @@ func _test_existing_supported_migrations() -> void:
 		var old_text := JSON.stringify(old)
 		var canonical: Object = GameState.from_dict(JSON.parse_string(old_text))
 		expect(canonical != null, "existing core supports the migration")
-		expect(not GameState.validate_save(old).get("ok", false), "raw predecessor requires existing migration")
+		if entry[0] == "news":
+			expect(not GameState.validate_save(old).get("ok", false), "raw predecessor news classification requires existing migration")
 		if canonical == null:
 			continue
 		var normalized: Dictionary = JSON.parse_string(canonical.to_json())

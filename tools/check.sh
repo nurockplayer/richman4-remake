@@ -23,6 +23,8 @@ run_checked() {
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd

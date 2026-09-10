@@ -73,7 +73,19 @@ var result := storage.write(slot_id, game_state.to_dict(), expected_fingerprint)
 destination 在 preview 後被建立或改變，會回傳 `status: "stale"`、
 `error: "stale_destination"`，且保留原有 bytes。
 
-通過驗證後，後端依序將完全相同的 JSON bytes 寫入 destination 同目錄的
+通過驗證後，先以 filesystem 原子 mkdir 取得該檔位的 `.write-lock` 目錄。
+兩個遵循此協定的遊戲執行個體不能同時進入 fingerprint 比對、temporary
+讀寫驗證與 rename 區段。未取得 lock 時回傳 `slot_write_busy`，不清理其他
+writer 的檔案。temporary 名稱含 process／instance／sequence，且只在取得
+互斥所有權後使用；不同檔位各自取得 lock。此協定不宣稱阻止手動或外部工具
+不遵守 lock 的檔案改寫，preview 的二次 fingerprint 檢查仍保留。
+
+正常結束與寫入失敗都釋放自己取得的 lock。若程式崩潰留下 lock，後續寫入
+明確失敗，不猜測擁有者或自動刪除；確認所有遊戲執行個體已關閉後才可移除
+對應的空 `.write-lock` 目錄。rename 成功後若 lock 清理失敗，回傳的成功
+結果保留並附 `lock_cleanup_error`，不把已提交的存檔誤報為寫入失敗。
+
+取得 lock 後，後端依序將完全相同的 JSON bytes 寫入 destination 同目錄的
 temporary sibling、讀回並比對 bytes、再次解析／驗證，最後才以 atomic rename
 替換 destination。temporary write、readback 或 rename 失敗會回傳明確
 `error`；只清理本次建立的 temporary，不動既有 destination。成功結果為
@@ -156,3 +168,12 @@ being reconciled under #129 before final interaction acceptance.
 ## Review repair evidence
 
 Row0 now says「原有存檔」above the date; the read API accepts the selected fingerprint and returns stale without a snapshot on replacement. Both focused suites run in check.sh. Tests-only1c0cc50 supplied the first regressions, but its two-argument call against the old one-argument API produced invocation errors, so that storage RED is not accepted as behavioral proof. Test-only3a2136b preserves every assertion and detects the available signature solely to replay the actual old public read API. Replayed unchanged against78a5888, valid A is replaced by valid B and the old API really returns B:163 checks/8 failures, without script or invocation errors. The identical test passes163/0 on the repaired implementation. Panel121/3 and runner two missing-call assertions are independently reproduced on78a5888; panel121/0 and runner PASS follow the repair. This is a retrospective evidence correction after implementation, not a claim that the initial API-error run was valid acceptance RED. Ordinary MainUI adoption and screen/native/package gates remain pending.
+
+
+並行回歸 `tests/save_slots_concurrency.gd` 以兩個獨立 store、真實檔案 I/O
+與 Thread／Semaphore 排程原問題：兩方先觀察同一個不存在的 temporary，
+A 驗證 A 的 bytes 後，B 替換並驗證 B，兩者均已讀到舊 fingerprint，最後
+由 A rename。Tests-onlye19cde1 合格13/2（無 timeout／script error），修復後
+同一測試13/0；A 成功結果與實際 destination bytes 完全相同，B 不覆寫 A，
+釋放後下一筆交易可正常寫入。原248 assertions 保留；FaultIO 只改為繼承
+正式 filesystem adapter，以使用新增 lock API。

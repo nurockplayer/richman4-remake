@@ -161,9 +161,9 @@ func run() -> void:
 
 func finish() -> void:
 	var slots := temp_root.path_join("slots")
-	for name in DirAccess.get_files_at(slots):
-		DirAccess.remove_absolute(slots.path_join(name))
 	if DirAccess.dir_exists_absolute(slots):
+		for name in DirAccess.get_files_at(slots):
+			DirAccess.remove_absolute(slots.path_join(name))
 		DirAccess.remove_absolute(slots)
 	DirAccess.remove_absolute(temp_root.path_join("default.json"))
 	DirAccess.remove_absolute(temp_root)

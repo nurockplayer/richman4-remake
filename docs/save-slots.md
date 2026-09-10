@@ -23,9 +23,15 @@ var storage := SaveSlots.new("user://richman4-save-slots", "user://richman4_save
 
 ## 回傳狀態
 
-`preview(slot_id)` 與 `read(slot_id)` 都會先讀 bytes、解析 JSON，再依序通過
-`GameState.validate_save()` 與 `GameState.from_dict()`。只有通過的 snapshot
-才會產生 metadata。
+`preview(slot_id)` 會先讀 bytes、解析 JSON，再依序通過
+`GameState.validate_save()` 與 `GameState.from_dict()`。`read(slot_id)` 也會
+執行相同驗證，並回傳通過驗證的 snapshot；只有通過的 snapshot 才會產生
+metadata。讀取流程可傳入先前 preview 的 fingerprint：
+`read(slot_id, expected_fingerprint)` 會以同一次讀入的 bytes 計算 fingerprint，
+若不相符便回傳 `status: "stale"` 且不包含 snapshot，避免 preview 後被替換的
+有效存檔靜默套用。`expected_fingerprint` 為 `null` 時是明確的 raw-read API，
+不做比對；空字串表示 preview 當時檔位為空。格式不合法的 expected fingerprint
+會在讀取前回傳 `status: "error"`／`error: "invalid_expected_fingerprint"`。
 
 單一 row 的 `status` 如下：
 
@@ -74,7 +80,8 @@ temporary sibling、讀回並比對 bytes、再次解析／驗證，最後才以
 ## MainUI 接線邊界
 
 MainUI 可用 `scan()` 建立六列 picker；選定 row 後保存 preview fingerprint，
-寫入時傳回該 fingerprint。讀取成功後，使用 `read().snapshot` 建立候選
+讀取時呼叫 `read(slot_id, selected_fingerprint)`，寫入時也傳回該 fingerprint。
+讀取成功後，使用 `read(slot_id, selected_fingerprint).snapshot` 建立候選
 `GameState`，再沿用現有 `_load_blocked_by_presentation()`、legacy 三股市
 continue／cancel 與 presentation guard。這個 module 不會改動 live game、
 simulation 或 RNG，也不授權跳過既有 load guard。

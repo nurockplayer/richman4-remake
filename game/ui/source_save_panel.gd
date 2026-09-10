@@ -634,11 +634,15 @@ func _create_row(slot_id: int, preview: Dictionary, rect: Rect2) -> void:
 	row_visuals[slot_id] = {}
 	_render_slot_label_background(content, slot_id)
 	if mode == MODE_LOAD and slot_id == 0:
-		var legacy := _source_label("AUTO", 9, SOURCE_TEXT)
+		var legacy := _source_label("原有存檔", 9, SOURCE_TEXT)
 		legacy.name = "OriginalSaveLabel"
-		legacy.position = Vector2(SOURCE_DATE_X - rect.position.x, 15.0)
+		# Keep the four-character existing-save marker above the source date even
+		# when the theme's line box is taller than the requested font size.
+		legacy.position = Vector2(SOURCE_DATE_X - rect.position.x, 10.0)
 		legacy.size = Vector2(44.0, 18.0)
 		legacy.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		legacy.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		legacy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		content.add_child(legacy)
 	_render_row_content(content, slot_id, preview)
 

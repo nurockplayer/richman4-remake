@@ -138,17 +138,27 @@ func preview_slot(slot_id: Variant) -> Dictionary:
 	return preview(slot_id)
 
 
-## Read and validate a row again, returning the parsed snapshot/path.  Nothing
-## is assigned to a caller's live game by this module.
-func read(slot_id: Variant) -> Dictionary:
+## Read and validate a row again, returning the parsed snapshot/path.  When an
+## expected fingerprint is supplied, the same bytes read for this operation
+## must still match the earlier preview; a mismatch returns stale without a
+## snapshot.  Nothing is assigned to a caller's live game by this module.
+func read(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
 	var resolved := _resolve_slot(slot_id)
 	if not bool(resolved.get("ok", false)):
 		return _error_result(str(resolved.get("error", "invalid_slot_id")), slot_id)
-	return _inspect(int(resolved.slot), str(resolved.path), true)
+	if not _valid_expected_fingerprint(expected_fingerprint):
+		return {
+			"ok": false,
+			"status": STATUS_ERROR,
+			"error": "invalid_expected_fingerprint",
+			"slot": int(resolved.slot),
+			"path": str(resolved.path),
+		}
+	return _inspect(int(resolved.slot), str(resolved.path), true, expected_fingerprint)
 
 
-func read_slot(slot_id: Variant) -> Dictionary:
-	return read(slot_id)
+func read_slot(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
+	return read(slot_id, expected_fingerprint)
 
 
 ## Validate and atomically write a writable row.  expected_fingerprint is
@@ -334,10 +344,17 @@ func _resolve_slot(slot_id: Variant) -> Dictionary:
 	}
 
 
-func _inspect(slot: int, path: String, include_snapshot: bool) -> Dictionary:
+func _inspect(
+		slot: int,
+		path: String,
+		include_snapshot: bool,
+		expected_fingerprint: Variant = null,
+) -> Dictionary:
 	var read_result := _io_call("read_bytes", [path])
 	if not bool(read_result.get("ok", false)):
 		if str(read_result.get("error", "")) == "missing" or not bool(_io_call_value("file_exists", [path], false)):
+			if expected_fingerprint != null and not str(expected_fingerprint).is_empty():
+				return _stale_result(slot, path, str(expected_fingerprint), "destination_changed")
 			return {
 				"ok": true,
 				"status": STATUS_EMPTY,
@@ -364,6 +381,8 @@ func _inspect(slot: int, path: String, include_snapshot: bool) -> Dictionary:
 			"fingerprint": "",
 		}
 	var fingerprint := _fingerprint_bytes(bytes)
+	if expected_fingerprint != null and fingerprint != str(expected_fingerprint):
+		return _stale_result(slot, path, str(expected_fingerprint), "destination_changed")
 	var decoded := _decode_and_validate(bytes)
 	if str(decoded.get("status", "")) == STATUS_CORRUPT:
 		return {

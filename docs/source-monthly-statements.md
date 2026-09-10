@@ -53,14 +53,30 @@ event-log overlap 檢查，並防止同一 action 重複交付。一般 refresh�
 - Panel25／76 的新 synthetic importer suite 為 4／0。兩版實際資源已在既有 bounded UI cache
   匯入 83／1 chunks；原有資源及所有非 UI manifest 欄位逐項保持相同。未更新 FULL lane。
 - 實際原生畫面已揭露 fallback 遮住利息背景、JSON logical metadata 被誤拒而使角色偏移，
-  以及分紅黑底／公司標題位置問題；目前仍在修正。舊資產 fixture 也須補入新 required resources。
+  以及分紅黑底／公司標題位置問題；`ccd5276`／`6bffdae` 已修正。公司標題依來源的左端
+  座標定位，沒有保留原先誤認為中心的斷言。Presenter 134／0；compositor headless 17／0
+  （兩個像素檢查明列 SKIP）、native 19／0。既有 package asset fixture 補入必需資源後 14／0。
+  Worker 留有修正前 17／7 log，但沒有先建立獨立 RED commit；root 將加強後的 immutable
+  `8bb964f` 測試放入隔離重播專案，搭配修正前 `74ccc37` presenter，原生重現 19／13，
+  同一測試在修正版為 19／0。這是事後重播，並非事前的 test-only commit。
 - Actual catalog 的 Game:3／MultiverseJourney:7 皆由既有 `_default_setup_options`／`_new_game`
   起局，使用支援的四人 AI 選項，未注入日期、位置、RNG 或報表事件。2026-09-11 開局、seed1，
   分紅均在第 16 次 public AI action；利息分別在第 80／81 次。Headless 378／0；較早回合
   加速省略移動呈現，產生報表的回合仍經過正常 invoke／handle，使用真實 presenter 與 viewport release。
   初版測試 `74ccc37` 誤把起局系統日期要求為 1998-01-01；修正的是測試日期假設及等候時間，
   沒有改動產品預設日期。新聞關閉後佇列停住則由上述獨立行為 RED 證明並修正。
-  修正後的原版逐幕比對仍未完成，不宣稱呈現通過。
+  同一實際 catalog 的原生擷取版為 390／0，包含四張 Game／MultiverseJourney 分紅／利息
+  MainUI 畫面及 provenance。另有八張兩版元件畫面，涵蓋四人分紅及二／三／四人利息；
+  已直接核對來源 article52／53 的結構、人物位置、數字及表格。所有畫面使用同版原作快取。
+- `6bffdae775fb67d23f0ac10ee9ce49a766506b6b` 的完整 `tools/check.sh` 通過：
+  208 次 Godot 執行、86 個 Python tests、零 Godot error。使用暫時的 `override.cfg`
+  隔離驗證 user-data，結束後移除；沒有重匯入完整素材或改寫擁有者存檔／設定。
+  最後原生 affected checks 為 presenter 134、MainUI 16、controller 19、lifecycle 5、
+  deferred-news 10、final-overlay 7，全部通過。後續若只改本文件，需核對 production/test/tool
+  tree 與此版本相同，再沿用這些證據。
+- 第一輪 catalog 擷取停在額外加入的 `frame_post_draw` 等候；停止該驗證 process 後，
+  僅將私有擷取腳本改為 process frame 加 `RenderingServer.force_draw(false)`，完整 390／0。
+  這是擷取工具修正，沒有作為產品修復證據；第一次未完成的執行不算 PASS。
 
-原生 SubViewport 不等於普通 OS 輸入；逐幕原版對照、獨立審查與目前套件 gate 均另行驗收。
+原生 SubViewport 不等於普通 OS 輸入；獨立審查、普通操作與目前套件 gate 均另行驗收。
 本文件不宣稱 S17／S18 或 Mission 完成。

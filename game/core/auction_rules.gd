@@ -496,6 +496,8 @@ static func _settle(game: Object, pending: Dictionary, winner_id: int, cause: St
 		bank["deposits"] = int(bank.get("deposits", 0)) + amount
 		bank["cash"] = int(bank.get("cash", 0)) + amount
 		game.state["bank"] = bank
+		if int(target.get("owner", -1)) < 0:
+			game.LandTenure.acquire(game, target)
 		if target.get("kind", "") == "facility":
 			game._update_facility_records(int(target.get("source_object_id", -1)), {"owner": winner_id})
 		else:

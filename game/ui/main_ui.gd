@@ -197,6 +197,7 @@ var _presentation_busy := false
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
+var _source_setup_return_to_game := false
 
 func _ready() -> void:
 	# A debug/editor launch is the explicit development lane for the synthetic
@@ -326,6 +327,10 @@ func _build_source_shell() -> void:
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
 	_build_source_stock_panel()
+	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
+	if setup_panel != null:
+		setup_panel.confirmed.connect(_on_source_setup_confirmed)
+		setup_panel.cancelled.connect(_on_source_setup_cancelled)
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
 
@@ -362,7 +367,65 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
-	_on_new_game_pressed()
+	if source_shell == null or not source_shell.has_method("show_setup"):
+		_on_new_game_pressed()
+		return
+	# MainUI builds the ordinary game state before showing the source title.
+	# Entry intent therefore comes from the visible shell surface, rather than
+	# from the presence of an initialized state behind the title.
+	var title_visible := false
+	if source_shell.has_method("is_title_visible"):
+		title_visible = bool(source_shell.call("is_title_visible"))
+	_source_setup_return_to_game = not title_visible and game_state != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable"
+	var selected := _active_map_definition.duplicate(true)
+	if selected.is_empty():
+		selected = _selected_map_definition.duplicate(true)
+	selected = _source_setup_definition(selected)
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		player_count = PLAYER_COUNT
+	var defaults := _setup_options_from_state()
+	if defaults.is_empty():
+		defaults = _default_setup_options(player_count, selected)
+	defaults["player_count"] = player_count
+	var catalog: Array = _map_catalog.duplicate(true)
+	source_shell.call("show_setup", catalog, selected, defaults)
+
+func _source_setup_definition(identity: Dictionary) -> Dictionary:
+	# Current board geometry is a display snapshot, not an initial map. Match
+	# the pinned source identity to regain its capabilities and market data.
+	for value in _map_catalog:
+		if value is Dictionary and str(value.get("id", "")) == str(identity.get("id", "")) and _map_source_matches(value.get("source", {}), identity.get("source", {}), true):
+			return value.duplicate(true)
+	return identity.duplicate(true)
+
+func _on_source_setup_confirmed(options: Dictionary, map_definition: Dictionary) -> void:
+	var character_ids: Variant = options.get("character_ids", [])
+	var requested_count := int(options.get("player_count", character_ids.size() if character_ids is Array else 0))
+	if requested_count < 2 or requested_count > 4:
+		return
+	var source_definition := _source_setup_definition(map_definition)
+	var effective_options := _default_setup_options(requested_count, source_definition)
+	# The source panel supplies player choices. Ruleset capabilities always
+	# come from the validated initial catalog, never from presentation fields.
+	for key in ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "human_character_ids", "player_count"]:
+		if options.has(key):
+			effective_options[key] = options[key]
+	var before_game := game_state
+	var before_seed := int(state.get("seed", MIN_SEED - 1))
+	if _new_game(null, requested_count, source_definition, effective_options):
+		_source_setup_return_to_game = false
+	elif game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
+		_refresh_log_only()
+
+func _on_source_setup_cancelled() -> void:
+	if source_shell == null:
+		return
+	if _source_setup_return_to_game and game_state != null and str(state.get("phase", "")) != "unavailable":
+		source_shell.call("show_game")
+	else:
+		source_shell.call("show_title")
+	_source_setup_return_to_game = false
 
 func _on_source_load_requested() -> void:
 	_load_game()
@@ -1230,7 +1293,7 @@ func _setup_options_from_state() -> Dictionary:
 		if not player is Dictionary or not player.has("character_id"):
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
-	return {
+	var options := {
 		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
@@ -1247,6 +1310,21 @@ func _setup_options_from_state() -> Dictionary:
 		"start_date": {"year": int(start_date.get("year", 0)), "month": int(start_date.get("month", 0)), "day": int(start_date.get("day", 0))},
 		"character_ids": character_ids,
 	}
+	var initial_flags: Variant = state.get("initial_human_flags", null)
+	if initial_flags is Array and initial_flags.size() == player_count:
+		var flags_valid := true
+		for flag in initial_flags:
+			if typeof(flag) != TYPE_BOOL:
+				flags_valid = false
+				break
+		if flags_valid:
+			options["human_flags"] = initial_flags.duplicate()
+	var initial_vehicle: Variant = state.get("initial_vehicle", null)
+	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
+		options["initial_vehicle"] = initial_vehicle
+	if state.has("land_tenure_months"):
+		options["land_tenure_months"] = int(state.land_tenure_months)
+	return options
 
 func _populate_setup_controls() -> void:
 	var player_count := int(_as_array(state.get("players", [])).size())
@@ -1770,13 +1848,20 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	var effective_setup := setup_options.duplicate(true)
 	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
 		effective_setup = _default_setup_options(resolved_players, selected_definition)
+	if effective_setup.has("human_character_ids"):
+		var selection_script: Variant = load("res://game/ui/source_setup_panel.gd")
+		effective_setup = selection_script.resolve_players(effective_setup, resolved_players, resolved_seed)
+		if effective_setup.is_empty():
+			_append_local_log("真人角色選擇無效；目前棋局保持不變。")
+			return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
+	var engine_setup := effective_setup.duplicate(true)
 	var candidate: Variant = null
 	if state_script != null:
 		if not _is_fallback_definition(selected_definition) and state_script.has_method("new_game_on_board"):
-			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, effective_setup) if not effective_setup.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
+			candidate = state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition, engine_setup) if not engine_setup.is_empty() else state_script.new_game_on_board(resolved_seed, resolved_players, selected_definition)
 		elif _is_fallback_definition(selected_definition) and state_script.has_method("new_game"):
-			candidate = state_script.new_game(resolved_seed, resolved_players, setup_options) if not setup_options.is_empty() else state_script.new_game(resolved_seed, resolved_players)
+			candidate = state_script.new_game(resolved_seed, resolved_players, engine_setup) if not engine_setup.is_empty() else state_script.new_game(resolved_seed, resolved_players)
 	if candidate == null:
 		if game_state == null and state.is_empty():
 			state = _unavailable_state(resolved_seed)
@@ -1797,7 +1882,6 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	end_overlay.hide()
 	_ai_pending = false
 	return true
-
 func _setup_audio() -> void:
 	var audio_script: Variant = load("res://game/platform/original_audio.gd")
 	if audio_script == null:
@@ -1906,9 +1990,10 @@ func _load_game() -> void:
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
+	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open
+	return title_open or setup_open or stocks_open or inspect_open
 
 func _load_blocked_by_presentation() -> bool:
 	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)

@@ -35,13 +35,14 @@ from decode_original_images import (
 # archive indices, not screen positions; see docs/original-ui-assets.md.
 UI_RESOURCES = {
     "Data": (1, 2, 3),
-    "Panel": (0, 1, 2, 21, 23, 24, 75),
+    "Panel": (0, 1, 2, 21, 23, 24, 25, 75, 76),
 }
 
-# S11–S13 use three source Panel entries in both editions.  Their complete
-# bounded chunk sets are retained so the scene background, pressed controls,
-# keypad and numerals remain source-addressable without importing Panel22.
-BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30}
+# S11–S13 and S17–S18 use explicitly bound source Panel entries in both
+# editions.  Their complete bounded chunk sets are retained so source
+# backgrounds, controls, report cards and character poses remain addressable
+# without importing unrelated Panel resources.
+BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30, 25: 83, 76: 1}
 BANK_UI_REQUIRED_CHUNKS = {
     resource_index: tuple(range(chunk_count))
     for resource_index, chunk_count in BANK_UI_CHUNK_COUNTS.items()
@@ -123,6 +124,10 @@ EXPECTED_UI_CHUNK_COUNTS = {
     (_edition, "Panel", _resource_index): chunk_count
     for _edition in ("Game", "MultiverseJourney")
     for _resource_index, chunk_count in BANK_UI_CHUNK_COUNTS.items()
+}
+MONTHLY_REQUIRED_UI_RESOURCES = {
+    (_edition, "Panel"): (25, 76)
+    for _edition in ("Game", "MultiverseJourney")
 }
 
 
@@ -318,8 +323,16 @@ def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
             continue
         archive = parse_mkf(path)
         resources = {}
+        required_resources = MONTHLY_REQUIRED_UI_RESOURCES.get(
+            (canonical, name), ()
+        )
         for index, chunks in index_specs.items():
             if index >= len(archive.entries):
+                if index in required_resources:
+                    raise FormatError(
+                        f"UI archive {archive.path} is missing required UI resource "
+                        f"{index}"
+                    )
                 continue
             resources[str(index)] = _export_resource(
                 canonical, name, index, chunks, archive, stage

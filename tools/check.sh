@@ -56,6 +56,17 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controll
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller_host.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_catalog.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/monthly_statements.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_lifecycle.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_focus.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_money.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_final.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_deferred.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_catalog.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd

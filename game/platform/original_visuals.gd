@@ -67,6 +67,24 @@ func character(edition: String, character_id: int, direction := 0) -> Dictionary
 		return {}
 	return _frame(group.get("sprites", []), "character_id", character_id, direction)
 
+func ui(edition: String, archive: String, resource: int, chunk: int = 0) -> Dictionary:
+	# Never borrow another edition's artwork when a resource is absent.
+	var editions: Variant = manifest.get("ui", {})
+	if not editions is Dictionary or not editions.get(edition) is Dictionary:
+		return {}
+	var group: Variant = editions[edition].get(archive, {})
+	if not group is Dictionary or not group.get("archive_sha256") is String or str(group.archive_sha256).length() != 64:
+		return {}
+	var resources: Variant = group.get("resources", {})
+	if not resources is Dictionary or not resources.get(str(resource)) is Dictionary:
+		return {}
+	var entry: Dictionary = resources[str(resource)]
+	var chunks: Variant = entry.get("chunks", {})
+	if not chunks is Dictionary:
+		return {}
+	var frame: Variant = chunks.get(str(chunk), {})
+	return frame if _valid_frame(frame) else {}
+
 func house(scene: Dictionary, level: int, direction: int) -> Dictionary:
 	return _frame(scene.get("house_sprites", []), "level", level, direction)
 

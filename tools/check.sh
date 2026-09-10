@@ -34,6 +34,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_flow.gd

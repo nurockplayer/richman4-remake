@@ -24,6 +24,7 @@ const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
+const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -71,6 +72,7 @@ var source_shell: Control
 var source_stock_panel: Control
 var source_save_menu: Control
 var source_bank_controller: Control
+var source_monthly_controller: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -335,6 +337,7 @@ func _build_source_shell() -> void:
 	_build_source_stock_panel()
 	_build_source_save_menu()
 	_build_source_bank_controller()
+	_build_source_monthly_controller()
 	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
 	if setup_panel != null:
 		setup_panel.confirmed.connect(_on_source_setup_confirmed)
@@ -367,6 +370,32 @@ func _sync_source_bank() -> void:
 	for popup in [news_popup, fate_popup, auction_popup]:
 		blocked = blocked or (popup != null and popup.visible)
 	source_bank_controller.sync(game_state, state, str(source_shell.get("_source_edition")), source_shell.get("_visuals"), blocked)
+
+func _build_source_monthly_controller() -> void:
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceMonthlyController.new()
+	controller.z_index = 50
+	controller.finished.connect(func() -> void:
+		_ai_pending = false
+		_refresh_from_state())
+	canvas.add_child(controller)
+	source_monthly_controller = controller
+
+func _source_monthly_modal_open() -> bool:
+	return source_monthly_controller != null and source_monthly_controller.is_open()
+
+func _sync_source_monthly() -> void:
+	if source_monthly_controller == null or source_shell == null:
+		return
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open()
+	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
+	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
+	for popup in [news_popup, fate_popup, auction_popup]:
+		blocked = blocked or (popup != null and popup.visible)
+	source_monthly_controller.set_visuals(source_shell.get("_visuals"))
+	source_monthly_controller.sync(game_state, blocked)
 
 func _build_source_stock_panel() -> void:
 	if source_shell == null:
@@ -401,7 +430,7 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested(stage: int = 0) -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
@@ -574,7 +603,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -584,7 +613,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -600,7 +629,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -632,14 +661,14 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if board_view == null:
 		return
@@ -1912,7 +1941,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2082,7 +2111,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2136,10 +2165,10 @@ func _source_modal_open() -> bool:
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open()
+	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open() or _source_monthly_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_monthly_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2513,7 +2542,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2645,6 +2674,8 @@ func _is_human_turn() -> bool:
 	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_monthly_modal_open():
+		return {"ok": false, "message": "請先看完本期報表。"}
 	if _source_bank_modal_open():
 		var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
 		if method not in ["resume_bank_visit", "complete_bank_visit"] and not bank_action:
@@ -2662,6 +2693,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		var before := _read_snapshot().duplicate(true)
 		var result: Variant = game_state.callv(method, args)
 		if result is Dictionary:
+			if source_monthly_controller != null:
+				source_monthly_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
 			result["_presentation_before"] = before
 			result["_presentation_generation"] = _presentation_generation
 			result["_presentation_owner"] = game_state
@@ -2692,6 +2725,8 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	if source_monthly_controller != null:
+		source_monthly_controller.cancel()
 	if source_bank_controller != null:
 		source_bank_controller.cancel()
 	_presentation_generation += 1
@@ -2734,6 +2769,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 	_sync_source_bank()
+	_sync_source_monthly()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2788,12 +2824,13 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "options", false)
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open())
+		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open() and not _source_monthly_modal_open())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
 		source_shell.call("set_toolbar_enabled", "cards", false)
 		source_shell.call("set_toolbar_enabled", "tools", false)
 		source_shell.call("set_toolbar_enabled", "sale", false)
 	_sync_source_bank()
+	_sync_source_monthly()
 	_last_rendered_phase = phase
 
 func _update_load_gate() -> void:
@@ -3116,7 +3153,7 @@ func _refresh_log_only() -> void:
 	_update_event_log()
 
 func _update_end_overlay(phase: String) -> void:
-	if phase != "game_over":
+	if phase != "game_over" or _source_monthly_modal_open():
 		end_overlay.hide()
 		return
 	var winner_index := int(state.get("winner", -1))

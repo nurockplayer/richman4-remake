@@ -663,11 +663,8 @@ func _render_row_content(content: Control, slot_id: int, preview: Dictionary) ->
 	_render_portraits(content, metadata, preview, slot_id)
 
 
-func _render_status(content: Control, preview: Dictionary, status: String) -> void:
+func _render_status(content: Control, _preview: Dictionary, status: String) -> void:
 	var details := _status_text(status)
-	var error_text := str(preview.get("error", ""))
-	if not error_text.is_empty() and status in [STATUS_CORRUPT, STATUS_INVALID, STATUS_UNREADABLE, STATUS_ERROR]:
-		details += "\n" + error_text
 	var details_label := _source_label(details, 9, SOURCE_MUTED)
 	details_label.name = "SlotDetails"
 	details_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 13.0)

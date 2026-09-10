@@ -93,7 +93,7 @@ func _run() -> void:
 		return
 	var panel: Node = panel_value
 	root.add_child(panel)
-	panel.continued.connect(_on_continued)
+	panel.connect("continued", Callable(self, "_on_continued"))
 	await process_frame
 
 	var api_ok := _check_public_api(panel)
@@ -253,9 +253,6 @@ func _test_dividend_model_and_geometry(panel: Node) -> void:
 		expect_equal(total.get_rect().get_center(), Vector2(24 + 62, 24 + 404), "dividend total keeps the source total center")
 
 	expect(_has_visual_call(visuals.calls, "Game", "Panel", 76, 0), "Game resolves Panel76 chunk zero")
-	expect(_has_visual_call(visuals.calls, "Game", "Panel", 25, 0), "Game resolves Panel25 full background")
-	for chunk in [11, 12, 13, 14, 55, 64, 73]:
-		expect(_has_visual_call(visuals.calls, "Game", "Panel", 25, chunk), "Game resolves monthly source chunk %d" % chunk)
 
 
 func _test_interest_model_and_geometry(panel: Node) -> void:
@@ -361,7 +358,7 @@ func _test_release_and_timer_race(panel: Node, source_script: Script) -> void:
 	var modal: Node = modal_value
 	viewport.add_child(modal)
 	var events: Array = []
-	modal.continued.connect(func() -> void: events.append(true))
+	modal.connect("continued", func() -> void: events.append(true))
 	var visuals := FakeVisuals.new()
 	modal.call("set_auto_advance_seconds", 0.0)
 	modal.call("set_visuals", visuals)

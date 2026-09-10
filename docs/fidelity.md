@@ -2,7 +2,7 @@
 
 本頁把兩種證據分開記錄：一種是擁有者授權的原作位元組、解析結果、反組譯與說明書頁面，另一種是 Godot 重製版目前的執行時行為。兩者都不能單獨推出「與原作完全相同」或一個保真度百分比。
 
-目前發行來源是 [`159aeb0`](https://github.com/nurockplayer/richman4-remake/commit/159aeb036a71194badc564a2064e750655bd7484)。[Issue #89](https://github.com/nurockplayer/richman4-remake/issues/89) 的最終 release acceptance 已通過：在 ARM64 M2 Pro 上以 plain packaged app 完成一名人類手動擲骰／選路、三名 AI 持續循環的新局；另完成四名 AI 的 30 日／120 次操作 settlement，最終由沙隆巴斯於第 121 回合獲勝。驗收也通過磁碟存檔／讀檔／再存檔相等、production JSON encoding equality、重開、音樂 next-track，以及正常退出且沒有 engine errors；套件不依賴開發用素材路徑、`audio.cfg` 或環境變數。產物已移至 `/Users/tachikoma/Applications/大富翁 4 · 城市棋局.app` 並通過 codesign，且已逐位元還原擁有者存檔，並確認原先不存在的 `audio.cfg` 與開發素材目錄沒有被帶入。
+目前發行來源是 [`159aeb0`](https://github.com/nurockplayer/richman4-remake/commit/159aeb036a71194badc564a2064e750655bd7484)。[Issue #89](https://github.com/nurockplayer/richman4-remake/issues/89) 的最終 release acceptance 已通過：在 ARM64 M2 Pro 上以 plain packaged app 完成一名人類手動擲骰／選路、三名 AI 持續循環的新局；另完成四名 AI 的 30 日／120 次操作 settlement，最終由沙隆巴斯於第 121 回合獲勝。驗收也通過磁碟存檔／讀檔／再存檔相等、production JSON encoding equality、重開、音樂 next-track，以及正常退出且沒有 engine errors；套件不依賴開發用素材路徑、`audio.cfg` 或環境變數。產物已移至 `/Users/tachikoma/Applications/大富翁 4 · 城市棋局.app` 並通過 codesign，擁有者存檔已逐位元還原，`audio.cfg` 恢復原先不存在的狀態，暫時移開的開發素材目錄也已還原。
 
 這是重製版套件與流程的 release 證據，不是原作等價證明。目前沒有原作執行檔在同一環境下的可重現 golden trace，也沒有量測出的保真度百分比；原作規則、媒體映射、鏡頭與操作節奏仍須以對應來源或可重現觀察逐項核對。
 

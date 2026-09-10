@@ -72,6 +72,18 @@ static func next_price(previous: float, rate: float) -> float:
 	var price: float = previous + (floor(change) if change >= 0.0 else ceil(change)) * tick
 	return snappedf(clampf(price, 1.0, 9999.0), 0.01)
 
+
+static func limit_state(previous: float, current: float) -> int:
+	# The source trade handler compares the current quote with the same
+	# tick-adjusted ten-percent step used by the market updater.  State 1 is
+	# upper limit and state 3 is lower limit; opposite-direction trades remain
+	# legal at either quote.
+	if is_equal_approx(current, next_price(previous, 10.0)):
+		return 1
+	if is_equal_approx(current, next_price(previous, -10.0)):
+		return 3
+	return 0
+
 static func reset_turn_supply(market: Dictionary, rng: RandomNumberGenerator) -> void:
 	for stock_symbol in symbols():
 		var row: Dictionary = market.rows[stock_symbol]

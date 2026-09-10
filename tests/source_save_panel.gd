@@ -49,6 +49,7 @@ func _initialize() -> void:
 
 
 func run() -> void:
+	await _test_direct_source_input()
 	await _test_load_rows_and_geometry()
 	await _test_existing_save_status_geometry()
 	await _test_save_selection_and_overwrite()
@@ -137,7 +138,6 @@ func _test_load_rows_and_geometry() -> void:
 	expect_equal(load_geometry.get("image_size"), Vector2(555, 451), "load art keeps the source dimensions")
 	expect_equal(panel.get_row_rect(0), Rect2(129, 24, 448, 72), "load row zero mirrors source callback geometry")
 	expect_equal(panel.get_row_rect(5), Rect2(129, 384, 448, 72), "load row five mirrors 72px source spacing")
-	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "load action controls do not occlude the final row hit region")
 	expect(panel.row_buttons[0].disabled == false, "valid row zero is loadable")
 	expect(panel.row_buttons[1].disabled, "invalid load row is disabled")
 	expect(panel.row_buttons[2].disabled, "corrupt load row is disabled")
@@ -146,13 +146,6 @@ func _test_load_rows_and_geometry() -> void:
 	expect(panel.select_slot(1) == false, "disabled invalid load row cannot be selected")
 	expect(panel.select_slot(0), "valid load row can be selected")
 	expect_equal(panel.selected_fingerprint(), "c".repeat(64), "selection retains preview fingerprint")
-	var reference_canvas_rect := Rect2(Vector2.ZERO, Vector2(640.0, 480.0))
-	var load_confirm_rect := Rect2(panel.action_bar.position + panel.confirm_button.position, panel.confirm_button.size * panel.confirm_button.scale)
-	var load_cancel_rect := Rect2(panel.action_bar.position + panel.cancel_button.position, panel.cancel_button.size * panel.cancel_button.scale)
-	expect_equal(load_confirm_rect, Rect2(222, 456, 94, 24), "load confirm action rect is anchored to the source footer")
-	expect_equal(load_cancel_rect, Rect2(324, 456, 94, 24), "load cancel action rect is anchored to the source footer")
-	expect(reference_canvas_rect.encloses(load_confirm_rect), "load confirm action rect stays inside the source canvas")
-	expect(reference_canvas_rect.encloses(load_cancel_rect), "load cancel action rect stays inside the source canvas")
 	expect(visuals.ui_calls.size() > 0 and visuals.ui_calls[0].resource == 479 and visuals.ui_calls[0].chunk == 0, "Game load uses mapped Data479 chunk zero")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 6), "Game load uses mapped Data479 slot label chunk")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.resource == 479 and call.chunk == 3), "Game load maps source map number two to Data479 chunk three")
@@ -204,18 +197,10 @@ func _test_save_selection_and_overwrite() -> void:
 	var save_geometry: Dictionary = panel.get_source_geometry()
 	expect_equal(save_geometry.get("image_position"), Vector2(40, 48), "save art uses the source (40,48) placement")
 	expect_equal(save_geometry.get("image_size"), Vector2(555, 381), "save art keeps the source dimensions")
-	var save_canvas_rect := Rect2(Vector2.ZERO, Vector2(640.0, 480.0))
-	var save_confirm_rect := Rect2(panel.action_bar.position + panel.confirm_button.position, panel.confirm_button.size * panel.confirm_button.scale)
-	var save_cancel_rect := Rect2(panel.action_bar.position + panel.cancel_button.position, panel.cancel_button.size * panel.cancel_button.scale)
-	expect_equal(save_confirm_rect, Rect2(222, 438, 94, 24), "save confirm action rect is anchored to the source footer")
-	expect_equal(save_cancel_rect, Rect2(324, 438, 94, 24), "save cancel action rect is anchored to the source footer")
-	expect(save_canvas_rect.encloses(save_confirm_rect), "save confirm action rect stays inside the source canvas")
-	expect(save_canvas_rect.encloses(save_cancel_rect), "save cancel action rect stays inside the source canvas")
 	expect(visuals.ui_calls.size() > 0 and visuals.ui_calls[0].edition == "MultiverseJourney" and visuals.ui_calls[0].resource == 520 and visuals.ui_calls[0].chunk == 1, "save frame stays on the panel edition")
 	expect(visuals.ui_calls.any(func(call: Dictionary) -> bool: return call.edition == "Game" and call.resource == 479 and call.chunk == 3), "save row uses each preview's Game map atlas")
 	expect_equal(panel.get_row_rect(1), Rect2(129, 57, 448, 72), "save row one uses source y 0x39")
 	expect_equal(panel.get_row_rect(5), Rect2(129, 345, 448, 72), "save row five uses source y 0x39 plus four rows")
-	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "save action controls do not occlude the final row hit region")
 	expect(panel.row_buttons[1].disabled == false and panel.row_buttons[2].disabled == false, "save rows stay selectable for empty and occupied paths")
 	expect(panel.select_slot(1), "empty save row can be selected")
 	var confirmed: Array = []
@@ -333,7 +318,6 @@ func _test_real_scan_consumer_and_source_atlas() -> void:
 	expect_equal(panel.get_row_visual_rect(3, "map"), Rect2(), "unknown row source does not guess a map atlas")
 	expect_equal(panel.get_row_visual_rect(3, "portrait_0"), Rect2(), "unknown row source does not guess a portrait atlas")
 	expect(panel.row_content[1].find_child("SlotNumber", true, false) == null, "integrated row does not duplicate source slot number")
-	expect(not panel.get_row_rect(5).intersects(Rect2(panel.action_bar.position, panel.action_bar.size)), "integrated footer remains outside the final row hit region")
 	panel.queue_free()
 	DirAccess.remove_absolute(store.slot_path(1))
 	DirAccess.remove_absolute(slots_path)
@@ -353,3 +337,86 @@ func _with_fixture_identity(payload: Dictionary, source_edition: String, map_num
 	result["map_name"] = map_name
 	result["map_source"] = {"edition": source_edition, "map_number": map_number}
 	return result
+
+
+func _test_direct_source_input() -> void:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(960, 720)
+	viewport.handle_input_locally = true
+	root.add_child(viewport)
+	var panel := SourceSavePanelScript.new()
+	viewport.add_child(panel)
+	var confirmed: Array = []
+	var cancelled: Array = []
+	panel.confirmed.connect(func(slot: int, fingerprint: String, _preview: Dictionary) -> void: confirmed.append([slot, fingerprint]))
+	panel.cancelled.connect(func(_slot: int, _fingerprint: String, _preview: Dictionary) -> void: cancelled.append(true))
+	for edition in ["Game", "MultiverseJourney"]:
+		var rows: Array = [_valid_preview(0, "a".repeat(64)), _valid_preview(1, "b".repeat(64))]
+		for slot in range(2, 6):
+			rows.append(_empty_preview(slot))
+		panel.configure(edition, "load", rows)
+		await process_frame
+		expect(panel.find_child("ConfirmSelection", true, false) == null and panel.find_child("CancelSelection", true, false) == null, "source picker has no invented footer for " + edition)
+		confirmed.clear()
+		_pointer(viewport, panel, Vector2(350, 120))
+		expect(panel.selected_slot() == 1 and confirmed.is_empty(), "source hover selects without loading in " + edition)
+		_button(viewport, panel, Vector2(350, 120), MOUSE_BUTTON_LEFT, true)
+		expect(confirmed == [[1, "b".repeat(64)]], "left down immediately activates selected load row in " + edition)
+		_button(viewport, panel, Vector2(350, 120), MOUSE_BUTTON_LEFT, false)
+		expect(confirmed.size() == 1, "left release does not duplicate load activation in " + edition)
+		confirmed.clear()
+		_pointer(viewport, panel, Vector2(350, 200))
+		expect(panel.selected_slot() == 2, "invalid source row replaces earlier hover in " + edition)
+		_button(viewport, panel, Vector2(350, 200), MOUSE_BUTTON_LEFT, true, true)
+		_button(viewport, panel, Vector2(350, 200), MOUSE_BUTTON_LEFT, false)
+		expect(confirmed.is_empty(), "double click on empty row never loads the previous row in " + edition)
+		_pointer(viewport, panel, Vector2(20, 20))
+		cancelled.clear()
+		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, true)
+		expect(cancelled.is_empty(), "right down does not cancel in " + edition)
+		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, false)
+		expect(cancelled.size() == 1, "right release cancels even outside source rows in " + edition)
+		panel.hide()
+		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, false)
+		expect(cancelled.size() == 1, "hidden picker does not intercept mouse events in " + edition)
+		panel.show()
+		panel.configure(edition, "save", rows)
+		await process_frame
+		confirmed.clear()
+		_pointer(viewport, panel, Vector2(350, 160))
+		_button(viewport, panel, Vector2(350, 160), MOUSE_BUTTON_LEFT, true)
+		expect(confirmed == [[2, ""]], "empty save row activates on left down in " + edition)
+		_button(viewport, panel, Vector2(350, 160), MOUSE_BUTTON_LEFT, false)
+		confirmed.clear()
+		_pointer(viewport, panel, Vector2(350, 90))
+		_button(viewport, panel, Vector2(350, 90), MOUSE_BUTTON_LEFT, true)
+		_button(viewport, panel, Vector2(350, 90), MOUSE_BUTTON_LEFT, false)
+		expect(panel.is_overwrite_confirmation_visible() and confirmed.is_empty(), "occupied direct save retains required overwrite consent in " + edition)
+		_pointer(viewport, panel, Vector2(350, 160))
+		expect(panel.selected_slot() == 1, "overwrite decision freezes the selected destination in " + edition)
+		_button(viewport, panel, Vector2(20, 20), MOUSE_BUTTON_RIGHT, false)
+		expect(not panel.is_overwrite_confirmation_visible() and confirmed.is_empty(), "right cancel backs out of overwrite without writing in " + edition)
+		_pointer(viewport, panel, Vector2(350, 90))
+		_button(viewport, panel, Vector2(350, 90), MOUSE_BUTTON_LEFT, true)
+		_button(viewport, panel, Vector2(350, 90), MOUSE_BUTTON_LEFT, false)
+		panel.confirm_overwrite()
+		expect(confirmed == [[1, "b".repeat(64)]], "explicit overwrite confirms exactly the selected fingerprint in " + edition)
+	viewport.queue_free()
+	await process_frame
+
+
+func _pointer(viewport: SubViewport, panel: Control, source_position: Vector2) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = panel.reference_canvas.get_global_transform_with_canvas() * source_position
+	event.global_position = event.position
+	viewport.push_input(event, true)
+
+
+func _button(viewport: SubViewport, panel: Control, source_position: Vector2, index: MouseButton, pressed: bool, double_click: bool = false) -> void:
+	var event := InputEventMouseButton.new()
+	event.position = panel.reference_canvas.get_global_transform_with_canvas() * source_position
+	event.global_position = event.position
+	event.button_index = index
+	event.pressed = pressed
+	event.double_click = double_click
+	viewport.push_input(event, true)

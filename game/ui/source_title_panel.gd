@@ -262,6 +262,7 @@ func _build() -> void:
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		button.custom_minimum_size = Vector2.ZERO
 		button.flat = true
+		button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 		button.tooltip_text = str(BUTTON_LABELS[source_key])
 		button.add_theme_font_size_override("font_size", 14)
 		button.add_theme_color_override("font_color", Color("#f7e7b2"))

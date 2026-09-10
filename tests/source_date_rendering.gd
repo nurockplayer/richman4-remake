@@ -9,6 +9,7 @@ func _run() -> void:
 		await _present(panel, _model({"year":1998,"month":1,"day":31}, {"year":2026,"month":9,"day":11}, edition), visuals)
 		_expect(panel.is_model_valid() and panel.source_art_available(), "render fixture is valid with source-shaped art")
 		for action in ["month_down","month_up","year_down","year_up"]:
+			await _present(panel, _model({"year":1998,"month":1,"day":31}, {"year":2026,"month":9,"day":11}, edition), visuals)
 			var area: Rect2 = HITBOXES[action]
 			viewport.push_input(_mouse_event(FRAME_ORIGIN + area.get_center(), MOUSE_BUTTON_LEFT, true), true)
 			await _settle()
@@ -16,6 +17,7 @@ func _run() -> void:
 			var art: TextureRect = panel.find_child("SourceDate%sPressed" % label, true, false)
 			_expect(art != null and int(art.get_meta("source_chunk")) == (12 if action.ends_with("down") else 13), "source arrow chunk follows direction for either field")
 		for item in [["system","System",Vector2(38,196)],["cancel","Cancel",Vector2(101,196)],["accept","Accept",Vector2(163,196)]]:
+			await _present(panel, _model({"year":1998,"month":1,"day":31}, {"year":2026,"month":9,"day":11}, edition), visuals)
 			var area: Rect2 = HITBOXES[item[0]]
 			viewport.push_input(_mouse_event(FRAME_ORIGIN + area.get_center(), MOUSE_BUTTON_LEFT, true), true)
 			await _settle()

@@ -50,6 +50,7 @@ func _initialize() -> void:
 
 func run() -> void:
 	await _test_load_rows_and_geometry()
+	await _test_existing_save_status_geometry()
 	await _test_save_selection_and_overwrite()
 	await _test_no_io_and_payload_isolation()
 	await _test_real_scan_consumer_and_source_atlas()
@@ -89,6 +90,30 @@ func _empty_preview(slot_id: int) -> Dictionary:
 
 func _invalid_preview(slot_id: int, status: String) -> Dictionary:
 	return {"ok": false, "status": status, "slot": slot_id, "path": "/tmp/slot-%d.json" % slot_id, "fingerprint": "b".repeat(64), "error": "fixture_%s" % status, "metadata": {}}
+
+
+func _test_existing_save_status_geometry() -> void:
+	var panel := _panel()
+	for edition in ["Game", "MultiverseJourney"]:
+		for status in ["empty", "corrupt", "invalid", "unreadable", "error"]:
+			var rows: Array = [_empty_preview(0) if status == "empty" else _invalid_preview(0, status)]
+			for slot_id in range(1, 6):
+				rows.append(_empty_preview(slot_id))
+			panel.configure(edition, "load", rows, FakeVisuals.new())
+			await process_frame
+			var identity: Label = panel.row_content[0].find_child("OriginalSaveLabel", true, false)
+			var details: Label = panel.row_content[0].find_child("SlotDetails", true, false)
+			expect(identity != null and details != null, "existing-save identity and status remain visible for " + status)
+			if identity != null and details != null:
+				var row_bounds := Rect2(Vector2.ZERO, panel.get_row_rect(0).size)
+				var identity_bounds := Rect2(identity.position, identity.size)
+				var status_bounds := Rect2(details.position, details.size)
+				expect(not identity_bounds.intersects(status_bounds), "existing-save identity does not overlap " + status)
+				expect(row_bounds.encloses(identity_bounds) and row_bounds.encloses(status_bounds), "both texts fit inside the existing-save row for " + status)
+				expect(not details.text.is_empty() and not details.text.contains("fixture_"), "row status is player-facing for " + status)
+			expect(panel.row_buttons[0].disabled, "non-valid existing save stays disabled for " + status)
+	panel.queue_free()
+	await process_frame
 
 
 func _test_load_rows_and_geometry() -> void:

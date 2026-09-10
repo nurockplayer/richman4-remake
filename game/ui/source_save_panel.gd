@@ -653,7 +653,7 @@ func _render_row_content(content: Control, slot_id: int, preview: Dictionary) ->
 	if not row_visuals.has(slot_id):
 		row_visuals[slot_id] = {}
 	if status != STATUS_VALID:
-		_render_status(content, preview, status)
+		_render_status(content, preview, status, slot_id)
 		return
 	# The source callback writes these values into fixed columns after drawing
 	# the row background.  Keep each visual in its source coordinate rather than
@@ -663,12 +663,13 @@ func _render_row_content(content: Control, slot_id: int, preview: Dictionary) ->
 	_render_portraits(content, metadata, preview, slot_id)
 
 
-func _render_status(content: Control, _preview: Dictionary, status: String) -> void:
+func _render_status(content: Control, _preview: Dictionary, status: String, slot_id: int) -> void:
 	var details := _status_text(status)
 	var details_label := _source_label(details, 9, SOURCE_MUTED)
 	details_label.name = "SlotDetails"
-	details_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 13.0)
-	details_label.size = Vector2(136.0, 47.0)
+	var existing_load := mode == MODE_LOAD and slot_id == 0
+	details_label.position = Vector2(SOURCE_DATE_X - SOURCE_ROW_X, 36.0 if existing_load else 13.0)
+	details_label.size = Vector2(136.0, 32.0 if existing_load else 47.0)
 	details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	details_label.clip_text = true
 	content.add_child(details_label)

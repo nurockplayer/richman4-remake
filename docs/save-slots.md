@@ -145,6 +145,14 @@ and preserving the original file bytes. Explicitly saving that candidate uses
 the unchanged strict-write contract. Forged source classifications remain
 invalid; no new migration or compatibility branch is introduced.
 
+Final component review found that empty/corrupt/invalid/unreadable row0 placed
+its status over「原有存檔」. Tests-only `aebdd1d` adds both-edition checks for all
+five non-valid statuses:171 checks/10 overlap failures before repair,171/0
+after moving only row0 status below its identity. Both texts stay within the
+72px row; invalid rows remain disabled. Component composition is DIRECTION_ONLY,
+not ordinary native/package acceptance. Source click/cancel semantics are
+being reconciled under #129 before final interaction acceptance.
+
 ## Review repair evidence
 
 Row0 now says「原有存檔」above the date; the read API accepts the selected fingerprint and returns stale without a snapshot on replacement. Both focused suites run in check.sh. Tests-only1c0cc50 supplied the first regressions, but its two-argument call against the old one-argument API produced invocation errors, so that storage RED is not accepted as behavioral proof. Test-only3a2136b preserves every assertion and detects the available signature solely to replay the actual old public read API. Replayed unchanged against78a5888, valid A is replaced by valid B and the old API really returns B:163 checks/8 failures, without script or invocation errors. The identical test passes163/0 on the repaired implementation. Panel121/3 and runner two missing-call assertions are independently reproduced on78a5888; panel121/0 and runner PASS follow the repair. This is a retrospective evidence correction after implementation, not a claim that the initial API-error run was valid acceptance RED. Ordinary MainUI adoption and screen/native/package gates remain pending.

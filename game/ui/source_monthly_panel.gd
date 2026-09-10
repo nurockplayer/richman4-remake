@@ -58,6 +58,7 @@ var _fallback_background: ColorRect
 var _unavailable: Label
 var _timer: Timer
 var _built := false
+var _application_active := true
 
 
 func _init() -> void:
@@ -73,6 +74,25 @@ func _init() -> void:
 func _ready() -> void:
 	size = REFERENCE_SIZE
 	custom_minimum_size = REFERENCE_SIZE
+	_application_active = _application_is_focused()
+	_timer.paused = not _application_active
+
+
+func _application_is_focused() -> bool:
+	if DisplayServer.get_name() == "headless":
+		return true
+	for window_id in DisplayServer.get_window_list():
+		if DisplayServer.window_is_focused(window_id):
+			return true
+	return false
+
+
+func _notification(what: int) -> void:
+	if what not in [NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_APPLICATION_FOCUS_OUT]:
+		return
+	_application_active = what == NOTIFICATION_APPLICATION_FOCUS_IN
+	if _timer != null and is_instance_valid(_timer):
+		_timer.paused = not _application_active
 
 
 ## Replace the report snapshot.  The input is deeply copied before validation
@@ -206,7 +226,8 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _on_auto_advance_timeout() -> void:
-	continue_report()
+	if _application_active:
+		continue_report()
 
 
 func _on_timer_timeout() -> void:
@@ -773,6 +794,7 @@ func _configure_timer() -> void:
 	if not _model_valid or not _is_open or _kind != "dividend" or auto_advance_seconds <= 0.0:
 		return
 	_timer.wait_time = auto_advance_seconds
+	_timer.paused = not _application_active
 	_timer.start()
 
 

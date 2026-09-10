@@ -77,7 +77,7 @@ func bank_case(edition: String) -> void:
 	panel.set_view_model(model)
 	panel.set_visuals(Visuals.new())
 	await settle()
-	hidden(panel, ["ATMTitle", "ATMCash", "ATMDepositValue", "ATMAmountValue", "ATMFeedback"])
+	hidden(panel, ["ATMTitle", "ATMCash", "ATMDepositValue", "ATMAmountValue", "ATMFeedback", "ATMAmountBar"])
 	blank_buttons(panel)
 	digit(panel, "ATMSourceDigits", Vector2(244, 101), 19, 1)
 	click(view, Vector2(97, 69))

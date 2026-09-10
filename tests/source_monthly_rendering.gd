@@ -23,7 +23,7 @@ class FakeVisuals extends RefCounted:
 		elif resource == 25 and chunk in [11, 12, 13, 14]:
 			logical = _logical(160.0 if chunk == 11 else 159.0, 71.0)
 		elif resource == 25 and chunk >= 49:
-			logical = _logical(66.0, 72.0, 31.0, 38.0)
+			logical = _logical(65.0, 72.0, 31.0, 38.0)
 		elif resource == 76:
 			logical = _logical(592.0, 432.0)
 		return {"edition": edition, "archive": archive, "resource": resource, "chunk": chunk, "logical": logical}
@@ -90,14 +90,14 @@ func _run() -> void:
 	await _settle()
 	var frames: Dictionary = panel.call("source_frames")
 	var logical: Dictionary = frames["Game.Panel25.49"]["logical"]
-	_expect(typeof(logical["width"]) == TYPE_FLOAT and logical["width"] == 66.0, "JSON metadata keeps integral width as a finite float")
+	_expect(typeof(logical["width"]) == TYPE_FLOAT and logical["width"] == 65.0, "JSON metadata keeps integral width as a finite float")
 	_expect(typeof(logical["anchor_x"]) == TYPE_FLOAT and logical["anchor_x"] == 31.0, "JSON metadata keeps integral anchor as a finite float")
 	for ordinal in range(4):
 		var character := panel.find_child("InterestCharacter%d" % ordinal, true, false) as TextureRect
 		_expect(character != null, "interest character %d is rendered" % ordinal)
 		if character != null:
 			_expect(character.position.x + character.size.x <= 640.0 and character.position.y + character.size.y <= 480.0, "interest character %d stays inside source canvas" % ordinal)
-			_expect(character.size == Vector2(66, 72) and character.texture.get_size() == Vector2(132, 144), "interest character %d uses logical geometry independent of 2x texture" % ordinal)
+			_expect(character.size == Vector2(65, 72) and character.texture.get_size() == Vector2(130, 144), "interest character %d uses logical geometry independent of 2x texture" % ordinal)
 
 	if DisplayServer.get_name() == "headless":
 		skipped += 2

@@ -514,11 +514,18 @@ class PackageSceneTests(unittest.TestCase):
             source = root / "source" / "Game"
             source.mkdir(parents=True)
             save_load = self._make_smp_chunks(7)
+            raw = self._make_raw_rgb555()
             (source / "Data.mkf").write_bytes(
                 self._indexed_archive(
                     561,
-                    {479: (save_load, len(save_load), 12 + 7 * 12, 14)},
+                    {
+                        479: (save_load, len(save_load), 12 + 7 * 12, 14),
+                        560: (raw, len(raw), 4, len(raw) - 4),
+                    },
                 )
+            )
+            (source / "map.mkf").write_bytes(
+                make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
             )
             output = root / "scene"
             output.mkdir()
@@ -529,6 +536,36 @@ class PackageSceneTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update_ui_manifest(root / "source", manifest_path, editions={"Game"})
             self.assertEqual(manifest_path.read_bytes(), before_manifest)
+            self.assertFalse((output / "images/Game/ui/Data/479/0.png").exists())
+
+            existing_chunk = VisualChunk(0, 1, 1, 0, 0, struct.pack("<H", 0x03E0))
+            existing_visual = VisualResource("SMP", 1, 0, None, (existing_chunk,))
+            base = output / "images/base.png"
+            write_png(base, existing_chunk, existing_visual, pixel_format="rgb555")
+            base_record = {
+                "path": "images/base.png",
+                "sha256": hashlib.sha256(base.read_bytes()).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            invalid_manifest = {
+                "schema": "richman4.scene-images/v1",
+                "version": 1,
+                "pixel_format": "rgb555",
+                "maps": [
+                    {
+                        "world_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "image": base_record,
+                    }
+                ],
+                "characters": {},
+                "ui": {"Game": {"Data": None}},
+            }
+            manifest_path.write_text(json.dumps(invalid_manifest), encoding="utf-8")
+            before_invalid_ui = manifest_path.read_bytes()
+            with self.assertRaisesRegex(FormatError, "invalid scene UI archive"):
+                update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+            self.assertEqual(manifest_path.read_bytes(), before_invalid_ui)
             self.assertFalse((output / "images/Game/ui/Data/479/0.png").exists())
 
     def test_ui_export_is_bounded_provenanced_and_packaged(self):

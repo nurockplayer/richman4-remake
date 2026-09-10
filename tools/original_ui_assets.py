@@ -100,8 +100,8 @@ RAW_RGB555_HEIGHT = 480
 RAW_RGB555_BYTES = RAW_RGB555_WIDTH * RAW_RGB555_HEIGHT * 2
 RAW_RGB555_SIGNATURE = "RAW-RGB555"
 REQUIRED_UI_CHUNKS = {
-    ("Game", "Data", 479): (0, 1),
-    ("MultiverseJourney", "Data", 520): (0, 1),
+    ("Game", "Data", 479): tuple(range(7)),
+    ("MultiverseJourney", "Data", 520): tuple(range(11)),
 }
 
 
@@ -350,6 +350,58 @@ def _validate_existing_scene_manifest(path: Path) -> None:
     validate(path)
 
 
+def _merge_ui_archive_group(
+    edition: str,
+    archive_name: str,
+    existing: object,
+    incoming: dict,
+) -> dict:
+    """Merge resource references without mixing archive identities."""
+
+    if not isinstance(existing, dict):
+        raise FormatError(f"invalid scene UI archive: {edition}/{archive_name}")
+    existing_hash = existing.get("archive_sha256")
+    incoming_hash = incoming.get("archive_sha256")
+    if existing_hash != incoming_hash:
+        raise InputError(
+            f"UI archive SHA mismatch for {edition}/{archive_name}: "
+            f"existing {existing_hash!r}, source {incoming_hash!r}"
+        )
+
+    existing_resources = existing.get("resources", {})
+    incoming_resources = incoming.get("resources", {})
+    if not isinstance(existing_resources, dict):
+        raise FormatError(
+            f"invalid scene UI resources: {edition}/{archive_name}"
+        )
+    if not isinstance(incoming_resources, dict):
+        raise FormatError(
+            f"invalid staged UI resources: {edition}/{archive_name}"
+        )
+
+    # A valid archive group is the primary provenance boundary.  If a
+    # preserved resource also carries source metadata, reject a contradictory
+    # per-resource identity instead of carrying mixed source hashes forward.
+    for resource in existing_resources.values():
+        if not isinstance(resource, dict):
+            raise FormatError(
+                f"invalid scene UI resource: {edition}/{archive_name}"
+            )
+        source = resource.get("source")
+        if isinstance(source, dict) and source.get("archive_sha256") not in (
+            None,
+            incoming_hash,
+        ):
+            raise InputError(
+                f"UI resource archive SHA mismatch for {edition}/{archive_name}"
+            )
+
+    merged = dict(existing)
+    merged.update(incoming)
+    merged["resources"] = {**existing_resources, **incoming_resources}
+    return merged
+
+
 def update_ui_manifest(
     source: Path,
     manifest_path: Path,
@@ -359,9 +411,11 @@ def update_ui_manifest(
     """Append bounded UI assets to an existing scene manifest.
 
     Only the configured archives/entries are decoded.  Existing files are
-    preserved byte-for-byte; a path collision with different bytes is
-    rejected before the manifest is replaced.  The manifest replacement is
-    atomic and all newly copied files are removed if validation fails.
+    preserved byte-for-byte and existing resources in a touched archive are
+    retained when its archive SHA matches.  A source/archive identity mismatch
+    or a path collision with different bytes is rejected before the manifest
+    is replaced.  The manifest replacement is atomic and all newly copied
+    files are removed if validation fails.
     """
 
     source = source.expanduser().resolve()
@@ -398,7 +452,16 @@ def update_ui_manifest(
                 edition_ui = merged_ui.setdefault(edition, {})
                 if not isinstance(edition_ui, dict):
                     raise FormatError(f"invalid scene UI edition: {edition}")
-                edition_ui.update(group)
+                for archive_name, archive_group in group.items():
+                    if archive_name not in edition_ui:
+                        edition_ui[archive_name] = archive_group
+                    else:
+                        edition_ui[archive_name] = _merge_ui_archive_group(
+                            edition,
+                            archive_name,
+                            edition_ui[archive_name],
+                            archive_group,
+                        )
 
             for staged in sorted((stage / "images").rglob("*.png")):
                 relative = staged.relative_to(stage)

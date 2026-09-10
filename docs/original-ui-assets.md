@@ -54,4 +54,4 @@ python3 tools/original_ui_assets.py \
   --edition MultiverseJourney
 ```
 
-這個命令只讀取表內的 archive entries，先將 PNG 與合併後 manifest 放入 private staging，再以 package validator 驗證並 atomic replace；既有 map、character 與其他 UI 檔案保持原狀。`--edition` 可重複指定單一 edition。它需要既有 `richman4.scene-images/v1` manifest，不會建立新的 ground 或 character corpus。原始素材與衍生 PNG 仍只能留在 private ignored output，不可提交至 public Git。這些來源／打包邊界不代表畫面已通過 #99，也不代表 save/load、Loading timing 或 help 互動已驗收；source setup 的畫面比例、位置與 stage 選擇仍由 runtime 與人工畫面核對負責。
+這個命令只讀取表內的 archive entries，先將 PNG 與合併後 manifest 放入 private staging，再以 package validator 驗證並 atomic replace；既有 map、character 與其他 UI 檔案保持原狀。同一 edition/archive 的增量更新會合併 `resources`，保留未觸及的既有引用與檔案；只有 archive SHA 相同才會合併，來源不同或既有 manifest 無法驗證時會 fail closed 且不改寫 destination。`--edition` 可重複指定單一 edition。它需要既有 `richman4.scene-images/v1` manifest，不會建立新的 ground 或 character corpus。原始素材與衍生 PNG 仍只能留在 private ignored output，不可提交至 public Git。這些來源／打包邊界不代表畫面已通過 #99，也不代表 save/load、Loading timing 或 help 互動已驗收；source setup 的畫面比例、位置與 stage 選擇仍由 runtime 與人工畫面核對負責。

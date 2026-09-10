@@ -308,6 +308,8 @@ func _build_source_shell() -> void:
 	source_shell = shell
 	if shell.has_signal("start_requested"):
 		shell.start_requested.connect(_on_source_start_requested)
+		shell.new_stage_requested.connect(_on_source_new_stage_requested)
+		shell.quit_requested.connect(_on_source_quit_requested)
 		shell.load_requested.connect(_on_source_load_requested)
 		shell.save_requested.connect(_on_source_save_requested)
 		shell.option_requested.connect(_on_source_option_requested)
@@ -369,7 +371,7 @@ func _on_source_stock_closed() -> void:
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 
-func _on_source_start_requested() -> void:
+func _on_source_start_requested(stage: int = 0) -> void:
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
 		return
@@ -383,7 +385,10 @@ func _on_source_start_requested() -> void:
 	var selected := _active_map_definition.duplicate(true)
 	if selected.is_empty():
 		selected = _selected_map_definition.duplicate(true)
-	selected = _source_setup_definition(selected)
+	selected = _source_setup_entry_definition(stage, selected)
+	if selected.is_empty():
+		_show_content_error("所選版本或關卡的地圖尚未備妥，無法開始新局。")
+		return
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		player_count = PLAYER_COUNT
@@ -393,6 +398,33 @@ func _on_source_start_requested() -> void:
 	defaults["player_count"] = player_count
 	var catalog: Array = _map_catalog.duplicate(true)
 	source_shell.call("show_setup", catalog, selected, defaults)
+
+func _on_source_new_stage_requested() -> void:
+	_on_source_start_requested(1)
+
+func _on_source_quit_requested() -> void:
+	if source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
+		get_tree().quit()
+
+func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
+	var edition := str(source_shell.get("_source_edition"))
+	if edition not in ["Game", "MultiverseJourney"] or stage not in [0, 1] or (edition == "Game" and stage != 0):
+		return {}
+	var first := stage * 4 + 1
+	var candidates: Array = []
+	for value in _map_catalog:
+		if not value is Dictionary:
+			continue
+		var source: Dictionary = value.get("source", {})
+		var number := int(source.get("map_number", 0))
+		if str(source.get("edition", "")) == edition and number >= first and number < first + 4 and _map_is_startable(value):
+			if str(value.get("id", "")) == str(preferred.get("id", "")):
+				return value.duplicate(true)
+			candidates.append(value)
+	if candidates.is_empty():
+		return {}
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.source.map_number) < int(b.source.map_number))
+	return candidates[0].duplicate(true)
 
 func _source_setup_definition(identity: Dictionary) -> Dictionary:
 	# Current board geometry is a display snapshot, not an initial map. Match

@@ -10,6 +10,7 @@ const OriginalVisuals = preload("res://game/platform/original_visuals.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
 const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
+const SourceTitlePanel = preload("res://game/ui/source_title_panel.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
@@ -29,6 +30,8 @@ const SOURCE_TEXT_MONEY := Color("#10191b")
 const SOURCE_TAB_TEXT := Color("#152428")
 
 signal start_requested
+signal new_stage_requested
+signal quit_requested
 signal load_requested
 signal save_requested
 signal option_requested
@@ -107,6 +110,7 @@ var _source_panel_texture: Texture2D
 var _source_hud_texture: Texture2D
 var _source_calendar_texture: Texture2D
 var _title_art: TextureRect
+var _toolbar_art: TextureRect
 var _hud_art: TextureRect
 var _calendar_art: TextureRect
 var _last_camera_signature := ""
@@ -168,64 +172,23 @@ func _layout_reference_canvas() -> void:
 
 
 func _build_title_screen() -> void:
-	title_screen = Control.new()
+	title_screen = SourceTitlePanel.new()
 	title_screen.name = "SourceTitleScreen"
-	title_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	reference_canvas.add_child(title_screen)
-	_source_title_texture = _source_texture(_visuals.ui(_source_edition, "Data", 1, 0))
-	if _source_title_texture != null:
-		_title_art = TextureRect.new()
-		_title_art.name = "SourceTitleArt"
-		_title_art.texture = _source_title_texture
-		_title_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		_title_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		_title_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		_title_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(_title_art)
-	else:
-		var background := ColorRect.new()
-		background.color = Color("#0d2630")
-		background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(background)
-		var glow := ColorRect.new()
-		glow.color = Color("#1a5360")
-		glow.position = Vector2(80.0, 95.0)
-		glow.size = Vector2(480.0, 210.0)
-		glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(glow)
-		var title := _label("大富翁 4", 44, Color("#f5d98d"))
-		title.position = Vector2(0.0, 130.0)
-		title.size = Vector2(640.0, 56.0)
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title_screen.add_child(title)
-		var subtitle := _label("城市棋局", 18, Color("#c1e0d6"))
-		subtitle.position = Vector2(0.0, 190.0)
-		subtitle.size = Vector2(640.0, 28.0)
-		subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title_screen.add_child(subtitle)
-	var menu := Control.new()
-	menu.name = "TitleMenu"
-	menu.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if _source_title_texture != null:
-		menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	else:
-		menu.position = Vector2(248.0, 300.0)
-		menu.size = Vector2(144.0, 132.0)
-	title_screen.add_child(menu)
-	title_start_button = _title_button("START", "開始新局")
-	_configure_title_hit_area(title_start_button, "start", Rect2(129.0, 322.0, 118.0, 112.0))
-	title_start_button.pressed.connect(func() -> void: start_requested.emit())
-	menu.add_child(title_start_button)
-	title_load_button = _title_button("LOAD", "讀取存檔")
-	_configure_title_hit_area(title_load_button, "load", Rect2(269.0, 322.0, 118.0, 112.0))
-	title_load_button.pressed.connect(func() -> void: load_requested.emit())
-	menu.add_child(title_load_button)
-	title_option_button = _title_button("OPTION", "選項")
-	_configure_title_hit_area(title_option_button, "option", Rect2(408.0, 322.0, 118.0, 112.0))
-	title_option_button.disabled = true
-	title_option_button.pressed.connect(func() -> void: option_requested.emit())
-	menu.add_child(title_option_button)
+	title_screen.configure(_source_edition, _visuals)
+	title_start_button = title_screen.buttons.start
+	title_load_button = title_screen.buttons.load
+	title_option_button = title_screen.buttons.option
+	_title_art = title_screen.background_art
+	_source_title_texture = _title_art.texture
+	title_screen.start_requested.connect(func(stage: int) -> void:
+		if stage == 1:
+			new_stage_requested.emit()
+		else:
+			start_requested.emit())
+	title_screen.load_requested.connect(func() -> void: load_requested.emit())
+	title_screen.option_requested.connect(func() -> void: option_requested.emit())
+	title_screen.quit_requested.connect(func() -> void: quit_requested.emit())
 
 
 func _build_game_screen() -> void:
@@ -251,15 +214,13 @@ func _build_toolbar() -> void:
 	toolbar.position = Vector2.ZERO
 	toolbar.size = Vector2(TOOLBAR_WIDTH, 40.0)
 	game_screen.add_child(toolbar)
-	_source_panel_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 1, 0))
-	if _source_panel_texture != null:
-		var panel_art := TextureRect.new()
-		panel_art.texture = _source_panel_texture
-		panel_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		panel_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-		panel_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		panel_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		toolbar.add_child(panel_art)
+	_toolbar_art = TextureRect.new()
+	_toolbar_art.name = "SourceToolbarArt"
+	_toolbar_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_toolbar_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	_toolbar_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_toolbar_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toolbar.add_child(_toolbar_art)
 	var entries := [
 		["help", "說", 1], ["options", "系", 2], ["ai", "託", 3],
 		["load", "載", 4], ["save", "存", 5], ["map", "圖", 6],
@@ -273,6 +234,7 @@ func _build_toolbar() -> void:
 		button.position = Vector2(float(index) * 40.0, 0.0)
 		button.size = Vector2(40.0, 40.0)
 		button.set_meta("source_chunk", int(entry[2]))
+		button.set_meta("fallback_text", str(entry[1]))
 		var icon := _source_texture(_visuals.ui(_source_edition, "Panel", 1, int(entry[2])))
 		if icon != null:
 			button.icon = icon
@@ -281,6 +243,7 @@ func _build_toolbar() -> void:
 		button.pressed.connect(_emit_toolbar.bind(key))
 		toolbar.add_child(button)
 		toolbar_buttons[key] = button
+	_refresh_toolbar_art()
 
 
 func _build_board_host() -> void:
@@ -642,12 +605,38 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 	snapshot = next_snapshot.duplicate(true)
 	map_definition = next_definition.duplicate(true)
 	_player_wealth = player_wealth
+	_sync_source_edition()
 	_render_hud()
 	_render_calendar()
 	if minimap != null and minimap.has_method("set_snapshot"):
 		minimap.call("set_snapshot", snapshot, map_definition)
 	if full_map_view != null and full_map_view.has_method("set_snapshot"):
 		full_map_view.call("set_snapshot", snapshot, map_definition)
+
+
+func _sync_source_edition() -> void:
+	var source: Variant = snapshot.get("map_source", map_definition.get("source", {}))
+	if not source is Dictionary:
+		return
+	var edition := str(source.get("edition", ""))
+	if edition not in ["Game", "MultiverseJourney"] or edition == _source_edition:
+		return
+	_source_edition = edition
+	title_screen.configure(_source_edition, _visuals)
+	_source_title_texture = _title_art.texture
+	_refresh_toolbar_art()
+
+
+func _refresh_toolbar_art() -> void:
+	_source_panel_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 1, 0))
+	if _toolbar_art != null:
+		_toolbar_art.texture = _source_panel_texture
+		_toolbar_art.visible = _source_panel_texture != null
+	for button: Button in toolbar_buttons.values():
+		var icon := _source_texture(_visuals.ui(_source_edition, "Panel", 1, int(button.get_meta("source_chunk", 0))))
+		button.icon = icon
+		button.text = "" if icon != null else str(button.get_meta("fallback_text", ""))
+		button.set_meta("source_icon", icon)
 
 
 func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String, buy_disabled: bool, upgrade_text: String, upgrade_disabled: bool, end_disabled: bool, hint: String, routes: Array = [], phase: String = "", action_options: Array = []) -> void:
@@ -796,8 +785,6 @@ func set_toolbar_enabled(key: String, enabled: bool) -> void:
 		(toolbar_buttons[key] as Button).disabled = not enabled
 	if key == "load" and title_load_button != null:
 		title_load_button.disabled = not enabled
-	if key == "options" and title_option_button != null:
-		title_option_button.disabled = not enabled
 
 
 func _render_hud() -> void:
@@ -1055,42 +1042,6 @@ func _hud_label(text: String, font_size: int, position: Vector2, label_size: Vec
 	result.clip_text = true
 	hud_panel.add_child(result)
 	return result
-
-
-func _title_button(text: String, tooltip: String) -> Button:
-	var result := Button.new()
-	result.text = text
-	result.tooltip_text = tooltip
-	result.custom_minimum_size = Vector2(144.0, 38.0)
-	result.add_theme_font_size_override("font_size", 16)
-	result.add_theme_color_override("font_color", Color("#fff2bd"))
-	result.add_theme_stylebox_override("normal", _style(Color(0.06, 0.16, 0.2, 0.82), Color("#d8b45f"), 5, 1))
-	result.add_theme_stylebox_override("hover", _style(Color(0.17, 0.34, 0.37, 0.92), Color("#fff0a5"), 5, 2))
-	return result
-
-
-func _configure_title_hit_area(button: Button, key: String, rect: Rect2) -> void:
-	button.set_meta("source_key", key)
-	if _source_title_texture == null:
-		var index := ["start", "load", "option"].find(key)
-		button.position = Vector2(0.0, float(maxi(0, index)) * 46.0)
-		button.size = Vector2(144.0, 38.0)
-		return
-	button.position = rect.position
-	button.size = rect.size
-	button.text = ""
-	button.flat = true
-	button.focus_mode = Control.FOCUS_ALL
-	button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	var hover_chunk: int = int({"start": 2, "load": 4, "option": 6}.get(key, -1))
-	if hover_chunk >= 0:
-		var hover_texture := _source_texture(_visuals.ui(_source_edition, "Data", 1, hover_chunk))
-		if hover_texture != null:
-			button.mouse_entered.connect(func() -> void: button.icon = hover_texture)
-			button.mouse_exited.connect(func() -> void: button.icon = null)
 
 
 func _toolbar_button(text: String, key: String) -> Button:

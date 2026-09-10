@@ -72,6 +72,18 @@ Controller 保留同一個 game ownership，關閉 callback 受 generation 保�
   共 726712 bytes；與 live GitHub pinned revision `bb6d12b` 的 manifest digest 與
   每檔 digest 一致。僅重新產生並複製小型 help bundle，沒有完整素材匯入。
 
-完整 affected/integration regression 與新的獨立 exact-head review 尚待完成。
+- 完整 `tools/check.sh` 在 `3ca8e72` 通過：212 次 Godot invocation、128 個 Python
+  tests，沒有 Godot errors。測試採用獨立 user-data 目錄，暫時 override 隨後移除。
+  第一次整合執行遇到既有 HUD 測試仍要求說明按鈕停用；`3ca8e72` 僅將這項已過時
+  的 pending expectation 改成已實作入口的 enabled／visible 驗證，保留其他 pending
+  控制項檢查，再完整執行通過。
+- 本分支納入 #138 的 `e750b46` 月結修正。該基底保留金額範圍與焦點生命週期回歸，
+  但 **native focus acceptance 為 HOLD**：先前一次 11／2 失敗尚未取得根因證據。
+  後續帶事件紀錄的單次 11／0 不能清除這個 HOLD；說明視窗的驗證不代替月結驗收。
+- 合併後追加 affected checks：monthly money 33／0、focus headless 11／0、help
+  controller 12／0，以及實際 catalog／help／圖像的原生入口 26／0。說明本身的
+  game／tests／tools 檔案與完整測試、六張擷取時相同；只有基底月結檔案增加。
+
+新的獨立 exact-head review 尚待完成。
 SubViewport 輸入與畫面證據不等於一般 OS 操作；原版執行中的完整 help 畫面對照、
 目前套件與 S35 所有子視窗仍待驗收。本文件不宣稱 S35 或 Mission 完成。

@@ -203,6 +203,39 @@ func _write_json(path: String, payload: Dictionary) -> void:
 	file.close()
 
 
+func _read_file_text(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var text: String = file.get_as_text()
+	file.close()
+	return text
+
+
+func _test_disk_cancellation(ui: Control) -> void:
+	# Use an isolated user:// fixture; the owner save path is left to the native
+	# wrapper and is never opened by this headless acceptance test.
+	var path := "user://issue100-legacy-cancel.json"
+	var had_original := FileAccess.file_exists(path)
+	var original_text := _read_file_text(path) if had_original else ""
+	var disk_payload := _legacy_snapshot(1)
+	_write_json(path, disk_payload)
+	var before_disk := _read_file_text(path)
+	var current := _set_human_game(ui, 61130)
+	var before_state: String = current.to_json()
+	ui._load_game_from_path(path)
+	_expect(ui.legacy_save_dialog.visible, "isolated legacy disk load opens a choice modal")
+	ui._cancel_legacy_save_load()
+	_expect(_read_file_text(path) == before_disk, "cancelling legacy disk load leaves the save bytes unchanged")
+	_expect(current.to_json() == before_state, "cancelling legacy disk load leaves the current game unchanged")
+	if had_original:
+		var restore := FileAccess.open(path, FileAccess.WRITE)
+		restore.store_string(original_text)
+		restore.close()
+	else:
+		DirAccess.remove_absolute(path)
+
+
 func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	ui._set_development_path(false)
 	ui._load_map_catalog("user://issue100-catalog-missing.json")
@@ -240,6 +273,7 @@ func _run() -> void:
 	_test_legacy_continue_and_labels(ui)
 	_test_modal_guards(ui)
 	_test_modal_cancellation(ui)
+	_test_disk_cancellation(ui)
 	_test_catalog_gate_and_complete_market(ui)
 	ui.queue_free()
 	await create_timer(0.15).timeout

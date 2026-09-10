@@ -41,7 +41,7 @@ const PROPERTY_CARD_SAVE_VERSION := 10
 const REMODEL_SAVE_VERSION := 11
 const RESEARCH_SAVE_VERSION := 12
 const BUILDING_CARD_SAVE_VERSION := 13
-const LEGACY_MARKET_SAVE_MIN_VERSION := 4
+const LEGACY_MARKET_SAVE_MIN_VERSION := 1
 const LEGACY_MARKET_SAVE_MAX_VERSION := 6
 const LEGACY_STOCK_SYMBOLS := ["tech", "transport", "energy"]
 const RESEARCH_TOOLS := ["機器工人", "時光機", "傳送機", "工程車", "核子飛彈"]
@@ -201,9 +201,16 @@ func _ready() -> void:
 		_enter_unavailable_content_state()
 
 func _process(_delta: float) -> void:
+	if _legacy_save_modal_open():
+		return
 	_maybe_schedule_ai_turn()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _legacy_save_modal_open():
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+			_cancel_legacy_save_load()
+		get_viewport().set_input_as_handled()
+		return
 	if _presentation_busy:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
@@ -1697,11 +1704,14 @@ func _save_game() -> void:
 	_refresh_log_only()
 
 func _load_game() -> void:
-	if not FileAccess.file_exists(SAVE_PATH):
+	_load_game_from_path(SAVE_PATH)
+
+func _load_game_from_path(path: String) -> void:
+	if not FileAccess.file_exists(path):
 		_append_local_log("找不到存檔；先建立一局再儲存即可。")
 		_refresh_log_only()
 		return
-	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		_append_local_log("讀取失敗：無法開啟本機存檔。")
 		_refresh_log_only()
@@ -1756,9 +1766,16 @@ func _show_content_error(message: String) -> void:
 func _show_legacy_save_dialog(snapshot: Dictionary) -> void:
 	if legacy_save_dialog == null:
 		return
+	# Loading a legacy snapshot is a pending decision. Invalidate any queued
+	# movement/AI callback before exposing the modal so the current game cannot
+	# advance while the player chooses a compatibility path.
+	_cancel_presentation()
 	var version := int(snapshot.get("version", 0))
 	legacy_save_dialog.dialog_text = "這份存檔是 v%d 舊版開發對局，使用三股市資料，不能假設具備原版十二股市能力。\n\n繼續會原樣載入並顯示舊版三股市模式；取消或關閉會保留目前棋局、隨機狀態與磁碟存檔。要繼續嗎？" % version
 	legacy_save_dialog.popup_centered(Vector2i(720, 300))
+
+func _legacy_save_modal_open() -> bool:
+	return not _pending_legacy_load_snapshot.is_empty() and legacy_save_dialog != null and legacy_save_dialog.visible
 
 func _confirm_legacy_save_load() -> void:
 	if _pending_legacy_load_snapshot.is_empty() or _pending_legacy_load_state == null:
@@ -1767,6 +1784,7 @@ func _confirm_legacy_save_load() -> void:
 	var restored := _pending_legacy_load_state
 	_pending_legacy_load_snapshot = {}
 	_pending_legacy_load_state = null
+	legacy_save_dialog.hide()
 	_apply_loaded_game(restored, snapshot, true)
 
 func _cancel_legacy_save_load() -> void:
@@ -1774,6 +1792,9 @@ func _cancel_legacy_save_load() -> void:
 		return
 	_pending_legacy_load_snapshot = {}
 	_pending_legacy_load_state = null
+	_cancel_presentation()
+	if legacy_save_dialog != null:
+		legacy_save_dialog.hide()
 	_append_local_log("已取消讀取舊版存檔；目前棋局保持不變。")
 	_refresh_log_only()
 
@@ -2112,9 +2133,11 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _legacy_save_modal_open():
+		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
@@ -2134,7 +2157,7 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	return {"ok": false, "message": "模擬核心未載入；目前無法執行此操作。"}
 
 func _handle_result(result: Dictionary) -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if result.has("_presentation_generation"):
 		if int(result._presentation_generation) != _presentation_generation or result.get("_presentation_owner") != game_state:
@@ -2181,7 +2204,7 @@ func _on_movement_finished() -> void:
 		_refresh_from_state(result)
 
 func _refresh_from_state(result: Dictionary = {}) -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	var snapshot := _read_snapshot()
 	if result.has("snapshot") and result["snapshot"] is Dictionary:
@@ -2635,7 +2658,7 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
-	if _presentation_busy:
+	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
@@ -2662,6 +2685,9 @@ func _maybe_schedule_ai_turn() -> void:
 	timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
 
 func _on_ai_timer_timeout(generation := -1) -> void:
+	if _legacy_save_modal_open():
+		_ai_pending = false
+		return
 	if generation >= 0 and generation != _presentation_generation:
 		return
 	_ai_pending = false

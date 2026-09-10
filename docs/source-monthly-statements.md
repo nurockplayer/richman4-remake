@@ -42,8 +42,16 @@ event-log overlap 檢查，並防止同一 action 重複交付。一般 refresh�
 - 最終分紅覆蓋順序 immutable `be158b7`：有效四人虧損 fixture，在實際 MainUI 搭配報表 test double
   重現 7／1，修正後 headless／native 7／0。Controller 的獨立佇列測試 headless／native 19／0。
 - 本批已跑既有公司金融 36、貸款 132、日期設定流程 213、公司存檔 200、movement extraction 36，
-  以及銀行 MainUI 25、title UI 31、save menu UI 48，均通過。報表實際 renderer、完整 MainUI
-  與 actual-catalog 測試仍須於完成接線後更新這裡，不能套用 test-double 的結果。
+  以及銀行 MainUI 25、title UI 31、save menu UI 48，均通過。
+- 實際 renderer 接線後，MainUI headless／native 16／0。首次整合執行發現 presenter 尚未加入
+  場景就啟動 timer；獨立 `source_monthly_lifecycle.gd` 保留 `9028911` 原始案例，
+  `9a91c85` 補足啟動 frame／計時裕量後仍為 5／2。`0659bc4` 先掛入場景再設定模型，
+  同一案例 headless／native 5／0，MainUI 16／0 且沒有 timer error。
+- Panel25／76 的新 synthetic importer suite 為 4／0。兩版實際資源已在既有 bounded UI cache
+  匯入 83／1 chunks；原有資源及所有非 UI manifest 欄位逐項保持相同。未更新 FULL lane。
+- 實際原生畫面已揭露 fallback 遮住利息背景、JSON logical metadata 被誤拒而使角色偏移，
+  以及分紅黑底／公司標題位置問題；目前仍在修正。舊資產 fixture 也須補入新 required resources。
+  Actual-catalog 日曆測試與修正後的原版逐幕比對尚未完成，不宣稱呈現通過。
 
 原生 SubViewport 不等於普通 OS 輸入；逐幕原版對照、獨立審查與目前套件 gate 均另行驗收。
 本文件不宣稱 S17／S18 或 Mission 完成。

@@ -8,6 +8,7 @@ class_name RichmanStockChart
 
 const PLAYER_PIE_COLOR := Color("#ea1d2b")
 const OTHER_PIE_COLOR := Color("#151bd2")
+const SOURCE_PLOT := Rect2(13.0, 65.0, 344.0, 145.0)
 
 var history: Array = []
 var current_holdings := 0
@@ -84,7 +85,7 @@ func _build_points(values: Array) -> Array:
 	var points: Array = []
 	if values.is_empty():
 		return points
-	var plot := Rect2(13.0, 15.0, 344.0, 145.0)
+	var plot := SOURCE_PLOT
 	var low := float(values[0])
 	var high := float(values[0])
 	for value in values:
@@ -103,7 +104,7 @@ func _build_points(values: Array) -> Array:
 
 
 func _draw() -> void:
-	var plot := Rect2(13.0, 15.0, 344.0, 145.0)
+	var plot := SOURCE_PLOT
 	if line_points.size() == 1:
 		draw_circle(line_points[0], 2.5, Color("#fff7d0"))
 	elif line_points.size() > 1:

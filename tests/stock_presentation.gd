@@ -104,6 +104,13 @@ func run() -> void:
 	expect(panel.current_screen() == "detail", "selecting the same row opens company detail")
 	expect(panel.find_child("StockDetailChart", true, false) != null, "detail owns a real history chart")
 	expect(panel.find_child("DetailCompanyName", true, false).text == "股票 1", "detail company title comes from source row")
+	var detail_left0: Label = panel.find_child("DetailLeft0", true, false)
+	var detail_right_left0: Label = panel.find_child("DetailRightLeft0", true, false)
+	var detail_right_right0: Label = panel.find_child("DetailRightRight0", true, false)
+	var detail_history0: Label = panel.find_child("DetailHistory0", true, false)
+	expect(detail_left0 != null and not detail_left0.text.contains("\n") and detail_left0.text.begins_with("本月盈餘 "), "detail left earnings stay on one source row")
+	expect(detail_right_left0 != null and detail_right_right0 != null and not detail_right_left0.text.contains("\n") and not detail_right_right0.text.contains("\n"), "detail upper metrics use paired columns")
+	expect(detail_history0 != null and detail_history0.position.y < panel.find_child("StockDetailChart", true, false).position.y + 65.0, "detail high/low metrics stay above the chart")
 	var company_button: Button = panel.find_child("StockCompanyInfo", true, false)
 	company_button.pressed.emit()
 	expect(panel.current_screen() == "overview", "company info button returns from detail to overview")
@@ -134,6 +141,12 @@ func run() -> void:
 	expect(pad != null and pad.visible, "buy opens source quantity pad")
 	if pad != null:
 		var input: LineEdit = pad.find_child("QuantityInput", true, false)
+		var digit_one: Button = pad.find_child("QuantityDigit1", true, false)
+		pad.find_child("QuantityClear", true, false).pressed.emit()
+		if digit_one != null:
+			digit_one.pressed.emit()
+		expect(input.text == "1" and pad.find_child("QuantityAmount", true, false).text == "金額 12", "source keypad entry refreshes raw text and amount")
+		pad.find_child("QuantityClear", true, false).pressed.emit()
 		input.text = "2"
 		pad.find_child("QuantitySubmit", true, false).pressed.emit()
 		expect(requested.size() == 1 and requested[0] == ["buy_stock", "s01", 2], "valid raw quantity emits trade request")
@@ -165,6 +178,10 @@ func run() -> void:
 	panel.clear_selection()
 	panel.select_symbol("s01")
 	expect(panel.trade_limit("buy_stock").error == "本日休市", "closed market is a visible domain gate")
+	var closed_overlay: Label = panel.find_child("MarketClosedOverlay", true, false)
+	var exit_button: Button = panel.find_child("StockExit", true, false)
+	expect(panel.market_closed_overlay_visible() and closed_overlay != null and closed_overlay.text == "本日休市", "closed market renders the source closure overlay")
+	expect(exit_button != null and exit_button.visible and not exit_button.disabled, "closed market keeps EXIT available")
 	game.state.market.closed_days = 0
 	game.state.market.open = true
 	game.state.market.rows.s01.suspension = 2

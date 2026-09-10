@@ -28,6 +28,10 @@ const TEXT_MUTED := Color("#bfd0bc")
 const SOURCE_CYAN := Color("#52e6d1")
 const LIMIT_RED := Color("#c81722", 0.62)
 const LIMIT_GREEN := Color("#0aa92e", 0.62)
+const DETAIL_STAT_X := [132.0, 309.0, 446.0]
+const DETAIL_STAT_Y := [98.0, 130.0, 162.0]
+const DETAIL_HISTORY_X := 399.0
+const DETAIL_HISTORY_Y := [216.0, 248.0]
 
 var snapshot: Dictionary = {}
 var map_definition: Dictionary = {}
@@ -41,6 +45,7 @@ var _table_root: Control
 var _detail_root: Control
 var _detail_texture: TextureRect
 var _status_label: Label
+var _closed_overlay: Label
 var _quantity_pad
 var _detail_chart
 var _symbols: Array = []
@@ -88,6 +93,21 @@ func _init() -> void:
 	_detail_root.visible = false
 	add_child(_detail_root)
 	_build_detail_shell()
+
+	_closed_overlay = Label.new()
+	_closed_overlay.name = "MarketClosedOverlay"
+	_closed_overlay.position = Vector2(0.0, 151.0)
+	_closed_overlay.size = Vector2(640.0, 98.0)
+	_closed_overlay.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_closed_overlay.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_closed_overlay.text = "本日休市"
+	_closed_overlay.add_theme_font_size_override("font_size", 46)
+	_closed_overlay.add_theme_color_override("font_color", Color("#f9f9f2"))
+	_closed_overlay.add_theme_constant_override("outline_size", 4)
+	_closed_overlay.add_theme_color_override("font_outline_color", Color("#152018", 0.92))
+	_closed_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_closed_overlay.visible = false
+	add_child(_closed_overlay)
 
 	_status_label = Label.new()
 	_status_label.name = "StockStatus"
@@ -389,6 +409,7 @@ func _refresh() -> void:
 		_refresh_holdings()
 	else:
 		_refresh_overview()
+	_refresh_closed_overlay()
 	_refresh_action_buttons()
 
 
@@ -630,24 +651,39 @@ func _refresh_detail() -> void:
 		["經營者", owner],
 	]
 	for index in range(left_fields.size()):
-		_detail_root.add_child(_detail_label("DetailLeft%d" % index, "%s\n%s" % [left_fields[index][0], left_fields[index][1]], Vector2(132, 103 + index * 36), Vector2(145, 34), TEXT_LIGHT, 11))
-	var right_fields := [
-		["成交價", format_price(price)],
-		["交易量", str(int(row.get("turn_supply", -1))) if row.has("turn_supply") else "—"],
-		["漲跌", format_change(difference, previous)],
-		["漲跌幅", "—" if not is_finite(percent) else "%+.2f%%" % percent],
-		["週均價", _stat_text(stats.get("weekly_mean", null))],
-		["月均價", _stat_text(stats.get("monthly_mean", null))],
+		_detail_root.add_child(_detail_label("DetailLeft%d" % index, "%s %s" % [left_fields[index][0], left_fields[index][1]], Vector2(DETAIL_STAT_X[0], DETAIL_STAT_Y[index]), Vector2(158, 25), TEXT_LIGHT, 11))
+	var upper_fields := [
+		["成交價", format_price(price), "交易量", str(int(row.get("turn_supply", -1))) if row.has("turn_supply") else "—"],
+		["漲跌", format_change(difference, previous), "漲跌幅", "—" if not is_finite(percent) else "%+.2f%%" % percent],
+		["週均價", _stat_text(stats.get("weekly_mean", null)), "月均價", _stat_text(stats.get("monthly_mean", null))],
+	]
+	for index in range(upper_fields.size()):
+		var fields: Array = upper_fields[index]
+		_detail_root.add_child(_detail_label("DetailRightLeft%d" % index, "%s %s" % [fields[0], fields[1]], Vector2(DETAIL_STAT_X[1], DETAIL_STAT_Y[index]), Vector2(126, 25), TEXT_LIGHT, 10))
+		_detail_root.add_child(_detail_label("DetailRightRight%d" % index, "%s %s" % [fields[2], fields[3]], Vector2(DETAIL_STAT_X[2], DETAIL_STAT_Y[index]), Vector2(142, 25), TEXT_LIGHT, 10))
+	var history_fields := [
 		["歷史高價", _stat_text(stats.get("historical_high", null))],
 		["歷史低價", _stat_text(stats.get("historical_low", null))],
 	]
-	for index in range(right_fields.size()):
-		_detail_root.add_child(_detail_label("DetailRight%d" % index, "%s\n%s" % [right_fields[index][0], right_fields[index][1]], Vector2(399, 99 + index * 29), Vector2(150, 28), TEXT_LIGHT, 10))
+	for index in range(history_fields.size()):
+		_detail_root.add_child(_detail_label("DetailHistory%d" % index, "%s %s" % [history_fields[index][0], history_fields[index][1]], Vector2(DETAIL_HISTORY_X, DETAIL_HISTORY_Y[index]), Vector2(178, 25), TEXT_LIGHT, 10))
 	var pie_title := _detail_label("DetailPieTitle", "持股比例", Vector2(440, 407), Vector2(130, 18), TEXT_LIGHT, 10)
 	pie_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_detail_root.add_child(pie_title)
 	if int(row.get("suspension", 0)) > 0:
 		_status_label.text = "暫停交易 %d 天" % int(row.get("suspension", 0))
+
+
+func _refresh_closed_overlay() -> void:
+	if _closed_overlay == null:
+		return
+	var market: Variant = snapshot.get("market", {})
+	var closed: bool = market is Dictionary and ((market.has("open") and not bool(market.get("open", false))) or int(market.get("closed_days", 0)) > 0)
+	_closed_overlay.visible = closed and _screen_mode != "detail"
+
+
+func market_closed_overlay_visible() -> bool:
+	return _closed_overlay != null and _closed_overlay.visible
 
 
 func _clear_detail_labels() -> void:

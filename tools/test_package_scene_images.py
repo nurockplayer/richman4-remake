@@ -1,6 +1,7 @@
 """Private packaging must not copy unrelated files or corrupt scene images."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -367,6 +368,120 @@ class PackageSceneTests(unittest.TestCase):
                 )
             self.assertEqual(manifest_path.read_bytes(), before_missing)
             self.assertEqual(preserved_temp.read_bytes(), b"leave this unrelated file alone")
+
+    def test_ui_manifest_rolls_back_partial_copy_and_retries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "Game"
+            source.mkdir(parents=True)
+            raw = self._make_raw_rgb555()
+            save_load = self._make_smp_chunks(7)
+            (source / "map.mkf").write_bytes(
+                make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
+            )
+            archive = self._indexed_archive(
+                561,
+                {
+                    479: (save_load, len(save_load), 12 + 7 * 12, 14),
+                    560: (raw, len(raw), 4, len(raw) - 4),
+                },
+            )
+            (source / "Data.mkf").write_bytes(archive)
+
+            output = root / "scene"
+            output.mkdir()
+            existing = output / "images/Game/ui/Data/999/0.png"
+            chunk = VisualChunk(0, 1, 1, 0, 0, struct.pack("<H", 0x03E0))
+            visual = VisualResource("SMP", 1, 0, None, (chunk,))
+            write_png(existing, chunk, visual, pixel_format="rgb555")
+            existing_bytes = existing.read_bytes()
+            existing_record = {
+                "path": "images/Game/ui/Data/999/0.png",
+                "sha256": hashlib.sha256(existing_bytes).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            base = output / "images/base.png"
+            write_png(base, chunk, visual, pixel_format="rgb555")
+            base_bytes = base.read_bytes()
+            base_record = {
+                "path": "images/base.png",
+                "sha256": hashlib.sha256(base_bytes).hexdigest(),
+                "width": 1,
+                "height": 1,
+            }
+            manifest = {
+                "schema": "richman4.scene-images/v1",
+                "version": 1,
+                "pixel_format": "rgb555",
+                "maps": [
+                    {
+                        "world_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "image": base_record,
+                    }
+                ],
+                "characters": {},
+                "ui": {
+                    "Game": {
+                        "Data": {
+                            "archive": "Data.mkf",
+                            "archive_sha256": hashlib.sha256(archive).hexdigest(),
+                            "resources": {"999": {"chunks": {"0": existing_record}}},
+                        }
+                    }
+                },
+            }
+            manifest_path = output / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            before_manifest = manifest_path.read_bytes()
+
+            def png_snapshot():
+                return {
+                    path.relative_to(output): path.read_bytes()
+                    for path in output.rglob("*.png")
+                }
+
+            before_pngs = png_snapshot()
+            copy_state = {}
+
+            def partial_copy(staged, target):
+                target = Path(target)
+                target.write_bytes(b"12345678")
+                copy_state["staged"] = Path(staged)
+                copy_state["target"] = target
+                copy_state["bytes"] = target.read_bytes()
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            with patch(
+                "original_ui_assets.shutil.copyfile", side_effect=partial_copy
+            ):
+                with self.assertRaisesRegex(OSError, "No space left on device"):
+                    update_ui_manifest(
+                        root / "source", manifest_path, editions={"Game"}
+                    )
+
+            self.assertEqual(copy_state["bytes"], b"12345678")
+            failed_manifest = manifest_path.read_bytes()
+            failed_pngs = png_snapshot()
+
+            retry_error = None
+            updated = None
+            try:
+                updated = update_ui_manifest(
+                    root / "source", manifest_path, editions={"Game"}
+                )
+            except Exception as error:
+                retry_error = error
+            final_pngs = png_snapshot()
+
+            self.assertEqual(failed_manifest, before_manifest)
+            self.assertEqual(failed_pngs, before_pngs)
+            self.assertIsNone(retry_error, f"normal retry failed: {retry_error!r}")
+            self.assertIsNotNone(updated)
+            self.assertIn("999", updated["ui"]["Game"]["Data"]["resources"])
+            self.assertEqual(existing.read_bytes(), existing_bytes)
+            self.assertEqual(base.read_bytes(), base_bytes)
+            self.assertIn(Path("images/Game/ui/Data/1/0.png"), final_pngs)
 
     def test_ui_manifest_merges_resources_with_matching_archive_identity(self):
         with tempfile.TemporaryDirectory() as temp:

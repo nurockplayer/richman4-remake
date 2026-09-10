@@ -87,6 +87,7 @@ const SetupControls = preload("res://game/core/setup_controls.gd")
 const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
+const SourceLoans = preload("res://game/core/source_loans.gd")
 const IMPLEMENTED_CARD_IDS = ["均富", "均貧", "購地", "停留", "轉向", "拆除", "烏龜", "紅", "黑", "漲價", "查封", "搶奪", "免費", "查稅", "拍賣"]
 const BUILDING_CARD_IDS = ["天使", "惡魔", "怪獸"]
 const GOD_CARD_IDS = ["送神符", "請神符"]
@@ -2363,6 +2364,8 @@ func _set_action_options(player_id: int) -> void:
 		state["bank_landing"] = bank_open
 		if bank_open and not _loan_block_active(player):
 			options.push_front("take_loan")
+		if bank_open and _is_companies() and int(player.get("loan", 0)) > 0:
+			options.push_front("repay_loan")
 	if bool(state.get("bank_access", false)) and bank_open:
 		if bank_transfer_limit("deposit", player_id) > 0:
 			options.push_front("deposit")
@@ -5221,7 +5224,9 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		var building_pending_remote: Variant = state.get("pending_remote_dice", {})
 		if typeof(building_pending_remote) == TYPE_DICTIONARY and not building_pending_remote.is_empty():
 			return _error("遙控骰子已經排程")
-	if _is_sunday() and ["deposit", "withdraw", "take_loan", "buy_vehicle"].has(normalized):
+	if _is_companies() and normalized in ["take_loan", "repay_loan"] and not _valid_int(params.get("amount", null), 1, MAX_GRAPH_POINTS):
+		return _error("貸款或還款金額必須是正整數")
+	if _is_sunday() and ["deposit", "withdraw", "take_loan", "repay_loan", "buy_vehicle"].has(normalized):
 		return _error("週日銀行休息")
 	var action_options_before: Array = state.get("action_options", []).duplicate(true)
 	_set_action_options(player_id)
@@ -5246,7 +5251,12 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 			return _deposit(player_id, int(params.get("amount", 0)))
 		"withdraw":
 			return _withdraw(player_id, int(params.get("amount", 0)))
-		"take_loan":
+		"take_loan", "repay_loan":
+			if _is_companies():
+				var loan_result: Dictionary = _source_loan_action(player_id, normalized, int(params.get("amount", 0)))
+				if not bool(loan_result.get("ok", false)):
+					state["action_options"] = action_options_before
+				return loan_result
 			return _take_loan(player_id, int(params.get("amount", 0)))
 		"buy_vehicle":
 			return _buy_vehicle(player_id, str(params.get("vehicle", "")))
@@ -5736,6 +5746,34 @@ func _withdraw_internal(player_id: int, amount: int) -> void:
 	bank["deposits"] = max(0, int(bank.get("deposits", 0)) - actual)
 	state["bank"] = bank
 	_bank_subtract_cash(actual)
+
+
+func bank_loan_limit(action: String, player_id: int = -1) -> int:
+	if not _is_companies():
+		return 0
+	var resolved_id: int = player_id if player_id >= 0 else int(state.get("current_player", -1))
+	var player: Dictionary = _player(resolved_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return 0
+	return SourceLoans.limit(action.to_lower().strip_edges(), player, state.get("bank", {}), _player_wealth(resolved_id))
+
+
+func _source_loan_action(player_id: int, action: String, amount: int) -> Dictionary:
+	var player: Dictionary = _player(player_id)
+	if not bool(state.get("bank_landing", false)):
+		return _error("只有落在銀行時才能申請或償還貸款")
+	if action == "take_loan" and _loan_block_active(player):
+		return _error("新聞效果期間暫停申請貸款")
+	if amount <= 0 or amount > bank_loan_limit(action, player_id):
+		return _error("貸款或還款金額超出可用上限")
+	if action == "take_loan":
+		SourceLoans.take(player, state.bank, amount, int(state.day), int(state.weekday))
+		_record_event("loan_taken", {"player_id": player_id, "amount": amount, "due_day": int(player.loan_due_day)})
+	else:
+		SourceLoans.repay(player, state.bank, amount)
+		_record_event("loan_repaid", {"player_id": player_id, "amount": amount})
+	_set_action_options(player_id)
+	return _result(true, "貸款已存入帳戶" if action == "take_loan" else "已償還貸款")
 
 
 func _take_loan(player_id: int, amount: int) -> Dictionary:
@@ -6488,6 +6526,17 @@ func _repay_due_loan(player_id: int) -> void:
 	if loan <= 0 or int(state.get("day", 1)) < int(player.get("loan_due_day", 0)):
 		return
 	var available: int = int(player.get("cash", 0)) + int(player.get("deposit", 0))
+	if _is_companies():
+		var payment: int = bank_loan_limit("repay_loan", player_id)
+		if payment > 0:
+			SourceLoans.repay(player, state.bank, payment)
+		if available < loan:
+			_declare_bankruptcy(player_id, -1, int(player.loan), "loan_due")
+		elif int(player.loan) == 0:
+			_record_event("loan_repaid", {"player_id": player_id, "amount": loan})
+		# A saturated bank cash ledger can defer the remaining cash payment;
+		# do not overflow a valid save or bankrupt a solvent player.
+		return
 	if available < loan:
 		var deposit_payment: int = int(player.get("deposit", 0))
 		if deposit_payment > 0:
@@ -8421,7 +8470,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if research_save:
 		known_actions.append("choose_research")
 	if companies_save:
-		known_actions.append_array(["buy_company", "company_upgrade"])
+		known_actions.append_array(["buy_company", "company_upgrade", "repay_loan"])
 	if inventory_save:
 		known_actions.append_array(["buy_item", "sell_item", "use_tool"])
 	if typeof(action_options) != TYPE_ARRAY:

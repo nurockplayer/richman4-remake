@@ -592,7 +592,7 @@ func _draw_footer_labels() -> void:
 		["SourceHotkeysAcceptLabel", "確 定", Vector2(278.0, 296.0)],
 	]
 	for entry in entries:
-		var label := _make_label(str(entry[0]), str(entry[1]), 15, SOURCE_WHITE)
+		var label := _make_label(str(entry[0]), str(entry[1]), 15, SOURCE_EDGE)
 		var center: Vector2 = entry[2]
 		var action := str(entry[0]).trim_suffix("Label").trim_prefix("SourceHotkeys").to_lower()
 		var pressed_offset := Vector2.ONE if _pressed_action == action else Vector2.ZERO

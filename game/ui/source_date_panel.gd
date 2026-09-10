@@ -551,6 +551,9 @@ func _build() -> void:
 	_invalid_confirm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_invalid_confirm.add_theme_font_size_override("font_size", 12)
 	_invalid_confirm.add_theme_color_override("font_color", Color("#c21f28"))
+	# The source frame is an opaque texture added later during _draw_date().
+	# Keep invalid-date feedback above it so the empty bottom row remains legible.
+	_invalid_confirm.z_index = 2
 	_invalid_confirm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_invalid_confirm.visible = false
 	_surface.add_child(_invalid_confirm)

@@ -90,6 +90,11 @@ func run() -> void:
 	expect(StockPanel.format_price(388.0) == "388", "source price at 150 or above uses integer format")
 	expect(StockPanel.buy_limit(original_snapshot, "s01") == 80, "buy limit combines deposit floor, turn supply and market supply")
 	expect(StockPanel.sell_limit(original_snapshot, "s01") == 2, "sell limit uses current player holdings")
+	var floor_snapshot: Dictionary = original_snapshot.duplicate(true)
+	floor_snapshot.players[0].deposit = 100
+	floor_snapshot.market.rows.s01.price = 33.4
+	floor_snapshot.market.prices.s01 = 33.4
+	expect(StockPanel.buy_limit(floor_snapshot, "s01") == 2, "buy limit floors deposit affordability at a fractional source price")
 
 	panel.select_symbol("s01")
 	expect(panel.selected_symbol() == "s01", "first selection stays on selected stock")
@@ -97,6 +102,62 @@ func run() -> void:
 	var sell_button: Button = panel.find_child("StockSell", true, false)
 	expect(buy_button != null and not buy_button.disabled, "legal selected buy is enabled")
 	expect(sell_button != null and not sell_button.disabled, "legal selected sell is enabled")
+	panel.clear_selection()
+	var row_button: Button = panel.find_child("StockSelect_s01", true, false)
+	expect(row_button != null, "stock row exposes its source click control")
+	if row_button != null:
+		row_button.pressed.emit()
+		await process_frame
+	expect(panel.selected_symbol() == "s01" and panel.current_screen() == "overview", "actual row button click refreshes selection safely")
+	var guard_panel := StockPanel.new()
+	root.add_child(guard_panel)
+	await process_frame
+	guard_panel.set_snapshot(original_snapshot, Fixture.definition())
+	guard_panel.select_symbol("s01")
+	var guard_buy: Button = guard_panel.find_child("StockBuy", true, false)
+	guard_buy.pressed.emit()
+	await process_frame
+	var guarded_requests: Array = []
+	guard_panel.trade_requested.connect(func(action: String, symbol: String, quantity: int) -> void: guarded_requests.append([action, symbol, quantity]))
+	for blocked_case in [
+		{"label": "empty action options", "patch": {"action_options": []}},
+		{"label": "game over", "patch": {"phase": "game_over", "action_options": ["buy_stock", "sell_stock"]}},
+		{"label": "pending finance", "patch": {"pending_finance": {"kind": "tax"}, "action_options": ["buy_stock", "sell_stock"]}},
+	]:
+		var blocked_snapshot: Dictionary = original_snapshot.duplicate(true)
+		for key in blocked_case.patch:
+			blocked_snapshot[key] = blocked_case.patch[key]
+		guard_panel.set_snapshot(blocked_snapshot, Fixture.definition())
+		guard_panel._on_quantity_accepted(1)
+		expect(guard_buy.disabled and guarded_requests.is_empty(), "%s blocks the button and trade signal" % blocked_case.label)
+	guard_panel.queue_free()
+	await process_frame
+
+	var upper_snapshot: Dictionary = original_snapshot.duplicate(true)
+	upper_snapshot.market.rows.s01.previous_price = 10.0
+	upper_snapshot.market.rows.s01.price = 12.5
+	upper_snapshot.market.prices.s01 = 12.5
+	panel.set_snapshot(upper_snapshot, Fixture.definition())
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	var upper_background: ColorRect = panel.find_child("StockRow_s01", true, false).find_child("StockLimitBackground", true, false)
+	expect(upper_background.visible and upper_background.position == Vector2(137, 0) and upper_background.size == Vector2(103, 32), "upper-limit tint is restricted to the source price cell")
+	expect(not bool(panel.trade_limit("buy_stock").get("ok", false)), "upper-limit stock blocks buying")
+	expect(bool(panel.trade_limit("sell_stock").get("ok", false)), "upper-limit stock keeps selling available")
+	var lower_snapshot: Dictionary = upper_snapshot.duplicate(true)
+	lower_snapshot.market.rows.s01.previous_price = 10.0
+	lower_snapshot.market.rows.s01.price = 8.0
+	lower_snapshot.market.prices.s01 = 8.0
+	panel.set_snapshot(lower_snapshot, Fixture.definition())
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	var lower_background: ColorRect = panel.find_child("StockRow_s01", true, false).find_child("StockLimitBackground", true, false)
+	expect(lower_background.visible and lower_background.position == Vector2(137, 0) and lower_background.size == Vector2(103, 32), "lower-limit tint is restricted to the source price cell")
+	expect(bool(panel.trade_limit("buy_stock").get("ok", false)), "lower-limit stock keeps buying available")
+	expect(not bool(panel.trade_limit("sell_stock").get("ok", false)), "lower-limit stock blocks selling")
+	panel.set_snapshot(original_snapshot, Fixture.definition())
+	panel.clear_selection()
+	panel.select_symbol("s01")
 	panel.show_holdings()
 	expect(panel.current_screen() == "holdings" and panel.find_child("StockHeader_5", true, false) != null, "holdings table toggles in place")
 	panel.show_overview()
@@ -141,7 +202,20 @@ func run() -> void:
 	expect(pad != null and pad.visible, "buy opens source quantity pad")
 	if pad != null:
 		var input: LineEdit = pad.find_child("QuantityInput", true, false)
+		var slider: HSlider = pad.find_child("QuantitySlider", true, false)
 		var digit_one: Button = pad.find_child("QuantityDigit1", true, false)
+		expect(slider != null and is_equal_approx(slider.max_value, 80.0), "source quantity pad exposes a slider synced to the buy limit")
+		if slider != null:
+			slider.value = 3
+			expect(input.text == "3", "slider changes preserve the raw input field")
+			input.text = "4"
+			input.text_changed.emit(input.text)
+			expect(is_equal_approx(slider.value, 4.0), "valid direct text updates the quantity slider")
+			input.text = " 4"
+			input.text_changed.emit(input.text)
+			expect(is_equal_approx(slider.value, 4.0) and input.text == " 4", "invalid direct text remains raw without slider clamping")
+			pad.find_child("QuantityMax", true, false).pressed.emit()
+			expect(input.text == "80" and is_equal_approx(slider.value, 80.0), "MAX synchronizes the quantity slider and raw input")
 		pad.find_child("QuantityClear", true, false).pressed.emit()
 		if digit_one != null:
 			digit_one.pressed.emit()
@@ -162,6 +236,12 @@ func run() -> void:
 	panel.apply_trade_result(result, Fixture.definition())
 	expect(pad == null or not pad.visible, "successful trade result closes quantity pad")
 	expect(panel.selected_symbol() == "s01", "successful trade keeps selected symbol")
+	var status_label: Label = panel.find_child("StockStatus", true, false)
+	expect(status_label != null and status_label.text == str(result.get("message", "交易完成")), "successful trade result remains visible until the next stock open")
+	var reopened_game: Object = make_game()
+	if reopened_game != null:
+		panel.open_for(reopened_game.get_snapshot(), Fixture.definition())
+	expect(reopened_game != null and status_label != null and status_label.text.is_empty(), "reopening a new game clears the prior stock trade result")
 	var failed: Dictionary = {"ok": false, "message": "銀行存款不足", "state": game.get_snapshot()}
 	panel.clear_selection()
 	panel.select_symbol("s01")
@@ -178,6 +258,7 @@ func run() -> void:
 	panel.clear_selection()
 	panel.select_symbol("s01")
 	expect(panel.trade_limit("buy_stock").error == "本日休市", "closed market is a visible domain gate")
+	expect(panel.find_child("StockRow_s01", true, false) == null, "closed market leaves overview data rows blank")
 	var closed_overlay: Label = panel.find_child("MarketClosedOverlay", true, false)
 	var exit_button: Button = panel.find_child("StockExit", true, false)
 	expect(panel.market_closed_overlay_visible() and closed_overlay != null and closed_overlay.text == "本日休市", "closed market renders the source closure overlay")

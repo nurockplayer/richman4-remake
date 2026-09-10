@@ -81,8 +81,9 @@ func run() -> void:
 	# A changed valid file cannot be loaded under an earlier selection.
 	shell.load_requested.emit()
 	menu.get("picker").row_buttons[1].pressed.emit()
-	var changed := snapshot_a.duplicate(true)
-	changed.seed = 12933
+	var replacement: Object = Game.new_game_on_board(12933, 4, ui._selected_map_definition, ui._default_setup_options(4, ui._selected_map_definition))
+	check(replacement != null, "replacement uses the real factory to preserve setup seed invariants")
+	var changed: Dictionary = replacement.to_dict() if replacement != null else {}
 	check(store.write(1, changed).get("ok", false), "external valid replacement is written")
 	var unchanged: String = ui.game_state.to_json()
 	menu.get("picker").confirm_button.pressed.emit()

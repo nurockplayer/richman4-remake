@@ -236,6 +236,12 @@ func run() -> void:
 	panel.apply_trade_result(result, Fixture.definition())
 	expect(pad == null or not pad.visible, "successful trade result closes quantity pad")
 	expect(panel.selected_symbol() == "s01", "successful trade keeps selected symbol")
+	var status_label: Label = panel.find_child("StockStatus", true, false)
+	expect(status_label != null and status_label.text == str(result.get("message", "交易完成")), "successful trade result remains visible until the next stock open")
+	var reopened_game: Object = make_game()
+	if reopened_game != null:
+		panel.open_for(reopened_game.get_snapshot(), Fixture.definition())
+	expect(reopened_game != null and status_label != null and status_label.text.is_empty(), "reopening a new game clears the prior stock trade result")
 	var failed: Dictionary = {"ok": false, "message": "銀行存款不足", "state": game.get_snapshot()}
 	panel.clear_selection()
 	panel.select_symbol("s01")

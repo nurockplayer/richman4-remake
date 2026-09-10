@@ -150,6 +150,7 @@ func open_for(snapshot_value: Dictionary = {}, map_definition_value: Dictionary 
 	var normalized := selected_symbol.to_lower().strip_edges()
 	if not normalized.is_empty() and _symbols.has(normalized):
 		_selected_symbol = normalized
+	_status_label.text = ""
 	show()
 	_refresh()
 

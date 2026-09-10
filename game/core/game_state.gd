@@ -5746,9 +5746,10 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("目前玩家無法交易")
 	var symbol: String = str(params.get("symbol", params.get("stock", ""))).to_lower()
-	var quantity: int = int(params.get("quantity", params.get("shares", 0)))
-	if not get_stock_symbols().has(symbol) or quantity <= 0:
+	var raw_quantity: Variant = params.get("quantity", params.get("shares", 0))
+	if not get_stock_symbols().has(symbol) or not _valid_int(raw_quantity, 1, 1000000000):
 		return _error("股票代號或數量無效")
+	var quantity: int = int(raw_quantity)
 	var market: Dictionary = state.get("market", {})
 	var prices: Dictionary = market.get("prices", {})
 	var price: int = int(prices.get(symbol, 0))
@@ -5757,6 +5758,10 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 		var cost: int = price * quantity
 		if int(player.get("cash", 0)) < cost:
 			return _error("現金不足")
+		if int(state.get("bank", {}).get("cash", 0)) > 1000000000000 - cost:
+			return _error("交易後銀行現金超出上限")
+		if int(shares.get(symbol, 0)) > 1000000000 - quantity:
+			return _error("交易後持股超出上限")
 		player["cash"] = int(player.get("cash", 0)) - cost
 		shares[symbol] = int(shares.get(symbol, 0)) + quantity
 		_bank_add_cash(cost)
@@ -5767,11 +5772,14 @@ func _trade_stock(action: String, params: Dictionary) -> Dictionary:
 		var proceeds: int = price * quantity
 		if not _bank_can_pay(proceeds):
 			return _error("銀行現金暫不足")
+		if int(player.get("cash", 0)) > 1000000000000 - proceeds:
+			return _error("交易後現金超出上限")
 		shares[symbol] = int(shares.get(symbol, 0)) - quantity
 		player["cash"] = int(player.get("cash", 0)) + proceeds
 		_bank_subtract_cash(proceeds)
 		_record_event("stock_sold", {"player_id": player_id, "symbol": symbol, "quantity": quantity, "price": price})
 	player["stocks"] = shares
+	_set_action_options(player_id)
 	return _result(true, "股票交易完成")
 
 

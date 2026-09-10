@@ -332,9 +332,9 @@ func _test_preview_and_music_boundary(panel: Control, viewport: SubViewport) -> 
 	await _present(panel, _model())
 	_previews.clear()
 	await _click(viewport, Vector2(18 + 10, 226 + 15 * 3 + 4))
-	_expect_equal(_previews, [], "track preview emits on down only and source music is permitted")
-	# The helper click includes a release; preview should have been emitted once.
-	_expect_equal(_previews, [3], "track preview uses a zero-based index")
+	# The helper click includes a release; preview should have been emitted once
+	# on its preceding down event.
+	_expect_equal(_previews, [3], "track preview emits on down with a zero-based index")
 	# Draft music can be muted without revoking preview permission: committed is 4.
 	await _click(viewport, Vector2(66 + 4, 82 + 4))
 	_expect_equal(panel.call("draft_settings")["music_level"], 0, "music switch toggles nonzero draft to zero")

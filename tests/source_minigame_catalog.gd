@@ -34,6 +34,7 @@ func run() -> void:
 					elif game.state.phase == "await_action": result = game.end_turn()
 					elif game.state.phase == "await_route": result = game.choose_route(int(game.state.route_options[0]))
 					elif game.state.phase == "await_lottery": result = game.leave_lottery()
+					elif game.state.phase == "await_shop": result = game.leave_shop(int(game.shop_visit_snapshot().visit_id))
 					else: break
 					if not result.get("ok",false): break
 					var actor := int(game.state.current_player)

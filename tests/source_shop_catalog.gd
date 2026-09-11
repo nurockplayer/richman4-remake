@@ -50,9 +50,9 @@ func run() -> void:
 			before = game.to_dict()
 			game.call("shop_visit_snapshot")
 			check(game.to_dict() == before,"public repaint snapshot never rerolls or reserves supply")
-		ui.game_state = game
-		ui.state = game.get_snapshot()
-		ui._update_all()
+		# Formal loaded-owner bridge; allow legitimate prior fate/news messages.
+		ui._apply_loaded_game(game,game.to_dict(),false)
+		await create_timer(2.1).timeout
 		await settle()
 		var panel := ui.source_shell.find_child("SourceShopPanel",true,false)
 		check(panel != null and panel.has_method("is_open") and panel.call("is_open"),"ordinary pending landing opens actual MainUI source Panel10")

@@ -100,7 +100,10 @@ func _show_next() -> void:
 	var generation := _generation
 	var display_id := _display_id
 	report_panel.ticket_selected.connect(func(number: int) -> void: _on_purchase_action(generation, display_id, "purchase_lottery", [number]))
-	report_panel.cancelled.connect(func() -> void: _on_purchase_action(generation, display_id, "leave_lottery", []))
+	if _purchase:
+		report_panel.cancelled.connect(func() -> void: _on_purchase_action(generation, display_id, "leave_lottery", []))
+	else:
+		report_panel.cancelled.connect(func() -> void: _on_continued(generation, display_id))
 	report_panel.continued.connect(func() -> void: _on_continued(generation, display_id))
 	add_child(report_panel)
 	report_panel.position = Vector2.ZERO

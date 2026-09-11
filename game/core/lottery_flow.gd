@@ -18,13 +18,13 @@ static func admit(game: Object, player_id: int) -> void:
 	game.state.action_options = []
 	game._record_event("lottery_entered", {"player_id": player_id})
 
-static func purchase(game: Object, number: int, ai: bool = false) -> Dictionary:
+static func purchase(game: Object, number: int) -> Dictionary:
 	var state: Dictionary = game.state
 	var player_id := int(state.get("current_player", -1))
 	if not game._is_companies() or state.get("phase", "") != "await_lottery" or int(state.get("lottery_pending", -1)) != player_id:
 		return game._error("目前沒有彩券購買事件")
 	var player: Dictionary = game._player(player_id)
-	var result: Dictionary = Rules.purchase(state.lottery_tickets, player_id, int(player.cash), int(state.jackpot), number, ai)
+	var result: Dictionary = Rules.purchase(state.lottery_tickets, player_id, int(player.cash), int(state.jackpot), number, bool(player.get("is_ai", false)))
 	if not result.get("ok", false): return game._error("無法購買這個號碼")
 	state.lottery_tickets = result.tickets
 	state.jackpot = result.jackpot
@@ -44,7 +44,7 @@ static func ai_turn(game: Object) -> void:
 	var player: Dictionary = game._player(int(game.state.current_player))
 	var available: Array = Rules.available_numbers(game.state.lottery_tickets)
 	if int(player.cash) > 1000 and int(game.state.jackpot) <= LIMIT - 1000 and not available.is_empty():
-		purchase(game, int(available[game._rng.randi_range(0, available.size() - 1)]), true)
+		purchase(game, int(available[game._rng.randi_range(0, available.size() - 1)]))
 	else:
 		leave(game)
 

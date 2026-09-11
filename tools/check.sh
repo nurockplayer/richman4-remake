@@ -79,6 +79,8 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_save.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_public_purchase.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_cancel_lifecycle.gd
 run_checked python3 tools/test_prepare_lottery_assets.py
 run_checked "$GODOT_BIN" --headless --path . --script tests/monthly_statements.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_panel.gd

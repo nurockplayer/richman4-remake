@@ -36,7 +36,11 @@ preserves the player-facing modal order and deterministic saved continuation.
 A saved elapsed-day identity prevents repeated settlement, and starting a new
 game on the 15th does not replay a draw. Loaded event history is never used to
 reopen a historical modal. Report players contain display identity only, not
-copies of unrelated stock-accounting state.
+copies of unrelated stock-accounting state. Both normal continuation and right
+click cancellation acknowledge a draw through the same guarded controller
+lifecycle. Purchase eligibility uses the current actor state, including a
+human actor currently delegated to trustee control; callers cannot supply an
+alternative AI flag to weaken the threshold.
 
 ## Explicit bounds
 

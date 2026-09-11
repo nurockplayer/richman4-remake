@@ -864,6 +864,8 @@ func _render_calendar() -> void:
 	if calendar_panel != null:
 		calendar_panel.configure_assets(_visuals, _source_edition)
 		calendar_panel.present(snapshot)
+		# present() opens the standalone presenter; the shell owns view visibility.
+		calendar_panel.visible = view_mode != 1
 
 
 func _set_hud_art(tab_id: String) -> void:

@@ -23,3 +23,7 @@ The view key is dispatched before Godot focus traversal and uses the existing Ma
 ## Verification limits
 
 Focused and affected UI tests cover source geometry, dates, styles, input gates, persistence, camera continuity and save/RNG invariance. Native source-art captures use the actual installed 12-map catalog with normal game creation. Injected viewport inputs and native rendering do not establish physical OS keyboard/mouse focus. The inherited monthly focus HOLD, physical hotkey PRECONDITION_UNMET, Wine comparison, current package and all36 screen acceptance remain open. Regional holiday text/art and exact font rasterization remain bounded presentation uncertainty.
+
+## Initial review recovery
+
+The initial 166043ac review found two P2: black Sunday day-style text and a hidden mode 1 calendar reopened by ordinary snapshot refresh. Recovery preserves the standalone presenter's `present()` opening contract and reasserts shell-owned view visibility after presentation; Sunday day and weekday use source red. New immutable behavioral checks exercise weekday→Sunday→weekday, same/new-date ordinary MainUI refresh, modes 0/1/2, and hidden-pointer/stale-callback exclusion at 1x/2x. The initial review and successful evidence remain historical; recovery requires its own exact-head validation and independent review.

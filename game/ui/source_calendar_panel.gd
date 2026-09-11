@@ -32,6 +32,7 @@ const DAY_CENTERS_ORIGIN := Vector2(30.0, 98.0)
 const DAY_COLUMN_STEP := 23.0
 const DAY_ROW_STEP := 14.0
 const DAY_BOX_SIZE := Vector2(20.0, 14.0)
+const SUNDAY_RED := Color("#ff0000")
 const HITBOXES := {
 	"sun": Rect2(8.0, 8.0, 27.0, 27.0),
 	"moon": Rect2(38.0, 8.0, 27.0, 27.0),
@@ -343,7 +344,9 @@ func _render() -> void:
 
 
 func _draw_day(date_value: Dictionary) -> void:
-	_make_label("SourceCalendarDay", str(int(date_value.day)), Rect2(18, 66, 84, 60), 60, Color("#101010"), HORIZONTAL_ALIGNMENT_CENTER)
+	var weekday := GameCalendar.weekday(date_value) % 7
+	var day_ink := SUNDAY_RED if weekday == 0 else Color("#101010")
+	_make_label("SourceCalendarDay", str(int(date_value.day)), Rect2(18, 66, 84, 60), 60, day_ink, HORIZONTAL_ALIGNMENT_CENTER)
 	_make_label("SourceCalendarMonth", _month_text(int(date_value.month)), Rect2(20, 32, 80, 32), 28, Color("#101010"), HORIZONTAL_ALIGNMENT_CENTER)
 	var underline := ColorRect.new()
 	underline.name = "SourceCalendarMonthUnderline"
@@ -353,8 +356,7 @@ func _draw_day(date_value: Dictionary) -> void:
 	underline.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_surface.add_child(underline)
 	_make_label("SourceCalendarYear", str(int(date_value.year)), Rect2(140, 8, 60, 28), 24, Color("#101010"), HORIZONTAL_ALIGNMENT_LEFT)
-	var weekday := GameCalendar.weekday(date_value) % 7
-	_make_label("SourceCalendarWeekday", "星期%s" % WEEKDAY_LABELS[weekday], Rect2(18, 138, 84, 22), 16, Color("#101010"), HORIZONTAL_ALIGNMENT_CENTER)
+	_make_label("SourceCalendarWeekday", "星期%s" % WEEKDAY_LABELS[weekday], Rect2(18, 138, 84, 22), 16, day_ink, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _draw_month(date_value: Dictionary) -> void:

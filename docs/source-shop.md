@@ -1,0 +1,32 @@
+# Source shop (S20)
+
+Issue #162 restores ordinary card/tool shop encounters with finite human offers, source Panel10 tabs and Panel11 holdings. Base is accepted S19 `55d416c407508627c7af1c1014cbcdb79e63ab05`.
+
+## Public visit and persistence
+
+Complete original-company graph games enter `await_shop` on ordinary shop landing. The domain module owns player/node/turn/visit identity, offers, gift acknowledgement, and accumulated contribution. Human public `choose_action` requires a current visit, exact offer or held index, matching source ID, and quantity one. A purchased row becomes a hole; other actions cannot bypass the pending visit. The accepted inventory-only v4 metadata and bulk quantity contracts remain unchanged.
+
+Each human visit samples 6..15 card copies by remaining-copy weight without replacement of copies; duplicate types remain distinct rows. Available tools1..8 appear once in source order. Offers reserve no supply. Tab, repaint, save/load and controller reconstruction never resample. Sales remove the selected held card or one tool unit and credit90% of price. Returning does not undo trades or replenish the same visit. A later turn clears the closed visit.
+
+An owned commercial venue grants one random eligible item, then displays its gift message for1500ms of visible time before enabling trades. Purchases add10 times point price to the visit contribution, sales add full price while the player receives90%. Close adds the total to both existing venue monthly/cumulative profit fields; overflow refusal is atomic. Source AI uses direct inventory helpers and closes synchronously; it never consumes human-offer RNG. The bounded AI spending policy is implemented, but exact original character preferences remain unverified.
+
+Pending visits serialize with the current ruleset and validate actor, node, turn, phase, source rows, flags, contribution and conflicting pending decisions. Missing new fields receive a structural empty-visit initialization; there is no branch preserving unrestricted historical shop behavior. MainUI uses a transient controller with stale-callback protection, modal/action/save/load gates and reversible window-close policy. News/fate/auction closure defers shop resumption after the surrounding refresh completes.
+
+## Source presentation
+
+Both editions use mode0 for cards and mode1 for tools. Panel10 backgrounds0/16 and catalog frames1/17 draw opaquely; ready2/18, closing3/19, normal tabs13/29, pressed tabs14/30, EXIT35/36 and points37 use source-nonzero transparency. The small private decoder verifies the complete38-chunk identity and exports only16 used chunks per edition. It inherits every resolved S19 map/character/UI/Panel11 reference.
+
+Catalog origin is(5,10), merchant anchor is(320,240) minus source graph anchors, tab origin(542,13), EXIT(556,246), points background(230,246), and held Panel11 origin(227,293). Catalog text uses source font20/white/dark outline, with source center/right alignment. Left-down buys/sells one; tab/EXIT latch on down and act on up even outside the original rectangle; right-up cancels. The held grid retains S19 strict boundaries and source IDs.
+
+Source references are extracted-art reconstructions, not original-runtime screenshots. Godot font rasterization, original blinking/closing cadence and exact feedback animation remain bounded fidelity gaps; the presenter uses static ready art and short closing/message fallbacks. Native evidence uses injected SubViewport input at1x/2x and is not physical OS evidence.
+
+## Verification boundaries
+
+Immutable original RED bytes and logs are preserved privately. A Root-approved fixture-only amendment uses the formal loaded-owner bridge and waits for legitimate messages; the same amended bytes reproduce20checks/12fails on exact base55d416 and pass26/0 on the implementation. Root's independent loaded-Fate observer reproduced1/1; the same bytes pass1/0 after the deferred resume fix. The existing minigame catalog reachability driver also receives one Root-approved public `await_shop` continuation branch, preserving all prior assertions, seeds and limits: original current19/2 becomes amended25/0 on both exact55d416 and current code. This is supported-phase driver maintenance, not an S18 product fix or immutable RED/GREEN. A separate minimal trace records two successful public shop closes before reaching the minigame. These proofs remain distinct from the same-owner natural MainUI entry, focused core/presenter/lifecycle checks, native source-art comparisons, exact-head hosted CI and fresh independent review.
+
+Public `tools/check.sh` runs detached presenter and hermetic decoder checks. Configured `RICHMAN4_MAP_CATALOG` enables private catalog/core/host/lifecycle gates. Native captures additionally require `RICHMAN4_SCENE_MANIFEST`, `RICHMAN4_SHOP_CAPTURE`, edition and1x/2x scale. Unset or empty private decoder inputs explicitly skip; configured missing inputs fail. S21/S22, original runtime, physical OS, integrated package and All36 remain outside this lane. Original and derived assets remain private.
+
+
+Final local verification used the frozen game dependency aggregate `1ed7c0491c5065a5d3f73165da62c4aaf88e89db29ef7a73994166a82ac4a805`: public `tools/check.sh` passed once, catalog26/0, shop core306/0, detached presenter133/0, lifecycle16/0, and four native groups47/0 each (188/0;28 actual PNGs). Both editions use the same MainUI-created owner and public host actions for ordinary entry. Variable UI text and timing remain separate from the eight static extracted-art comparisons; pixel equality on masked static regions is not overall fidelity acceptance.
+
+The unchanged actual-catalog monthly consumer remains FAIL293/5, compared with FAIL292/4 on exact55d416 using identical test bytes/catalog/overlay. A fresh read-only Sol arbiter, adopted by Root, found no supported S20 product regression: three assertions compare whole AI-action ledger changes as though only monthly settlement occurred; the existing Game action29 autosave precondition prevents the later Game interest replay. The newly exposed MJ bank-cash difference is exactly the same action's600 property upgrade (`1060300 + 600 - 34575 = 1026325`). No monthly assertion or product was changed. These failures, missing Game UI interest evidence and monthly nativefocus11/2 HOLD remain open and are not converted into PASS. Final independent code/visual review and exact-head hosted CI are still required.

@@ -92,9 +92,16 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_cont
 # Issue #160 held-list source geometry and detached input mapping.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_panel.gd
 run_checked python3 tools/test_prepare_inventory_assets.py
+# Issue #162 source shop presenter and bounded private asset decoder.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd
+run_checked python3 tests/test_source_shop_assets.py
 # These immutable gates require the complete owner-private installed catalog.
 # Public fixture-only CI cannot substitute for normal source event admission.
 if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_catalog.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_core.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_ui.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_lifecycle.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_ui.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_lifecycle.gd
@@ -102,7 +109,7 @@ if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_return_autosave.gd
 else
-  echo "PRECONDITION_UNMET: source minigame and inventory core/catalog gates require RICHMAN4_MAP_CATALOG"
+  echo "PRECONDITION_UNMET: source shop, minigame and inventory core/catalog gates require RICHMAN4_MAP_CATALOG"
 fi
 # Native gates need an actual display and a fresh private capture directory.
 # Public headless CI never treats these as covered by the model tests.

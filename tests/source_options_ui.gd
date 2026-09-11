@@ -150,11 +150,13 @@ func run() -> void:
 	ui.audio_controller = audio
 	ui._source_preferences.capture_audio_baseline(audio)
 	var draft: Dictionary = ui._source_settings.duplicate(true)
+	draft.view = 2
 	draft.speed = 2
 	draft.music_level = 1
 	controller.options_panel.set_view_model({"edition": edition, "mode": "game", "settings": draft})
 	click_panel(viewport, controller.options_panel, "accept")
 	await settle()
+	check(ui.source_shell.view_mode == 2, "successful parent persistence applies combined view")
 	check(ui._source_settings.speed == 2 and FileAccess.file_exists(ui.source_settings_path), "parent OK commits actual presentation preference")
 	check(is_equal_approx(audio.volume, 0.3) and audio.writes == 0, "parent OK reaches runtime-only baseline music consumer")
 	ui.audio_controller = null

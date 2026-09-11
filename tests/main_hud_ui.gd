@@ -68,7 +68,7 @@ func _test_title_and_layout(ui: Control, shell: Control) -> void:
 	if _source_assets_available(shell):
 		_expect(shell._title_art.texture != null, "source title composite is loaded")
 		_expect(shell._hud_art.texture != null, "source HUD frame is loaded")
-		_expect(shell._calendar_art.texture != null, "source calendar frame is loaded for a dated game")
+		_expect(shell.calendar_panel.background_art != null and shell.calendar_panel.background_art.texture != null, "source calendar frame is loaded for a dated game")
 		for key in source_keys:
 			_expect(shell.toolbar_buttons[key].icon != null, "source toolbar icon is loaded for %s" % key)
 		shell.title_start_button.mouse_entered.emit()
@@ -142,12 +142,15 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 		shell.select_tab(key)
 		_expect(shell.active_tab == key, "HUD tab selection updates presentation state for %s" % key)
 		_expect(game.to_json() == before_tabs, "HUD tab selection does not mutate simulation for %s" % key)
+	shell.set_view_mode(0)
 	var before_calendar: String = game.to_json()
 	shell.toggle_map_view()
 	_expect(shell.minimap.visible and not shell.calendar_panel.visible, "calendar toggle exposes the minimap")
 	_expect(game.to_json() == before_calendar, "calendar toggle does not mutate simulation")
 	shell.toggle_map_view()
-	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "calendar toggle returns to the dated panel")
+	_expect(shell.calendar_panel.visible and shell.minimap.visible, "second cycle exposes combined calendar and minimap")
+	shell.toggle_map_view()
+	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "third cycle returns to the dated panel")
 	_expect(not shell.buy_button.visible and not shell.upgrade_button.visible and not shell.end_turn_button.visible, "non-landing source turn hides unrelated actions")
 	_expect(shell.roll_button.visible and shell.roll_button.text == "GO", "await-roll source turn exposes the bounded GO control")
 	game.state.phase = "await_action"
@@ -340,7 +343,7 @@ func _test_stock_names(shell: Control) -> void:
 
 func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	var before_state: String = game.to_json()
-	shell.toggle_map_view()
+	shell.set_view_mode(1)
 	var view: Control = shell.board_host.get_child(0)
 	var points: Array[Vector2] = shell.minimap.call("_board_points")
 	var target_index: int = mini(2, points.size() - 1)
@@ -363,7 +366,7 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	if target_index >= 0 and view.has_method("get_screen_position_for_index"):
 		var focused_position: Vector2 = view.call("get_screen_position_for_index", target_index)
 		_expect(focused_position.distance_to(view.size * 0.5) < 1.5, "minimap node selection centers the board camera once")
-	shell.toggle_map_view()
+	shell.set_view_mode(0)
 
 
 func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:

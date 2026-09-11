@@ -37,7 +37,8 @@ func run() -> void:
 	controller.hotkeys_store = store
 	controller.preview_requested.connect(func(_track: int) -> void: previews += 1)
 	var date := {"year": 2031, "month": 4, "day": 12}
-	controller.open(self, "title", "Game", null, date, date)
+	controller.open(self, "title", "Game", null, date, date, 2)
+	check(controller.settings().view == 2, "successful read accepts validated runtime view override")
 	check(controller.options_panel.is_model_valid(), "controller supplies exactly the real options model contract")
 	var draft: Dictionary = store.settings.duplicate(true)
 	draft.music_level = 4
@@ -67,7 +68,8 @@ func run() -> void:
 	check(controller.hotkeys_panel.draft_bindings() == store.bindings, "child cancellation discards unsuccessful write draft")
 	controller.cancel()
 	store.corrupt = true
-	controller.open(self, "title", "Game", null, date, date)
+	controller.open(self, "title", "Game", null, date, date, 2)
+	check(controller.settings().is_empty(), "runtime view cannot mask failed read")
 	check(not controller.options_panel.is_model_valid() and controller.error_label.visible, "corrupt settings never silently become defaults")
 	controller.options_panel._cancel()
 	check(not controller.is_open(), "unavailable real model still has cancel exit")

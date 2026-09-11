@@ -243,6 +243,7 @@ func _ready() -> void:
 	_build_source_shell()
 	_setup_audio()
 	_load_source_preferences()
+	source_shell.presentation_input_guard = Callable(self, "_source_view_operation_allowed")
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
@@ -257,6 +258,13 @@ func _process(_delta: float) -> void:
 	if _source_modal_open():
 		return
 	_maybe_schedule_ai_turn()
+
+# Source TAB owns window-group cycling before Godot's UI focus traversal.
+# All other keys retain the existing unhandled-input ownership.
+func _input(event: InputEvent) -> void:
+	if _source_preferences.hotkey_command(event, _source_bindings) == "view" and _source_view_operation_allowed():
+		_on_source_view_requested()
+		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _legacy_save_modal_open():
@@ -304,6 +312,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				"tools": _on_source_tools_requested()
 				"inspect": _on_source_inspect_requested()
 				"map": _on_source_map_requested()
+				"view": _on_source_view_requested()
 				"options": _on_source_option_requested()
 				"save": _on_source_save_requested()
 				"load": _on_source_load_requested()
@@ -412,7 +421,7 @@ func _build_source_options_controller() -> void:
 		return
 	var controller := SourceOptionsController.new()
 	controller.z_index = 70
-	controller.host_status_text = "目前套用音樂、移動速度與每日自動存檔；動畫、音效、視窗模式尚未接入。"
+	controller.host_status_text = "目前套用音樂、移動速度、每日自動存檔與視窗模式；動畫、音效尚未接入。"
 	controller.settings_path = source_settings_path
 	controller.hotkeys_path = source_hotkeys_path
 	controller.finished.connect(func() -> void:
@@ -421,6 +430,7 @@ func _build_source_options_controller() -> void:
 	controller.settings_committed.connect(func(settings: Dictionary) -> void:
 		_source_settings = settings.duplicate(true)
 		_source_preferences.apply(_source_settings, audio_controller)
+		source_shell.set_view_mode(int(_source_settings.view))
 		_update_audio_button())
 	controller.date_committed.connect(func(date: Dictionary) -> void:
 		_runtime_start_date = date.duplicate(true))
@@ -455,6 +465,7 @@ func _load_source_preferences() -> void:
 	if settings.get("ok", false):
 		_source_settings = settings.settings.duplicate(true)
 		_source_preferences.apply(_source_settings, audio_controller)
+		source_shell.set_view_mode(int(_source_settings.view))
 	else:
 		_append_local_log("系統設定讀取失敗；請由選項畫面查看錯誤。")
 	var hotkeys: Dictionary = SystemHotkeys.new().read_bindings(source_hotkeys_path)
@@ -793,7 +804,7 @@ func _on_source_option_requested() -> void:
 	if source_options_controller == null or not _source_options_operation_allowed():
 		return
 	var mode := "title" if source_shell.is_title_visible() else "game"
-	if source_options_controller.open(_source_options_owner(), mode, str(source_shell.get("_source_edition")), source_shell.get("_visuals"), _future_start_date(), _system_start_date()):
+	if source_options_controller.open(_source_options_owner(), mode, str(source_shell.get("_source_edition")), source_shell.get("_visuals"), _future_start_date(), _system_start_date(), source_shell.view_mode):
 		_presentation_generation += 1
 		_ai_pending = false
 		_update_source_current_track()
@@ -906,6 +917,15 @@ func _restore_trustee_window_policy() -> void:
 func _exit_tree() -> void:
 	if _trustee_quit_policy_held:
 		get_tree().auto_accept_quit = _trustee_prior_auto_quit
+
+func _source_view_operation_allowed() -> bool:
+	if game_state == null or source_shell == null or _source_modal_open() or not _source_save_operation_allowed():
+		return false
+	return not _ai_pending and not _trap_response_busy and not _finance_response_busy and not _auction_response_busy and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+
+func _on_source_view_requested() -> void:
+	if _source_view_operation_allowed():
+		source_shell.cycle_view_mode()
 
 func _on_source_map_requested() -> void:
 	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():

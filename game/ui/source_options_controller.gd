@@ -74,7 +74,7 @@ func _ready() -> void:
 
 ## Open the source options session for one owner. The captured dates are used
 ## by the date child; this controller never reads the system clock.
-func open(owner: Object, mode: String, edition: String, visuals: Variant, runtime_date: Dictionary, system_date: Dictionary) -> bool:
+func open(owner: Object, mode: String, edition: String, visuals: Variant, runtime_date: Dictionary, system_date: Dictionary, runtime_view: Variant = null) -> bool:
 	if owner == null or mode not in ["title", "game"] or edition not in ["Game", "MultiverseJourney"]:
 		return false
 	if _open:
@@ -92,6 +92,10 @@ func open(owner: Object, mode: String, edition: String, visuals: Variant, runtim
 	_settings_result = _read_settings()
 	_hotkeys_result = _read_hotkeys()
 	_settings = _valid_settings(_settings_result)
+	# Overlay only a validated runtime presentation choice after a successful
+	# read. Read failures stay visible and never acquire fabricated settings.
+	if not _settings.is_empty() and typeof(runtime_view) == TYPE_INT and runtime_view >= 0 and runtime_view <= 2:
+		_settings["view"] = runtime_view
 	_settings_draft = _settings.duplicate(true)
 	_hotkeys = _valid_hotkeys(_hotkeys_result)
 	_hotkeys_draft = _hotkeys.duplicate(true)

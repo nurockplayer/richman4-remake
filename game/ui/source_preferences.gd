@@ -14,6 +14,7 @@ const COMMAND_SLOTS := {
 	7: "view",
 	10: "roll",
 	12: "stocks",
+	13: "sale",
 	14: "cards",
 	15: "tools",
 	16: "inspect",

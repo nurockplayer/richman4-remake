@@ -6,11 +6,13 @@ const Inventory = preload("res://game/core/inventory_rules.gd")
 const Catalogue = preload("res://game/content/original_inventory.gd")
 const Accounting = preload("res://game/core/stock_accounting.gd")
 const Market = preload("res://game/core/original_stock_market.gd")
+const TrusteePreferences = preload("res://game/core/trustee_preferences.gd")
 const LIMIT := 1000000000000
 const ID_LIMIT := 1000000000
 const CATEGORIES := ["stock", "property", "tool", "card"]
 # Source player profile table at MJ VA 0x47e80c, stride 104, sex byte +20.
 const CHARACTER_SEX := [1,1,1,0,1,0,1,0,0,0,1,0]
+const CHARACTER_PERSONALITY := [2,1,2,2,1,1,1,0,0,0,1,2]
 
 static func enabled(game: Object) -> bool:
 	return game._is_companies() and game._is_inventory() and game._is_graph()
@@ -39,6 +41,9 @@ static func current(game: Object) -> Dictionary:
 	if session.is_empty() or int(session.player_id) != int(game.state.current_player) or int(session.turn) != int(game.state.turn): return {}
 	var player: Dictionary = game._current_player()
 	if not bool(player.get("alive", false)) or not bool(player.get("is_human", false)) or bool(player.get("is_ai", true)) or game._status_active(player) or game._sleep_active(player): return {}
+	if int(game.state.get("company_service_pending", 0)) != 0: return {}
+	for key in ["pending_bank_visit", "pending_trap", "pending_finance", "pending_auction", "pending_remote_dice"]:
+		if not game.state.get(key, {}).is_empty(): return {}
 	return session
 
 static func open(game: Object) -> Dictionary:
@@ -298,14 +303,17 @@ static func ai_turn(game: Object) -> void:
 		var candidates: Array = []
 		var category := "card"
 		if player.cards.size() > 12:
-			var seen := {}
-			for card_id in player.cards:
-				if seen.has(card_id): candidates.append(int(Catalogue.card(str(card_id)).source_id))
-				seen[card_id] = true
-		else:
+			# The source weights every ordered pair of equal card slots.
+			for first in range(player.cards.size()):
+				for second in range(player.cards.size()):
+					if first != second and player.cards[first] == player.cards[second]: candidates.append(int(Catalogue.card(str(player.cards[first])).source_id))
+		if candidates.is_empty():
 			category = "tool"
+			var preferences: Dictionary = TrusteePreferences.for_player(game.state, player_id)
+			var personality := int(preferences.get("personality", CHARACTER_PERSONALITY[clampi(int(player.get("character_id", 0)),0,11)]))
 			for item in Catalogue.tools():
-				if int(player.tools.get(item.id, 0)) >= 3: candidates.append(int(item.source_id))
+				var quantity := int(player.tools.get(item.id, 0))
+				if quantity >= 3 or quantity > 0 and int(item.source_flags[1]) - personality == 2: candidates.append(int(item.source_id))
 		if not candidates.is_empty():
 			var source_id := int(candidates[game._rng.randi_range(0, candidates.size()-1)])
 			if board.offers[player_id].size() >= 7: board.offers[player_id].pop_front()
@@ -326,7 +334,7 @@ static func ai_turn(game: Object) -> void:
 				var desirable := false
 				if offer.category == "stock": desirable = int(int(offer.asking) / int(offer.quantity)) < float(game.state.market.prices[Market.symbol(int(offer.source_id))])
 				elif offer.category == "property": desirable = int(offer.asking) < reference * 3 and int(player.cash) > int(offer.asking) * 2
-				else: desirable = int(offer.asking) <= reference
+				# Source AI considers stocks and property only; tools/cards remain listings.
 				if affordable and desirable and _accept(game, player_id, offer).get("ok", false):
 					game._sync_state()
 					return
@@ -372,7 +380,7 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	if data.get("phase") != "await_sale" or not _integer(session.get("session_id"), 1, int(board.session_sequence)) or not _integer(session.get("player_id"), 0, players.size()-1) or not _integer(session.get("turn"), 1, ID_LIMIT) or session.get("return_phase") not in ["await_roll", "await_action"]: return ["invalid source sale session"]
 	var player: Variant = players[int(session.player_id)]
 	if not player is Dictionary or not bool(player.get("alive", false)) or not bool(player.get("is_human", false)) or bool(player.get("is_ai", true)) or not _integer(data.get("current_player"), int(session.player_id), int(session.player_id)) or not _integer(data.get("turn"), int(session.turn), int(session.turn)): return ["stale source sale actor"]
-	if data.get("action_options") != [] or int(data.get("company_service_pending", 0)) != 0: return ["pending source sale has ordinary actions"]
+	if data.get("action_options") != [] or not _integer(data.get("company_service_pending", 0), 0, 0): return ["pending source sale has ordinary actions"]
 	for key in ["pending_bank_visit", "pending_trap", "pending_finance", "pending_auction", "pending_remote_dice"]:
 		if not data.get(key, {}) is Dictionary or not data.get(key, {}).is_empty(): return ["source sale overlaps another decision"]
 	return []

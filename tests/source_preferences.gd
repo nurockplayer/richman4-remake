@@ -123,3 +123,8 @@ func _test_hotkeys(prefs: RefCounted) -> void:
 	_expect_equal(prefs.hotkey_command(_key(KEY_R), bindings), "", "zero binding disables its command slot")
 	var defaults := HOTKEYS.new().defaults()
 	_expect_equal(prefs.hotkey_command(_key(KEY_SPACE), defaults), "roll", "source default slot maps roll")
+	_expect_equal(prefs.hotkey_command(_key(KEY_TAB), defaults), "view", "slot7 independently cycles view")
+	defaults[7] = 0x56
+	_expect_equal(prefs.hotkey_command(_key(KEY_TAB), defaults), "", "unknown slot6 TAB is not borrowed")
+	_expect_equal(prefs.hotkey_command(_key(KEY_V), defaults), "view", "slot7 remap reaches view")
+	_expect_equal(prefs.hotkey_command(_key(KEY_M), defaults), "map", "slot17 fullmap remains separate")

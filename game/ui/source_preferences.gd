@@ -11,6 +11,7 @@ const MUSIC_GAINS := [0.0, 0.6, 0.8, 0.9, 1.0]
 const MOVEMENT_SECONDS := [0.24, 0.16, 0.08]
 const SOURCE_TICKS := [6, 4, 2]
 const COMMAND_SLOTS := {
+	7: "view",
 	10: "roll",
 	12: "stocks",
 	14: "cards",

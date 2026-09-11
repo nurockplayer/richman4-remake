@@ -34,6 +34,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_sunday.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_refresh_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_input.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_view_modes.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_view_modes_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_controls.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_preferences.gd

@@ -11,7 +11,7 @@ const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
 const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
 const SourceTitlePanel = preload("res://game/ui/source_title_panel.gd")
-const GameCalendar = preload("res://game/core/game_calendar.gd")
+const SourceCalendar = preload("res://game/ui/source_calendar_panel.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
 const TOOLBAR_WIDTH := 440.0
@@ -80,7 +80,6 @@ var upgrade_button: Button
 var end_turn_button: Button
 var action_strip: Control
 var action_hint_label: Label
-var calendar_toggle_button: Button
 var portrait: TextureRect
 var player_name_label: Label
 var cash_caption: Label
@@ -92,12 +91,11 @@ var wealth_label: Label
 var property_label: Label
 var stock_label: Label
 var other_label: Label
-var date_label: Label
-var calendar_mode_label: Label
 
 var title_visible := true
 var active_tab := "cash"
-var calendar_mode := "day"
+var view_mode := 1
+var presentation_input_guard: Callable
 var full_map_visible := false
 var _inspect_player_index := -1
 var snapshot: Dictionary = {}
@@ -108,11 +106,9 @@ var _source_edition := "Game"
 var _source_title_texture: Texture2D
 var _source_panel_texture: Texture2D
 var _source_hud_texture: Texture2D
-var _source_calendar_texture: Texture2D
 var _title_art: TextureRect
 var _toolbar_art: TextureRect
 var _hud_art: TextureRect
-var _calendar_art: TextureRect
 var _last_camera_signature := ""
 
 
@@ -378,44 +374,12 @@ func _build_hud() -> void:
 
 
 func _build_calendar_and_minimap() -> void:
-	calendar_panel = Control.new()
+	calendar_panel = SourceCalendar.new()
 	calendar_panel.name = "SourceCalendar"
 	calendar_panel.position = CALENDAR_RECT.position
-	calendar_panel.size = CALENDAR_RECT.size
-	calendar_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	game_screen.add_child(calendar_panel)
-	var panel := ColorRect.new()
-	panel.name = "SourceCalendarFallback"
-	panel.color = Color("#d8e6d3")
-	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	calendar_panel.add_child(panel)
-	_calendar_art = TextureRect.new()
-	_calendar_art.name = "SourceCalendarArt"
-	_calendar_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_calendar_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-	_calendar_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_calendar_art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_calendar_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	calendar_panel.add_child(_calendar_art)
-	date_label = _label("日期未記錄", 18, Color("#193047"))
-	date_label.position = Vector2(12.0, 11.0)
-	date_label.size = Vector2(176.0, 28.0)
-	date_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	calendar_panel.add_child(date_label)
-	calendar_mode_label = _label("日曆", 10, Color("#416b68"))
-	calendar_mode_label.position = Vector2(12.0, 42.0)
-	calendar_mode_label.size = Vector2(176.0, 20.0)
-	calendar_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	calendar_panel.add_child(calendar_mode_label)
-	calendar_toggle_button = Button.new()
-	calendar_toggle_button.name = "CalendarToggle"
-	calendar_toggle_button.text = "月曆／地圖"
-	calendar_toggle_button.position = Vector2(47.0, 166.0)
-	calendar_toggle_button.size = Vector2(106.0, 26.0)
-	calendar_toggle_button.add_theme_font_size_override("font_size", 10)
-	calendar_toggle_button.pressed.connect(_toggle_calendar_mode)
-	calendar_panel.add_child(calendar_toggle_button)
+	calendar_panel.configure_assets(_visuals, _source_edition)
+	calendar_panel.set_input_guard(func() -> bool: return not presentation_input_guard.is_valid() or presentation_input_guard.call())
 	minimap = SourceMinimap.new()
 	minimap.name = "SourceMinimap"
 	minimap.position = CALENDAR_RECT.position
@@ -434,6 +398,7 @@ func _build_calendar_and_minimap() -> void:
 	full_map_view.pan_requested.connect(func(delta: Vector2) -> void: minimap_pan_requested.emit(delta))
 	full_map_view.node_selected.connect(func(index: int) -> void: minimap_node_requested.emit(index))
 	game_screen.add_child(full_map_view)
+	set_view_mode(view_mode)
 
 
 func _build_player_inspector() -> void:
@@ -503,20 +468,34 @@ func _emit_toolbar(key: String) -> void:
 
 
 func _select_tab(tab_id: String) -> void:
+	if view_mode == 2:
+		return
 	active_tab = tab_id
 	_render_hud()
 	tab_requested.emit(tab_id)
 
 
-func _toggle_calendar_mode() -> void:
-	calendar_mode = "map" if calendar_mode == "day" else "day"
-	calendar_panel.visible = calendar_mode != "map"
-	minimap.visible = calendar_mode == "map"
-	calendar_mode_label.text = "日曆" if calendar_mode == "day" else "地圖"
+func set_view_mode(value: int) -> bool:
+	if value < 0 or value > 2:
+		return false
+	view_mode = value
+	if calendar_panel == null or minimap == null:
+		return true
+	calendar_panel.visible = value != 1
+	minimap.visible = value != 0
+	minimap.position = Vector2(440, 80 if value == 2 else 280)
+	hud_panel.size = Vector2(200, 80 if value == 2 else 280)
+	_render_hud()
+	minimap.refresh_viewport()
+	return true
+
+
+func cycle_view_mode() -> void:
+	set_view_mode((view_mode + 1) % 3)
 
 
 func toggle_map_view() -> void:
-	_toggle_calendar_mode()
+	cycle_view_mode()
 
 
 func toggle_full_map_view() -> void:
@@ -856,42 +835,46 @@ func _render_hud() -> void:
 	for key in tab_buttons:
 		var tab: Button = tab_buttons[key]
 		tab.modulate = Color.WHITE if key == active_tab else Color(0.72, 0.82, 0.82, 1.0)
+	_layout_hud_mode()
 	if player_inspect_panel != null and player_inspect_panel.visible:
 		_render_player_inspector()
 
 
+func _layout_hud_mode() -> void:
+	var compact := view_mode == 2
+	for tab: Button in tab_buttons.values():
+		tab.visible = not compact
+		tab.mouse_filter = Control.MOUSE_FILTER_IGNORE if compact else Control.MOUSE_FILTER_STOP
+	player_name_label.position = Vector2(80, 4 if compact else 8)
+	player_name_label.size = Vector2(120 if compact else 88, 24)
+	cash_label.position = Vector2(80, 29) if compact else Vector2(66, 96)
+	deposit_label.position = Vector2(80, 51) if compact else Vector2(66, 159)
+	cash_label.size = Vector2(114, 24) if compact else Vector2(106, 30)
+	deposit_label.size = cash_label.size
+	cash_label.add_theme_font_size_override("font_size", 13 if compact else 16)
+	deposit_label.add_theme_font_size_override("font_size", 13 if compact else 16)
+	if compact:
+		for item in [cash_caption, deposit_caption, wealth_caption, wealth_label, property_label, stock_label, other_label]:
+			item.hide()
+		cash_label.show()
+		deposit_label.show()
+
+
 func _render_calendar() -> void:
-	if date_label == null:
-		return
-	var raw_date: Variant = snapshot.get("date", snapshot.get("start_date", null))
-	if raw_date is Dictionary and GameCalendar.is_valid(raw_date):
-		var weekday := int(snapshot.get("weekday", GameCalendar.weekday(raw_date)))
-		date_label.text = "%04d / %02d / %02d 週%s" % [int(raw_date.year), int(raw_date.month), int(raw_date.day), _weekday_text(weekday)]
-	else:
-		date_label.text = "日期未記錄"
-	calendar_mode_label.text = "日曆" if calendar_mode == "day" else "地圖"
-	_set_calendar_art(raw_date)
+	if calendar_panel != null:
+		calendar_panel.configure_assets(_visuals, _source_edition)
+		calendar_panel.present(snapshot)
+		# present() opens the standalone presenter; the shell owns view visibility.
+		calendar_panel.visible = view_mode != 1
 
 
 func _set_hud_art(tab_id: String) -> void:
 	if _hud_art == null:
 		return
-	var chunk: int = int({"cash": 0, "property": 1, "stock": 2, "other": 3}.get(tab_id, 0))
+	var chunk: int = 4 if view_mode == 2 else int({"cash": 0, "property": 1, "stock": 2, "other": 3}.get(tab_id, 0))
 	_source_hud_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 0, chunk))
 	_hud_art.texture = _source_hud_texture
 	_hud_art.visible = _source_hud_texture != null
-
-
-func _set_calendar_art(raw_date: Variant) -> void:
-	if _calendar_art == null:
-		return
-	_source_calendar_texture = null
-	if raw_date is Dictionary and GameCalendar.is_valid(raw_date):
-		var month := int(raw_date.get("month", 1))
-		var season := 0 if month in [3, 4, 5] else 1 if month in [6, 7, 8] else 2 if month in [9, 10, 11] else 3
-		_source_calendar_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 2, 4 + season))
-	_calendar_art.texture = _source_calendar_texture
-	_calendar_art.visible = _source_calendar_texture != null
 
 
 func _stock_display_name(symbol: String) -> String:

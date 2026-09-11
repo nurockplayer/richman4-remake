@@ -43,6 +43,9 @@ var _selected_number := 0
 var _continued_emitted := false
 var _source_art_available := false
 var _source_frames: Dictionary = {}
+var _presentation_elapsed := 0.0
+var _draw_stage := 0
+var _animation_nodes: Dictionary = {}
 
 
 func _init() -> void:
@@ -67,6 +70,8 @@ func set_view_model(model: Dictionary) -> bool:
 	_selected_number = 0
 	_continued_emitted = false
 	_source_frames.clear()
+	_presentation_elapsed = 0.0
+	_draw_stage = 0
 	_render()
 	show()
 	return _model_valid
@@ -76,6 +81,7 @@ func set_view_model(model: Dictionary) -> bool:
 ## object exposing ui()/texture() is accepted; animation providers may expose
 ## animation_frame()/frame()/animation().
 func set_visuals(accessor: Variant) -> void:
+	if _visual_accessor == accessor: return
 	if accessor is Dictionary:
 		_visual_accessor = (accessor as Dictionary).duplicate(true)
 	else:
@@ -283,7 +289,8 @@ func _select_ticket(number: int) -> bool:
 	_selected_number = number
 	_is_open = false
 	_closed = true
-	hide()
+	_add_selected_overlay(number)
+	if has_node("LotteryPrompt"): get_node("LotteryPrompt").text = "祝你中大獎！"
 	ticket_selected.emit(number)
 	return true
 
@@ -292,6 +299,7 @@ func _render() -> void:
 	for child in get_children():
 		child.free()
 	_source_frames.clear()
+	_animation_nodes.clear()
 	_source_art_available = false
 	if not _model_valid:
 		size = REFERENCE_SIZE
@@ -302,75 +310,164 @@ func _render() -> void:
 		_render_purchase()
 	else:
 		_render_draw()
+		_draw_stage = -1
+		_process(0.0)
 
 
 func _render_purchase() -> void:
-	size = REFERENCE_SIZE
-	custom_minimum_size = REFERENCE_SIZE
 	_add_source_or_fallback("LotteryPurchaseBackground", 12, 0, Vector2.ZERO, REFERENCE_SIZE, "purchase_background")
-	_add_source_or_fallback("LotteryDealer", 12, 1, Vector2(210.0, -5.0), SOURCE_LOGICAL_SIZES.dealer, "dealer")
-	_add_source_or_fallback("LotteryAmountPlaque", 12, 9, Vector2(8.0, 8.0), SOURCE_LOGICAL_SIZES.amount, "amount")
-	# Panel12 already contains the 01–36 legends.  Targets are transparent.
+	_add_source_or_fallback("LotteryDealer", 12, 1, Vector2(210, -5), SOURCE_LOGICAL_SIZES.dealer, "dealer")
+	_add_source_or_fallback("LotterySpeech", 12, 8, Vector2(360, 20), SOURCE_LOGICAL_SIZES.speech, "speech")
+	_add_animation_or_placeholder("LotteryPoolAnimation", 14, Vector2(8, 8), Vector2(213, 68), 5)
+	_add_source_or_fallback("LotteryAmountPlaque", 12, 9, Vector2(28, 27), SOURCE_LOGICAL_SIZES.amount, "amount")
+	_add_dynamic_label("LotteryJackpot", "$" + _numeric_display(_model.jackpot), Rect2(28, 27, 172, 28), 18, Color("#fff2b4"))
+	var amount_label := get_node("LotteryJackpot") as Label
+	amount_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	if _source_currency(int(_model.jackpot)): amount_label.hide()
+	var prompt := "選一個幸運號碼！\n每張彩券 $1,000"
+	if int(_model.cash) < TICKET_PRICE: prompt = "現金不足\n下次再來吧！"
+	elif (_model.tickets as Array).count(0) == 0: prompt = "彩券已售完\n下次再來吧！"
+	_add_dynamic_label("LotteryPrompt", prompt, Rect2(400, 54, 180, 105), 20, Color("#101010"))
 	for number in range(1, TICKET_COUNT + 1):
 		var cell := number - 1
-		var rect := Rect2(GRID_ORIGIN + Vector2(float(cell % 9) * CELL_SIZE.x, float(cell / 9) * CELL_SIZE.y), CELL_SIZE)
 		var target := Button.new()
 		target.name = "LotteryTicket%02d" % number
-		target.position = rect.position
-		target.size = rect.size
-		target.custom_minimum_size = rect.size
-		target.text = ""
+		target.position = GRID_ORIGIN + Vector2((cell % 9) * 64, int(cell / 9) * 48)
+		target.size = CELL_SIZE
 		target.focus_mode = Control.FOCUS_NONE
 		target.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		_set_button_transparent(target)
 		target.gui_input.connect(_on_ticket_gui_input.bind(number))
 		add_child(target)
-		if is_ticket_sold(number):
-			_add_sold_overlay(number, cell)
-	if _selected_number > 0:
-		_add_selected_overlay(_selected_number)
-	var cash := _numeric_display(_model.get("cash", null))
-	var jackpot := _numeric_display(_model.get("jackpot", null))
-	_add_dynamic_label("LotteryCash", "現金 %s" % cash, Rect2(16, 38, 165, 24), 14, Color("#f5eab0"))
-	_add_dynamic_label("LotteryJackpot", "獎金池 %s" % jackpot, Rect2(16, 8, 172, 28), 15, Color("#f5eab0"))
-	_add_dynamic_label("LotteryPrompt", "選擇 01–36", Rect2(28, 246, 270, 24), 16, Color("#f5eab0"))
-	_add_dynamic_label("LotteryPlayer", _player_name(int(_model.get("player_id", -1))), Rect2(420, 235, 180, 26), 15, Color("#f5eab0"))
-	if _source_art_available:
-		# The original background contains static legends; do not draw a second
-		# title/number grid over it. Runtime values remain inspectable in nodes.
-		for key in ["LotteryCash", "LotteryJackpot", "LotteryPrompt", "LotteryPlayer"]:
-			var label := find_child(key, true, false) as Label
-			if label != null:
-				label.hide()
+		if is_ticket_sold(number): _add_sold_overlay(number, cell)
+	if _selected_number > 0: _add_selected_overlay(_selected_number)
 
 
 func _render_draw() -> void:
-	size = REFERENCE_SIZE
-	custom_minimum_size = REFERENCE_SIZE
 	_add_source_or_fallback("LotteryDrawBackground", 15, 0, Vector2.ZERO, REFERENCE_SIZE, "draw_background")
-	_add_source_or_fallback("LotteryDrawHeart", 15, 22, Vector2(40.0, 210.0), SOURCE_LOGICAL_SIZES.heart, "heart")
-	_add_source_or_fallback("LotteryDrawBurst", 15, 23, Vector2(120.0, 98.0), SOURCE_LOGICAL_SIZES.burst, "burst")
-	_add_source_or_fallback("LotteryDrawRedBurst", 15, 24, Vector2(147.0, 130.0), SOURCE_LOGICAL_SIZES.red_burst, "red_burst")
-	# FLIC callers preserve palette index zero for Panel14/17 and use opaque
-	# Panel16.  The accessor may supply a decoded first frame by this contract.
-	_add_animation_or_placeholder("LotteryPoolAnimation", 14, Vector2(8.0, 8.0), Vector2(213.0, 68.0), 5)
-	_add_animation_or_placeholder("LotteryDrumAnimation", 16, Vector2(183.0, 75.0), Vector2(275.0, 270.0), 8)
-	_add_animation_or_placeholder("LotteryRedBallAnimation", 17, Vector2(205.0, 0.0), Vector2(280.0, 480.0), 1)
-	var number := int(_model.get("number", 0))
-	var winner: Variant = _model.get("winner_id", null)
-	var winner_text: String = "無人中獎" if winner == null or int(winner) < 0 else _player_name(int(winner))
-	_add_dynamic_label("LotteryDrawNumber", "開獎號碼 %02d" % number if number > 0 else "本期無開獎", Rect2(332, 266, 272, 34), 22, Color("#f5eab0"))
-	_add_dynamic_label("LotteryWinner", "中獎者 %s" % winner_text, Rect2(332, 306, 272, 30), 18, Color("#fff2b4"))
-	_add_dynamic_label("LotteryAward", "獎金 %s" % _numeric_display(_model.get("amount", 0)), Rect2(332, 342, 272, 30), 18, Color("#fff2b4"))
-	_add_dynamic_label("LotteryPool", "獎金池 %s" % _numeric_display(_model.get("jackpot", 0)), Rect2(332, 378, 272, 28), 15, Color("#fff2b4"))
-	var participants := _participant_text()
-	_add_dynamic_label("LotteryParticipants", participants, Rect2(332, 410, 272, 44), 13, Color("#fff2b4"))
-	_add_dynamic_label("LotteryContinue", "左鍵返回", Rect2(492, 447, 120, 24), 14, Color("#fff2b4"))
-	if _source_art_available:
-		for key in ["LotteryDrawNumber", "LotteryWinner", "LotteryAward", "LotteryPool", "LotteryParticipants", "LotteryContinue"]:
-			var label := find_child(key, true, false) as Label
-			if label != null:
-				label.hide()
+	_source_sprite("LotteryHostRight", 15, 1, Vector2(472,66))
+	_source_sprite("LotteryHostLeft", 15, 3, Vector2(7,66))
+	_add_dynamic_label("LotteryPoolTitle", "累積獎金", Rect2(12,180,130,26), 20, Color("#b1354f"))
+	_add_dynamic_label("LotteryPool", "$" + _numeric_display(_model.jackpot), Rect2(12,215,130,26), 20, Color.RED)
+	_add_animation_or_placeholder("LotteryDrumAnimation", 16, Vector2(183,75), Vector2(275,270), 8)
+	_add_animation_or_placeholder("LotteryRedBallAnimation", 17, Vector2(205,0), Vector2(280,480), 1)
+	if has_node("LotteryRedBallAnimation"): get_node("LotteryRedBallAnimation").hide()
+	# Keep one staged outcome, not three simultaneous speech overlays.
+	_source_sprite("LotteryOutcomeBubble", 15, 24, Vector2(320,200))
+	if has_node("LotteryOutcomeBubble"): get_node("LotteryOutcomeBubble").hide()
+	_add_dynamic_label("LotteryWinner", "無人中獎" if int(_model.get("winner_id", -1)) < 0 else _player_name(int(_model.winner_id)), Rect2(205,155,230,54), 26, Color("#e02020"))
+	get_node("LotteryWinner").hide()
+	_source_sprite("LotteryTens", 15, 37 + int(int(_model.number) / 10), Vector2(286,405))
+	_source_sprite("LotteryUnits", 15, 37 + int(_model.number) % 10, Vector2(358,405))
+	for node_name in ["LotteryTens","LotteryUnits"]:
+		if has_node(node_name): get_node(node_name).hide()
+	_add_dynamic_label("LotteryDrawNumber", "%02d" % int(_model.number), Rect2(250,370,140,70), 48, Color.WHITE)
+	get_node("LotteryDrawNumber").hide()
+	_render_ticket_list()
+
+
+func _render_ticket_list() -> void:
+	var list := Control.new()
+	list.name = "LotteryParticipants"
+	list.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(list)
+	var entries: Array = _model.players.filter(func(player: Variant) -> bool: return player is Dictionary and bool(player.get("alive", true)))
+	var origins := [Vector2(16,340),Vector2(16,410),Vector2(328,340),Vector2(328,410)]
+	for row in range(mini(4, entries.size())):
+		var entry: Dictionary = entries[row]
+		var origin: Vector2 = origins[row]
+		var shade := ColorRect.new()
+		shade.position = origin
+		shade.size = Vector2(296,60)
+		shade.color = Color(0,0,0,0.35)
+		shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		list.add_child(shade)
+		var character_id := int(entry.get("character_id", -1))
+		if character_id >= 0 and character_id < 12:
+			var icon := _source_sprite("LotteryPlayer%d" % row,15,25+character_id,origin+Vector2(20,30))
+			if icon != null: icon.reparent(list)
+		var numbers: Array = []
+		for slot in range(36):
+			if int(_model.tickets[slot]) == int(entry.id)+1: numbers.append(slot+1)
+		for index in range(mini(12,numbers.size())):
+			var y := 30 if numbers.size() <= 6 else (15 if index < 6 else 45)
+			var anchor := origin + Vector2(54+(index%6)*40,y)
+			for digit in range(2):
+				var value := int(int(numbers[index])/10) if digit == 0 else int(numbers[index])%10
+				var sprite := _source_sprite("LotteryTicketRow%d_%d_%d" % [row,index,digit],13,value,anchor+Vector2(digit*16,0))
+				if sprite != null: sprite.reparent(list)
+
+
+func _source_sprite(node_name: String, resource: int, chunk: int, anchor: Vector2) -> TextureRect:
+	var texture: Variant = _resolve_chunk_visual(resource,chunk,"%s.Panel%d.chunk%d" % [_edition,resource,chunk])
+	if not texture is Texture2D: return null
+	var logical := {"width":texture.get_width(),"height":texture.get_height(),"anchor_x":0,"anchor_y":0}
+	if _visual_accessor is Object and _visual_accessor.has_method("ui"):
+		var record: Dictionary = _visual_accessor.ui(_edition,"Panel",resource,chunk)
+		logical = record.get("logical",logical)
+	var sprite := _sprite(texture,Vector2(logical.get("width",texture.get_width()),logical.get("height",texture.get_height())))
+	sprite.name = node_name
+	sprite.position = anchor - Vector2(logical.get("anchor_x",0),logical.get("anchor_y",0))
+	add_child(sprite)
+	return sprite
+
+
+func _source_currency(amount: int) -> bool:
+	var digit: Variant = _resolve_chunk_visual(13,0,"%s.Panel13.chunk0" % _edition)
+	if not digit is Texture2D or digit.get_width() < 7: return false
+	var text := "$" + _numeric_display(amount)
+	# Large remake values exceed the source plaque; keep the complete label.
+	if text.length()*18 - text.count(",")*12 > 172: return false
+	var x := 184
+	for index in range(text.length()-1,-1,-1):
+		var character := text[index]
+		var chunk := int(character) if character in "0123456789" else (10 if character == "," else 11)
+		if character == ",": x += 6
+		_source_sprite("LotteryCurrency%d" % index,13,chunk,Vector2(x,41))
+		x -= 12 if character == "," else 18
+	return true
+
+
+func _process(delta: float) -> void:
+	if not visible or not _model_valid: return
+	_presentation_elapsed += delta
+	if _kind == "purchase":
+		_update_animation(14,int(_presentation_elapsed/0.1)%5)
+		return
+	var stage := 0 if _presentation_elapsed < 2.1 else (1 if _presentation_elapsed < 3.95 else 2)
+	if stage != _draw_stage:
+		_draw_stage = stage
+		if has_node("LotteryDrumAnimation"): get_node("LotteryDrumAnimation").visible = stage == 0
+		if has_node("LotteryRedBallAnimation"): get_node("LotteryRedBallAnimation").visible = stage >= 1
+		if has_node("LotteryParticipants"): get_node("LotteryParticipants").visible = stage == 0
+		if has_node("LotteryOutcomeBubble"): get_node("LotteryOutcomeBubble").visible = stage == 2
+		get_node("LotteryWinner").visible = stage == 2
+		if stage == 2 and int(_model.get("winner_id", -1)) >= 0:
+			for host in ["LotteryHostLeft", "LotteryHostRight"]:
+				if has_node(host): get_node(host).free()
+			_source_sprite("LotteryHostRight",15,5,Vector2(505,66))
+			_source_sprite("LotteryHostLeft",15,6,Vector2.ZERO)
+			# The source raised sign moves its text centers to (91,19)/(91,56).
+			get_node("LotteryPoolTitle").position = Vector2(26,6)
+			get_node("LotteryPool").position = Vector2(26,43)
+			move_child(get_node("LotteryPoolTitle"),get_child_count()-1)
+			move_child(get_node("LotteryPool"),get_child_count()-1)
+		for node_name in ["LotteryTens","LotteryUnits"]:
+			if has_node(node_name): get_node(node_name).visible = stage == 2
+		get_node("LotteryDrawNumber").visible = stage == 2 and not has_node("LotteryTens")
+	_update_animation(16,mini(41,int(_presentation_elapsed/0.05)))
+	_update_animation(17,clampi(int((_presentation_elapsed-2.1)/0.05),0,36))
+
+
+func _update_animation(resource: int, frame: int) -> void:
+	if not _animation_nodes.has(resource): return
+	var node: TextureRect = _animation_nodes[resource]
+	if not is_instance_valid(node) or int(node.get_meta("frame",-1)) == frame: return
+	var texture: Variant = _resolve_animation_frame(resource,frame,"%s.Panel%d.frame%d" % [_edition,resource,frame])
+	if not texture is Texture2D: return
+	node.texture = texture
+	node.set_meta("frame",frame)
+	_source_frames["animation_%d" % resource]["frame"] = frame
 
 
 func _on_ticket_gui_input(event: InputEvent, number: int) -> void:
@@ -399,13 +496,11 @@ func _add_sold_overlay(number: int, cell: int) -> void:
 
 func _add_selected_overlay(number: int) -> void:
 	var cell := number - 1
-	var overlay := ColorRect.new()
-	overlay.name = "LotterySelected%02d" % number
-	overlay.position = GRID_ORIGIN + Vector2(float(cell % 9) * CELL_SIZE.x + 2.0, float(cell / 9) * CELL_SIZE.y + 2.0)
-	overlay.size = Vector2(60.0, 44.0)
-	overlay.color = Color(0.95, 0.82, 0.18, 0.28)
-	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(overlay)
+	var center := GRID_ORIGIN + Vector2((cell % 9) * 64 + 32, int(cell / 9) * 48 + 24)
+	_source_sprite("LotterySelected%02d" % number,12,7,center)
+
+func purchase_confirmation_seconds() -> float:
+	return 0.5 if _selected_number > 0 else 0.0
 
 
 func _add_source_or_fallback(node_name: String, resource: int, chunk: int, origin: Vector2, logical_size: Vector2, role: String) -> void:
@@ -436,6 +531,8 @@ func _add_animation_or_placeholder(node_name: String, resource: int, origin: Vec
 		item.position = origin
 		item.set_meta("source_resource", resource)
 		item.set_meta("source_flags", flags)
+		item.set_meta("frame", 0)
+		_animation_nodes[resource] = item
 		add_child(item)
 		_source_frames["animation_%d" % resource] = {"resource": resource, "frame": 0, "origin": origin, "size": logical_size, "flags": flags, "available": true}
 		return
@@ -590,11 +687,18 @@ func _validate_model(model: Dictionary) -> bool:
 			return false
 	if not _valid_nonnegative_integer(model.get("jackpot", null)):
 		return false
-	if typeof(model.get("players", null)) != TYPE_ARRAY:
+	if typeof(model.get("players", null)) != TYPE_ARRAY or model.players.is_empty() or model.players.size() > 4:
 		return false
+	var ids: Array = []
+	for player in model.players:
+		if not player is Dictionary or not _valid_integer_in_range(player.get("id"),0,3) or not player.get("name") is String or player.name.is_empty(): return false
+		if ids.has(int(player.id)): return false
+		ids.append(int(player.id))
+		if player.has("character_id") and not _valid_integer_in_range(player.character_id,0,11): return false
+		if player.has("alive") and not player.alive is bool: return false
 	if _kind == "purchase":
 		return _valid_nonnegative_integer(model.get("cash", null)) and _valid_nonnegative_integer(model.get("player_id", null))
-	if not _valid_integer_in_range(model.get("number", null), 0, TICKET_COUNT):
+	if not _valid_integer_in_range(model.get("number", null), 1, TICKET_COUNT):
 		return false
 	if not _valid_nonnegative_integer(model.get("amount", null)):
 		return false
@@ -603,14 +707,7 @@ func _validate_model(model: Dictionary) -> bool:
 
 
 func _valid_ticket_slot(value: Variant) -> bool:
-	if value == null:
-		return true
-	if typeof(value) == TYPE_BOOL:
-		return false
-	if typeof(value) in [TYPE_INT, TYPE_FLOAT]:
-		var number := float(value)
-		return is_finite(number) and floor(number) == number and number >= -1.0
-	return false
+	return _valid_integer_in_range(value,0,4)
 
 
 func _valid_nonnegative_integer(value: Variant) -> bool:
@@ -671,17 +768,3 @@ func _player_name(player_id: int) -> String:
 	return "玩家 %d" % player_id if player_id >= 0 else "—"
 
 
-func _participant_text() -> String:
-	var tickets: Array = _model.get("tickets", [])
-	var names: Array[String] = []
-	for index in range(mini(TICKET_COUNT, tickets.size())):
-		if not _slot_sold(tickets[index]):
-			continue
-		var owner := int(tickets[index]) if typeof(tickets[index]) in [TYPE_INT, TYPE_FLOAT] else -1
-		var name := _player_name(owner)
-		names.append("%02d %s" % [index + 1, name])
-		if names.size() >= 6:
-			break
-	if names.is_empty():
-		return "參與者：無"
-	return "參與者：" + "、".join(names)

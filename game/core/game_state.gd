@@ -27,6 +27,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SpecialFinance = preload("res://game/core/special_finance.gd")
+const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const MonthlyStatements = preload("res://game/core/monthly_statements.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -1197,6 +1198,7 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 	state["company_service_pending"] = 0
 	state["company_months"] = 0
 	state["jackpot"] = 0
+	LotteryFlow.initialize(state)
 	for company in state.companies:
 		company["owner"] = -1
 		company["treasury"] = 10000 - int(state.market.rows[OriginalStockMarket.symbol(int(company.stock_index))].market_supply)
@@ -2308,7 +2310,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase == "game_over":
+	if phase in ["game_over", "await_lottery"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -4627,6 +4629,8 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 					_record_event("bank_landed", {"player_id": player_id, "tile": tile_index})
 				elif not bank_passed_before_god:
 					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
+		"lottery":
+			if final_landing: LotteryFlow.admit(self, player_id)
 		"unsupported":
 			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
 
@@ -4838,7 +4842,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") != "game_over":
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_lottery"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5125,6 +5129,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
+	LotteryFlow.clear_player(state, debtor_id)
 	AllianceRules.clear_for_player(self, debtor_id)
 	var debtor_is_current: bool = int(state.get("current_player", -1)) == debtor_id
 	var was_current_movement: bool = debtor_is_current and state.get("phase", "") in ["await_roll", "await_route"]
@@ -5275,6 +5280,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
+	if state.get("phase", "") == "await_lottery":
+		return _error("請先完成彩券購買事件")
 	var normalized: String = action.to_lower().strip_edges()
 	if _trustee_ai_dispatch and not TrusteeStrategy.action_allowed(state, normalized, params):
 		return _error("託管設定停用此操作")
@@ -6588,6 +6595,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			if not _is_companies():
 				_decrement_market_trends()
 			_settle_company_dividends()
+			LotteryFlow.settle_day(self)
 			_apply_month_boundary()
 			if state.get("phase", "") == "game_over":
 				return
@@ -7021,6 +7029,8 @@ func _run_ai_turn_dispatch() -> Dictionary:
 			var roll_result: Dictionary = roll()
 			if not bool(roll_result.get("ok", false)):
 				return _result(false, str(roll_result.get("message", "AI 擲骰失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
+		elif state.get("phase", "") == "await_lottery":
+			LotteryFlow.ai_turn(self)
 		elif state.get("phase", "") == "await_action":
 			if not bool(_player(player_id).get("alive", false)):
 				_advance_to_next_alive(player_id)
@@ -8026,7 +8036,7 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		var kind: Variant = tile.get("kind", null)
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
-		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate"]
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate", "lottery"]
 		if facility_mode:
 			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
@@ -8464,10 +8474,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if graph_save:
 		allowed_phases.append("await_route")
 	if companies_save:
-		allowed_phases.append("await_bank")
+		allowed_phases.append_array(["await_bank", "await_lottery"])
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	var lottery_errors: Array = LotteryFlow.validate(data, companies_save)
+	if not lottery_errors.is_empty():
+		errors.append_array(lottery_errors)
+		return {"ok": false, "errors": errors}
 	var bank_visit_errors: Array = BankVisit.validate(data, companies_save)
 	if not bank_visit_errors.is_empty():
 		# Reject malformed encounter fields before downstream cross-field checks
@@ -8813,7 +8827,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("board index mismatch %d" % index)
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
-				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate"])
+				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate", "lottery"])
 			if facility_save:
 				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
@@ -9777,6 +9791,8 @@ static func _canonicalize_json_numbers(value: Variant) -> Variant:
 static func from_dict(data: Dictionary) -> Richman4GameState:
 	var candidate: Dictionary = data.duplicate(true)
 	_migrate_news_source_kind(candidate)
+	if bool(candidate.get("original_companies", false)) and not candidate.has("lottery_tickets") and not candidate.has("lottery_draw_day") and not candidate.has("lottery_pending"):
+		LotteryFlow.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -9818,6 +9834,8 @@ static func _migrate_news_source_kind(data: Dictionary) -> void:
 		var tile: Dictionary = tile_value
 		if int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 2 and str(tile.get("kind", "")) == "unsupported":
 			tile["kind"] = "news"
+		elif int(tile.get("type_and_idx", -1)) >= 0 and int(tile.get("type_and_idx", -1)) < 2001 and int(tile.get("event_code", -1)) == 9 and str(tile.get("kind", "")) == "unsupported":
+			tile["kind"] = "lottery"
 		elif int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 3 and str(tile.get("kind", "")) in ["rest", "unsupported"]:
 			tile["kind"] = "fate"
 
@@ -9842,3 +9860,10 @@ static func load_from_path(path: String) -> Richman4GameState:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return null
 	return from_dict(parsed)
+
+
+func purchase_lottery(number: int) -> Dictionary:
+	return LotteryFlow.purchase(self, number)
+
+func leave_lottery() -> Dictionary:
+	return LotteryFlow.leave(self)

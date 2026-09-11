@@ -146,6 +146,35 @@ func run() -> void:
 	ui._autosave_failure_dialog.confirmed.emit()
 	await settle()
 	check(storage.attempts == 5 and not ui._source_autosave.pending(), "new owner retry requires its current dialog")
+	# Window X may deliver close_requested without canceled. It must release
+	# this checkpoint without another write and restore every actor/menu gate.
+	game = monthly_game(9)
+	ui._cancel_presentation()
+	ui.game_state = game
+	ui._refresh_from_state()
+	disk.fail_rename = true
+	ui._on_end_turn_pressed()
+	await settle()
+	check(storage.attempts == 6 and ui._source_autosave.failed() and ui._autosave_failure_dialog.visible, "close-request fixture reaches real rename failure")
+	var before_close: String = game.to_json()
+	ui._autosave_failure_dialog.close_requested.emit()
+	await settle()
+	check(not ui._source_autosave.pending() and not ui._autosave_failure_dialog.visible, "close_requested alone hides dialog and skips pending checkpoint")
+	check(storage.attempts == 6 and game.to_json() == before_close, "window close neither retries nor mutates ledger/RNG")
+	ui._on_source_load_requested()
+	await settle()
+	check(ui.source_save_menu.visible, "window close restores ordinary load ingress")
+	ui.source_save_menu.cancel()
+	ui._on_source_start_requested()
+	check(ui.source_shell.is_setup_visible(), "window close restores new-game ingress")
+	ui._on_source_setup_cancelled()
+	result = ui._invoke_game("roll")
+	check(result.get("ok", false), "window close restores the admitted actor")
+	ui._handle_result(result)
+	for _frame in range(500):
+		if not ui._presentation_busy: break
+		await create_timer(0.01).timeout
+	disk.fail_rename = false
 	# Exercise the ordinary factory and its selected catalog definition, without
 	# injecting elapsed/date/phase. AI public turns must reach an actual wrap.
 	var map: Dictionary = ui._map_catalog[0]

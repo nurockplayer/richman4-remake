@@ -43,7 +43,7 @@ and presentation generation.
 
 Failure keeps the previous file intact and opens a visible Retry / Skip this
 checkpoint dialog. Retry submits the same admitted snapshot; there is no busy
-retry loop. Skip resumes the game, and the next actual enabled wrap can save
+retry loop. Skip, including the window close X, resumes the game; the next actual enabled wrap can save
 again. This error dialog uses the existing Godot dialog style; its original-game
 appearance is not accepted.
 
@@ -58,10 +58,9 @@ ordinary OS-focus/physical input, the inherited monthly focus HOLD, current
 package and all 36 screen/flow acceptance groups remain open. No package or
 full asset duplication is part of this lane.
 
-The current native capture harness has an additional unresolved render-stability
-boundary: an expansion AUTO capture was partial; a diagnostic obtained a complete
-ordinary frame, but forced and subsequent captures were black with unchanged
-555×451 source-frame/texture geometry and six rows. These artifacts are retained;
-no speculative production rendering change was made. A good individual capture
-is not evidence that this boundary is stable. This is separate from the inherited
-monthly focus HOLD.
+A multi-image preview initially appeared partial or black. A later read-only
+artifact audit found that the ordinary, forced and delayed catalog PNG files are
+byte-identical, with the entire source panel body present; single-image inspection
+confirmed the complete frame. This retracts the earlier apparent native-render
+failure claim. No production rendering change was made. The audit does not prove
+physical input or remove the inherited monthly native-focus HOLD.

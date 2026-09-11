@@ -4887,11 +4887,15 @@ func _flush_source_autosave() -> void:
 			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
 			_source_autosave.retry()
 			_flush_source_autosave.call_deferred())
-		dialog.canceled.connect(func() -> void:
+		var skip_checkpoint := func() -> void:
 			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
+			dialog.hide()
 			_source_autosave.skip()
 			_ai_pending = false
-			_refresh_from_state())
+			_refresh_from_state()
+		dialog.canceled.connect(skip_checkpoint)
+		# Window X can emit only close_requested; it shares Skip semantics.
+		dialog.close_requested.connect(skip_checkpoint)
 		add_child(dialog)
 		_autosave_failure_dialog.dialog_text = "未寫入新的 AUTO 存檔。可以重試，或略過本次並繼續遊戲。"
 		_autosave_failure_dialog.popup_centered()

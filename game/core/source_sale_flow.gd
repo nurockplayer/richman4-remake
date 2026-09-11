@@ -290,6 +290,44 @@ static func _accept(game: Object, buyer_id: int, offer: Dictionary) -> Dictionar
 	game._record_event("sale_accepted", {"seller_id": seller_id, "buyer_id": buyer_id, "category": category, "source_id": source_id, "quantity": quantity, "amount": amount, "offer_id": int(offer.offer_id)})
 	return game._result(true, "交易完成", {"offer_id": int(offer.offer_id)})
 
+static func _ai_listing_candidates(game: Object, player_id: int) -> Dictionary:
+	var player: Dictionary = game._player(player_id)
+	var candidates: Array = []
+	var category := "card"
+	if player.cards.size() > 12:
+		# The source weights every ordered pair of equal card slots.
+		for first in range(player.cards.size()):
+			for second in range(player.cards.size()):
+				if first != second and player.cards[first] == player.cards[second]: candidates.append(int(Catalogue.card(str(player.cards[first])).source_id))
+	if candidates.is_empty():
+		category = "tool"
+		var preferences: Dictionary = TrusteePreferences.for_player(game.state, player_id)
+		var personality := int(preferences.get("personality", CHARACTER_PERSONALITY[clampi(int(player.get("character_id", 0)),0,11)]))
+		for item in Catalogue.tools():
+			var quantity := int(player.tools.get(item.id, 0))
+			if quantity >= 3 or quantity > 0 and int(item.source_flags[1]) - personality == 2: candidates.append(int(item.source_id))
+	return {"category": category, "candidates": candidates}
+
+
+static func _ai_has_offer_action(game: Object, player_id: int) -> bool:
+	var board: Dictionary = game.state.sale_board
+	for offer in board.offers[player_id]:
+		if offer.category in ["tool", "card"] and int(offer.revision) < ID_LIMIT:
+			var reference := reference_value(game, str(offer.category), int(offer.source_id))
+			if reference > 0 and reference <= LIMIT and int(offer.asking) != reference: return true
+	var player: Dictionary = game._player(player_id)
+	for seller_offers in board.offers:
+		for offer in seller_offers:
+			if int(offer.seller_id) == player_id: continue
+			var reference := reference_value(game, str(offer.category), int(offer.source_id), int(offer.quantity))
+			var affordable := int(player.cash) >= int(offer.asking)
+			var desirable := false
+			if offer.category == "stock": desirable = int(int(offer.asking) / int(offer.quantity)) < float(game.state.market.prices[Market.symbol(int(offer.source_id))])
+			elif offer.category == "property": desirable = int(offer.asking) < reference * 3 and int(player.cash) > int(offer.asking) * 2
+			if affordable and desirable: return true
+	return false
+
+
 static func ai_turn(game: Object) -> void:
 	if not _ordinary(game, false) or game.state.phase != "await_roll": return
 	var player_id := int(game.state.current_player)
@@ -299,21 +337,15 @@ static func ai_turn(game: Object) -> void:
 	board.ai_last_turn[str(player_id)] = turn
 	cleanup(game)
 	var player: Dictionary = game._player(player_id)
+	var listing: Dictionary = _ai_listing_candidates(game, player_id)
+	# A SALE pass with no possible listing, repricing or purchase is a no-op.
+	# It must not perturb the established game RNG used by later roll/card AI.
+	if listing.candidates.is_empty() and not _ai_has_offer_action(game, player_id):
+		game._sync_state()
+		return
 	if game._rng.randi_range(0, 14) == 0:
-		var candidates: Array = []
-		var category := "card"
-		if player.cards.size() > 12:
-			# The source weights every ordered pair of equal card slots.
-			for first in range(player.cards.size()):
-				for second in range(player.cards.size()):
-					if first != second and player.cards[first] == player.cards[second]: candidates.append(int(Catalogue.card(str(player.cards[first])).source_id))
-		if candidates.is_empty():
-			category = "tool"
-			var preferences: Dictionary = TrusteePreferences.for_player(game.state, player_id)
-			var personality := int(preferences.get("personality", CHARACTER_PERSONALITY[clampi(int(player.get("character_id", 0)),0,11)]))
-			for item in Catalogue.tools():
-				var quantity := int(player.tools.get(item.id, 0))
-				if quantity >= 3 or quantity > 0 and int(item.source_flags[1]) - personality == 2: candidates.append(int(item.source_id))
+		var candidates: Array = listing.candidates
+		var category := str(listing.category)
 		if not candidates.is_empty():
 			var source_id := int(candidates[game._rng.randi_range(0, candidates.size()-1)])
 			if board.offers[player_id].size() >= 7: board.offers[player_id].pop_front()

@@ -245,9 +245,15 @@ func test_save_validation() -> void:
 func test_ai_continuation() -> void:
 	var game := sale_game()
 	game.set_player_ai(0,true)
+	for tool_id in game.state.players[0].tools.keys():
+		Inventory.consume_tool(game.state.inventory_supply, game.state.players[0].tools, tool_id, int(game.state.players[0].tools[tool_id]))
+	for card_id in game.state.players[0].cards.duplicate():
+		Inventory.consume_card(game.state.inventory_supply, game.state.players[0].cards, card_id)
 	game.state.phase = "await_roll"
 	game._set_action_options(0)
+	var rng_before := str(game.to_dict().rng_state_text)
 	Sale.ai_turn(game)
+	expect(str(game.to_dict().rng_state_text) == rng_before,"idle SALE AI preserves the established gameplay RNG")
 	var saved: String = game.to_json()
 	Sale.ai_turn(game)
 	expect(game.to_json() == saved,"AI listing/purchase policy runs once per turn")

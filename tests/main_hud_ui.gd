@@ -98,9 +98,17 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	game._sync_state()
 	ui._refresh_from_state()
 	_expect(not shell.is_title_visible(), "new game enters the source board screen")
-	for key in ["ai", "tools", "cards", "sale"]:
+	for key in ["tools", "cards", "sale"]:
 		var pending_control: Button = shell.toolbar_buttons.get(key) as Button
 		_expect(pending_control != null and pending_control.visible and pending_control.disabled, "source %s command stays visibly pending" % key)
+	# Issue151 connects the ordinary AI command to the trustee draft.
+	var trustee_control: Button = shell.toolbar_buttons.get("ai") as Button
+	_expect(trustee_control != null and trustee_control.visible and not trustee_control.disabled, "source AI command is available on the active board")
+	var trustee_before: String = game.to_json()
+	trustee_control.pressed.emit()
+	_expect(ui.source_trustee_controller.is_open(), "source AI control opens the real trustee host")
+	ui.source_trustee_controller.cancel()
+	_expect(not ui.source_trustee_controller.is_open() and game.to_json() == trustee_before, "trustee cancellation preserves the live match and RNG")
 	# Issue147 replaces only the old options-pending expectation: the ordinary
 	# system control must now open its host and return without changing the game.
 	var options_control: Button = shell.toolbar_buttons.get("options") as Button

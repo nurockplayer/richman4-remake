@@ -531,8 +531,6 @@ func _render() -> void:
 	_frame_backdrop.visible = true
 	if texture != null:
 		_add_art(source, "SourceHotkeysFrame", FRAME_ORIGIN, FRAME_SIZE)
-	_draw_labels()
-	_draw_footer_labels()
 	if _pressed_action.begins_with("slot:"):
 		var pressed_slot := int(_pressed_action.trim_prefix("slot:"))
 		if pressed_slot >= 0 and pressed_slot < SLOT_COUNT:
@@ -543,6 +541,8 @@ func _render() -> void:
 		_draw_pressed_effect_rect(CANCEL, "cancel")
 	elif _pressed_action == "accept":
 		_draw_pressed_effect_rect(ACCEPT, "accept")
+	_draw_labels()
+	_draw_footer_labels()
 	if _editing_slot >= 0 and pending_blink_visible():
 		var key_center := _key_center(_editing_slot)
 		var pending := ColorRect.new()
@@ -620,11 +620,79 @@ func _draw_pressed_effect_rect(rect: Rect2, action: String) -> void:
 		effect.set_meta("source_slot", int(action.trim_prefix("slot:")))
 	effect.set_meta("source_press_offset", Vector2(1.0, 1.0))
 	effect.set_meta("source_edge_darken", 16)
-	effect.draw.connect(func() -> void:
-		effect.draw_rect(Rect2(0, 0, effect.size.x, 1), SOURCE_EDGE)
-		effect.draw_rect(Rect2(0, 0, 1, effect.size.y), SOURCE_EDGE)
-	)
+	var pressed_texture := _pressed_region_texture(rect)
+	if pressed_texture != null:
+		var art := TextureRect.new()
+		art.name = "SourceHotkeysPressedPixels"
+		art.position = Vector2.ZERO
+		art.size = rect.size
+		art.texture = pressed_texture
+		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		art.stretch_mode = TextureRect.STRETCH_SCALE
+		art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		effect.add_child(art)
+	else:
+		effect.draw.connect(func() -> void:
+			effect.draw_rect(Rect2(0, 0, effect.size.x, 1), SOURCE_EDGE)
+			effect.draw_rect(Rect2(0, 0, 1, effect.size.y), SOURCE_EDGE)
+		)
 	_surface.add_child(effect)
+
+
+func _pressed_region_texture(rect: Rect2) -> Texture2D:
+	var frame := _surface.find_child("SourceHotkeysFrame", true, false) as TextureRect
+	if frame == null or frame.texture == null:
+		return null
+	var source := frame.texture.get_image()
+	if source == null or source.is_empty() or FRAME_SIZE.x <= 0.0 or FRAME_SIZE.y <= 0.0:
+		return null
+	var scale_x := float(source.get_width()) / FRAME_SIZE.x
+	var scale_y := float(source.get_height()) / FRAME_SIZE.y
+	if scale_x <= 0.0 or scale_y <= 0.0:
+		return null
+	var output_width := maxi(1, int(round(rect.size.x * scale_x)))
+	var output_height := maxi(1, int(round(rect.size.y * scale_y)))
+	var output := Image.create(output_width, output_height, false, Image.FORMAT_RGBA8)
+	for output_y in range(output_height):
+		var local_y := float(output_y) / scale_y
+		var edge_y := local_y < 1.0
+		var frame_local_y := rect.position.y + local_y
+		for output_x in range(output_width):
+			var local_x := float(output_x) / scale_x
+			var edge_x := local_x < 1.0
+			var frame_local_x := rect.position.x + local_x
+			var frame_edge := edge_y or edge_x
+			var source_frame_y := frame_local_y if frame_edge else frame_local_y - 1.0
+			var source_frame_x := frame_local_x if frame_edge else frame_local_x - 1.0
+			var source_y_float := source_frame_y * scale_y
+			var source_x_float := source_frame_x * scale_x
+			# TextureRect sampling at a downscaled 2x source lands on the next
+			# physical texel at an edge; mirror that mapping so the pressed crop
+			# compares to the captured idle frame at the same logical pixel.  The
+			# 56px key cells and 71px footer cells have opposite half-pixel phase
+			# at their sampled edge, so preserve each source rectangle's phase.
+			if scale_x > 1.0:
+				if edge_y:
+					source_x_float += 1.0 if is_equal_approx(rect.size.x, 56.0) else 0.0
+				if edge_x and is_equal_approx(rect.size.x, 56.0):
+					source_x_float += 1.0
+					source_y_float -= 1.0
+			var source_y := clampi(int(round(source_y_float)), 0, source.get_height() - 1)
+			var source_x := clampi(int(round(source_x_float)), 0, source.get_width() - 1)
+			var pixel := source.get_pixel(source_x, source_y)
+			if edge_x or edge_y:
+				# Subtract in the sampled byte-equivalent channel space and retain
+				# alpha; constructing Color8 here can introduce channel rounding
+				# before the texture is uploaded on the native renderer.
+				pixel = Color(
+					maxf(0.0, pixel.r - 16.0 / 255.0),
+					maxf(0.0, pixel.g - 16.0 / 255.0),
+					maxf(0.0, pixel.b - 16.0 / 255.0),
+					pixel.a,
+				)
+			output.set_pixel(output_x, output_y, pixel)
+	return ImageTexture.create_from_image(output)
 
 
 func _cell_rect(slot: int) -> Rect2:

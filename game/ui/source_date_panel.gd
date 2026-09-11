@@ -90,6 +90,7 @@ var _surface: Control
 var _frame_backdrop: ColorRect
 var _unavailable_backdrop: ColorRect
 var _unavailable: Label
+var _invalid_confirm_backdrop: ColorRect
 var _invalid_confirm: Label
 var _built := false
 
@@ -545,7 +546,7 @@ func _build() -> void:
 
 	_invalid_confirm = Label.new()
 	_invalid_confirm.name = "SourceDateInvalidConfirm"
-	_invalid_confirm.position = FRAME_ORIGIN + Vector2(10.0, 157.0)
+	_invalid_confirm.position = FRAME_ORIGIN + Vector2(10.0, FRAME_SIZE.y + 8.0)
 	_invalid_confirm.size = Vector2(179.0, 18.0)
 	_invalid_confirm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_invalid_confirm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -556,6 +557,15 @@ func _build() -> void:
 	_invalid_confirm.z_index = 2
 	_invalid_confirm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_invalid_confirm.visible = false
+	_invalid_confirm_backdrop = ColorRect.new()
+	_invalid_confirm_backdrop.name = "SourceDateInvalidConfirmBackdrop"
+	_invalid_confirm_backdrop.position = FRAME_ORIGIN + Vector2(4.0, FRAME_SIZE.y + 4.0)
+	_invalid_confirm_backdrop.size = Vector2(FRAME_SIZE.x - 8.0, 26.0)
+	_invalid_confirm_backdrop.color = Color("#f0f0f0")
+	_invalid_confirm_backdrop.z_index = 1
+	_invalid_confirm_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_invalid_confirm_backdrop.visible = false
+	_surface.add_child(_invalid_confirm_backdrop)
 	_surface.add_child(_invalid_confirm)
 
 
@@ -569,6 +579,7 @@ func _render() -> void:
 	_frame_backdrop.visible = false
 	_unavailable_backdrop.visible = false
 	_unavailable.visible = false
+	_invalid_confirm_backdrop.visible = false
 	_invalid_confirm.visible = false
 	_invalid_confirm.text = _invalid_confirm_text
 	day_labels.clear()
@@ -585,7 +596,7 @@ func _render() -> void:
 
 func _clear_dynamic_children() -> void:
 	for child in _surface.get_children():
-		if child == _frame_backdrop or child == _unavailable_backdrop or child == _unavailable or child == _invalid_confirm:
+		if child == _frame_backdrop or child == _unavailable_backdrop or child == _unavailable or child == _invalid_confirm_backdrop or child == _invalid_confirm:
 			continue
 		child.free()
 
@@ -695,6 +706,7 @@ func _draw_date() -> void:
 		footer_labels.append(footer)
 
 	if not _invalid_confirm_text.is_empty():
+		_invalid_confirm_backdrop.visible = true
 		_invalid_confirm.visible = true
 		_invalid_confirm.text = _invalid_confirm_text
 	if not _source_art_available:

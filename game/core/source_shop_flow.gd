@@ -222,7 +222,8 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	for key in ["human", "closed", "gift_pending"]:
 		if typeof(visit.get(key)) != TYPE_BOOL: return ["invalid source shop flag"]
 	if bool(visit.human) != (bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))): return ["source shop actor mismatch"]
-	if data.get("phase") != ("await_action" if visit.closed else "await_shop"): return ["source shop phase mismatch"]
+	var effective_phase: Variant = data.get("sale_board", {}).get("session", {}).get("return_phase") if data.get("phase") == "await_sale" else data.get("phase")
+	if effective_phase != ("await_action" if visit.closed else "await_shop"): return ["source shop phase mismatch"]
 	if not _integer(visit.get("contribution"), 0, LIMIT) or not visit.get("gift") is Dictionary: return ["invalid source shop contribution or gift"]
 	if not visit.gift.is_empty():
 		if visit.gift.get("item_kind") not in ["card", "tool"] or typeof(visit.gift.get("item_id")) != TYPE_STRING: return ["invalid source shop gift"]

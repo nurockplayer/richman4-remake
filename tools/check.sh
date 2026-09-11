@@ -198,6 +198,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
+# S21 functional draft checkpoint; native/fidelity acceptance remains pending.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_stock_cost.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_rules.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_controller.gd
+run_checked python3 tests/test_source_sale_assets.py
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/legacy_stock_bounds.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd

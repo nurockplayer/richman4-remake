@@ -74,6 +74,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rende
 RICHMAN4_HOTKEYS_TEST_ROOT="$PWD/.local/system-hotkeys-$BASHPID" run_checked "$GODOT_BIN" --headless --path . --script tests/system_hotkeys.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_hint_layout.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_hotkeys_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_hotkeys_rendering.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_children_legibility.gd

@@ -7049,9 +7049,6 @@ func _run_ai_turn_dispatch() -> Dictionary:
 			break
 		safety += 1
 		if state.get("phase", "") == "await_roll":
-			SourceSale.ai_turn(self)
-			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
-				continue
 			if _is_inventory():
 				_ai_roll_action(player_id)
 			# Immediate card effects can end the match or hand off this turn.
@@ -7059,6 +7056,9 @@ func _run_ai_turn_dispatch() -> Dictionary:
 			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
 				continue
 			if _trap_pending():
+				continue
+			SourceSale.ai_turn(self)
+			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
 				continue
 			var roll_result: Dictionary = roll()
 			if not bool(roll_result.get("ok", false)):

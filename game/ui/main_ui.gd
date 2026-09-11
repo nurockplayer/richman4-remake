@@ -3040,7 +3040,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	if method not in ["run_ai_turn", "run_sleep_turn", "finish_minigame"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
-		game_state.configure_minigames(bool(_source_settings.get("animation", true)), _source_minigame_input_data())
+		if game_state.has_method("configure_minigames"):
+			game_state.configure_minigames(bool(_source_settings.get("animation", true)), _source_minigame_input_data())
 		var before := _read_snapshot().duplicate(true)
 		var result: Variant = game_state.callv(method, args)
 		if result is Dictionary:

@@ -60,7 +60,8 @@ func ending_duration() -> float:
 	var model: Dictionary=_view.get("model",{})
 	if bool(_view.get("shortcut",false)): return 0.0
 	if str(_view.get("kind",""))=="catching" and bool(model.get("bomb",false)):
-		var entry := _resource("Data",526)
+		var effect := _effect("catching_bomb")
+		var entry := _resource(str(effect.get("archive","")),int(effect.get("resource_index",-1)))
 		return entry.get("chunks",{}).size()*float(entry.get("caller",{}).get("delay_ms",50))/1000.0
 	if str(_view.get("kind",""))=="penguin":
 		if str(model.get("finish_reason",""))=="bomb": return 1.5
@@ -152,10 +153,11 @@ func _draw_catching(model: Dictionary) -> void:
 	var position: Vector2=model.get("character_position",Vector2(320,380))
 	_sprite("Panel",character_resource,frame,position)
 	if _phase=="ending" and bool(model.get("bomb",false)):
-		var explosion := _resource("Data",526)
+		var effect := _effect("catching_bomb")
+		var explosion := _resource(str(effect.get("archive","")),int(effect.get("resource_index",-1)))
 		var total: int=explosion.get("chunks",{}).size()
 		var interval := float(explosion.get("caller",{}).get("delay_ms",50))/1000.0
-		if total>0: _sprite("Data",526,mini(total-1,int(_ending_seconds/interval)),Vector2(position.x-55,295))
+		if total>0: _sprite(str(effect.archive),int(effect.resource_index),mini(total-1,int(_ending_seconds/interval)),Vector2(position.x-55,295))
 
 func _draw_overlay() -> void:
 	if _phase!="result": return
@@ -173,6 +175,11 @@ func _number(value: int, count: int, x: int) -> void:
 func _penguin_anchor(cell: Vector2i, anchors: Array) -> Vector2:
 	var index := cell.y*9+cell.x
 	return Vector2(anchors[index]) if index>=0 and index<anchors.size() else Vector2(80+cell.x*48,81+cell.y*24)
+
+func _effect(name: String) -> Dictionary:
+	if not _visuals is Object: return {}
+	var manifest: Dictionary=_visuals.get("manifest")
+	return manifest.get("minigame_source",{}).get("effects",{}).get(name,{}).get(str(_view.get("edition","Game")),{})
 
 func _resource(archive: String, resource: int) -> Dictionary:
 	if not _visuals is Object: return {}

@@ -159,7 +159,7 @@ func _tick_balloon() -> void:
 	# Source tries each empty slot every callback.  A deterministic RNG replaces
 	# libc rand while preserving the documented bucket probabilities and lanes.
 	for index in range(16):
-		if _balloon_slot_free(balloons, index) and _rng.randi_range(0, 999) < 30:
+		if _balloon_slot_free(balloons, index):
 			_spawn_balloon(balloons, index)
 	state["spawn_attempts"] = int(state["spawn_attempts"]) + 16
 	var effects: Dictionary = state["effects"]
@@ -169,7 +169,7 @@ func _tick_balloon() -> void:
 	var freeze := int(effects.get("freeze_ticks", 0))
 	if freeze > 0:
 		effects["freeze_ticks"] = freeze - 1
-	else:
+	if int(effects.get("freeze_ticks", 0)) == 0:
 		for balloon in balloons:
 			if typeof(balloon) != TYPE_DICTIONARY or int(balloon.get("phase", 0)) != 1:
 				continue
@@ -182,12 +182,12 @@ func _tick_balloon() -> void:
 			balloon["y"] = int(balloon.get("y", 0)) - speed
 			if int(balloon["y"]) < -60:
 				balloon["phase"] = 0
-		# Popped source slots animate separately, with no gameplay score change.
-		for balloon in balloons:
-			if typeof(balloon) == TYPE_DICTIONARY and int(balloon.get("phase", 0)) == 2:
-				balloon["pop_frame"] = int(balloon.get("pop_frame", 60)) - 16
-				if int(balloon["pop_frame"]) <= 0:
-					balloon["phase"] = 0
+	# Popped source slots animate separately, with no gameplay score change.
+	for balloon in balloons:
+		if typeof(balloon) == TYPE_DICTIONARY and int(balloon.get("phase", 0)) == 2:
+			balloon["pop_frame"] = int(balloon.get("pop_frame", 60)) - 16
+			if int(balloon["pop_frame"]) <= 0:
+				balloon["phase"] = 0
 	state["reward"] = int(state["score"])
 
 
@@ -212,7 +212,7 @@ func _spawn_balloon(balloons: Array, index: int) -> void:
 	for lane in BALLOON_LANES:
 		var clear := true
 		for balloon in balloons:
-			if typeof(balloon) == TYPE_DICTIONARY and int(balloon.get("phase", 0)) == 1 and int(balloon.get("x", -999)) == lane and int(balloon.get("y", 999)) < 300:
+			if typeof(balloon) == TYPE_DICTIONARY and int(balloon.get("phase", 0)) == 1 and int(balloon.get("x", -999)) == lane and int(balloon.get("y", 999)) > 300:
 				clear = false
 		if clear:
 			available.append(lane)

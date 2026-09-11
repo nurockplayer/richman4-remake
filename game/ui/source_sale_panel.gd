@@ -56,6 +56,8 @@ const MENU_CELL := Vector2(62, 38)
 const PORTRAIT_ORIGIN := Vector2(44, 84)
 const PORTRAIT_SIZE := Vector2(36, 36)
 const PORTRAIT_STRIDE := 72.0
+const PORTRAIT_DIRECTION := 0
+const CHARACTER_COUNT := 12
 const NAME_CENTER := Vector2(62, 128)
 const OFFER_TILE_BASE := 9
 
@@ -946,8 +948,16 @@ func _render_board() -> void:
 	for row in range(players.size()):
 		var player: Dictionary = players[row]
 		var portrait := Rect2(PORTRAIT_ORIGIN + Vector2(0, PORTRAIT_STRIDE * float(row)), PORTRAIT_SIZE)
-		_source_art_status["portrait_%d" % row] = false
-		_add_placeholder("SourceSalePortrait%d" % row, portrait, FALLBACK_SLOT)
+		# The SALE board portrait is a composition fallback built from the existing
+		# authorized character/chunk0 identity sprite (direction 0), not a verified
+		# original SALE portrait.  source_art_status still reports the real Source
+		# texture honestly instead of claiming an original portrait exists.
+		var character_id := int(player.get("character_id", -1))
+		var portrait_art: Dictionary = {"frame": {}, "texture": null}
+		if character_id >= 0 and character_id < CHARACTER_COUNT:
+			portrait_art = _resolve_character(character_id, PORTRAIT_DIRECTION)
+		_source_art_status["portrait_%d" % row] = portrait_art.get("texture") is Texture2D
+		_add_portrait(portrait_art, "SourceSalePortrait%d" % row, portrait, character_id)
 		_add_text("SourceSalePlayerName%d" % row, str(player.get("name", "")), NAME_CENTER + Vector2(0, PORTRAIT_STRIDE * float(row)), Vector2(72, 16), 14, 1)
 		var offers_value: Variant = player.get("offers", [])
 		var offers: Array = offers_value if offers_value is Array else []
@@ -1143,6 +1153,46 @@ func _resolve(archive: String, resource: int, chunk: int) -> Dictionary:
 
 func _add_role(role: String, result: Dictionary) -> void:
 	_source_art_status[role] = result.get("texture") is Texture2D
+
+func _resolve_character(character_id: int, direction: int) -> Dictionary:
+	var frame: Dictionary = {}
+	var texture: Texture2D = null
+	if _visual_accessor is Object and (_visual_accessor as Object).has_method("character"):
+		var value: Variant = (_visual_accessor as Object).call("character", _edition, character_id, direction)
+		if value is Dictionary:
+			frame = value.duplicate(true)
+	if frame.is_empty() and _visual_accessor is Dictionary:
+		var key := "%s.character.%d.%d" % [_edition, character_id, direction]
+		var value: Variant = (_visual_accessor as Dictionary).get(key, null)
+		if value is Dictionary:
+			frame = value.duplicate(true)
+	if frame.get("ui_texture") is Texture2D:
+		texture = frame.ui_texture
+	if texture == null and frame.get("texture") is Texture2D:
+		texture = frame.texture
+	if texture == null and _visual_accessor is Object and (_visual_accessor as Object).has_method("texture") and not frame.is_empty():
+		var value: Variant = (_visual_accessor as Object).call("texture", frame)
+		if value is Texture2D:
+			texture = value
+	return {"frame": frame, "texture": texture}
+
+func _add_portrait(result: Dictionary, node_name: String, slot: Rect2, character_id: int) -> void:
+	if not result.get("texture") is Texture2D:
+		_add_placeholder(node_name, slot, FALLBACK_SLOT)
+		return
+	var art := TextureRect.new()
+	art.name = node_name
+	art.position = slot.position
+	art.size = slot.size
+	art.texture = result.texture
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.set_meta("source_character_id", character_id)
+	art.set_meta("source_direction", PORTRAIT_DIRECTION)
+	art.set_meta("source_frame", (result.get("frame", {}) as Dictionary).duplicate(true))
+	_surface.add_child(art)
 
 func _add_art(result: Dictionary, node_name: String, rect: Rect2, chunk: int, fallback_label: String, resource: int = 73) -> void:
 	if not result.get("texture") is Texture2D:

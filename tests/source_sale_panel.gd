@@ -21,6 +21,8 @@ var cancelled_count := 0
 class FakeVisuals extends RefCounted:
 	var calls: Array = []
 	var missing: Array = []
+	var character_calls: Array = []
+	var character_missing: Array = []
 
 	func ui(edition: String, archive: String, resource: int, chunk: int) -> Dictionary:
 		calls.append([edition, archive, resource, chunk])
@@ -38,6 +40,32 @@ class FakeVisuals extends RefCounted:
 			"texture": ImageTexture.create_from_image(image),
 		}
 
+	func character(edition: String, character_id: int, direction := 0) -> Dictionary:
+		character_calls.append([edition, character_id, direction])
+		if character_missing.has(character_id):
+			return {}
+		return {
+			"edition": edition,
+			"character_id": character_id,
+			"direction": direction,
+			"path": "images/characters/%s/%d/%d.png" % [edition, character_id, direction],
+			"sha256": "fake-%s-%d-%d" % [edition, character_id, direction],
+			"width": 24,
+			"height": 32,
+			"logical": {"width": 24.0, "height": 32.0, "anchor_x": 12.0, "anchor_y": 16.0},
+		}
+
+	func texture(record: Variant) -> Texture2D:
+		if not record is Dictionary or not record.get("logical") is Dictionary:
+			return null
+		var logical: Dictionary = record.logical
+		var width := int(logical.get("width", 0))
+		var height := int(logical.get("height", 0))
+		if width <= 0 or height <= 0:
+			return null
+		var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+		image.fill(Color(0.3, 0.5, 0.7, 1.0))
+		return ImageTexture.create_from_image(image)
 
 class OverlayVisuals extends RefCounted:
 	var root := ""
@@ -312,7 +340,18 @@ func _run() -> void:
 		var model := _board_model(edition)
 		expect(panel.configure(model), "board model accepted: " + edition)
 		expect(panel.is_open(), "configured board is open: " + edition)
-		expect(not panel.source_art_available() and panel.source_art_status().get("board",false), "board art exists but source portrait remains pending: " + edition)
+		expect(panel.source_art_status().get("board",false), "board frame resolves: " + edition)
+		expect(panel.source_art_status().get("portrait_0", false) and panel.source_art_status().get("portrait_1", false), "both authorized character portraits resolve: " + edition)
+		expect(panel.source_art_available(), "board, offers and portraits are all real source textures: " + edition)
+		expect(visuals.character_calls.has([edition, 0, 0]) and visuals.character_calls.has([edition, 1, 0]), "portrait uses character id 0/1 at direction 0: " + edition)
+		for row in range(2):
+			var portrait_node := panel.find_child("SourceSalePortrait%d" % row, true, false) as TextureRect
+			expect(portrait_node != null and portrait_node.texture != null, "portrait %d is a real TextureRect: %s" % [row, edition])
+			expect_equal(portrait_node.position, Vector2(44, 84 + 72 * row), "portrait %d slot origin: %s" % [row, edition])
+			expect_equal(portrait_node.size, Vector2(36, 36), "portrait %d slot size: %s" % [row, edition])
+			expect_equal(portrait_node.stretch_mode, TextureRect.STRETCH_KEEP_ASPECT_CENTERED, "portrait %d keeps aspect centered: %s" % [row, edition])
+			expect_equal(int(portrait_node.get_meta("source_character_id")), row, "portrait %d records character id: %s" % [row, edition])
+			expect_equal(int(portrait_node.get_meta("source_direction")), 0, "portrait %d records direction 0: %s" % [row, edition])
 		var geometry: Dictionary = panel.source_geometry()
 		expect_equal(geometry.edition, edition, "edition is reported: " + edition)
 		expect_equal(geometry.board.rect, Rect2(22, 66, 596, 348), "board panel origin/size: " + edition)
@@ -336,6 +375,29 @@ func _run() -> void:
 		expect(female_card != null and int(female_card.get_meta("source_chunk")) == 12, "female card seller uses tile 12: " + edition)
 		var name_label := panel.find_child("SourceSalePlayerName1", true, false) as Label
 		expect(name_label != null and name_label.text == "錢 夫 人", "board name is the live player name: " + edition)
+
+	# Portrait fail-closed: invalid identity or missing character texture keeps the placeholder.
+	var invalid_visuals := FakeVisuals.new()
+	panel.set_visual_accessor(invalid_visuals)
+	for bad_id in [12, -1]:
+		var invalid_model := _board_model("Game", [_player(0, "無效角色", 1, [])])
+		invalid_model.players[0].character_id = bad_id
+		expect(panel.configure(invalid_model), "invalid character id %d is still a valid snapshot" % bad_id)
+		expect(panel.source_art_status().get("portrait_0", true) == false, "invalid character id %d keeps portrait status false" % bad_id)
+		expect(not panel.source_art_available(), "invalid character id %d reports unavailable art" % bad_id)
+		expect(not invalid_visuals.character_calls.has(["Game", bad_id, 0]), "invalid character id %d never queries the accessor" % bad_id)
+		expect(not (panel.find_child("SourceSalePortrait0", true, false) is TextureRect), "invalid character id %d keeps a placeholder" % bad_id)
+
+	var missing_visuals := FakeVisuals.new()
+	missing_visuals.character_missing = [3]
+	panel.set_visual_accessor(missing_visuals)
+	var missing_model := _board_model("Game", [_player(0, "缺圖角色", 1, [])])
+	missing_model.players[0].character_id = 3
+	expect(panel.configure(missing_model), "character without a usable texture is still a valid snapshot")
+	expect(panel.source_art_status().get("portrait_0", true) == false, "missing character texture keeps portrait status false")
+	expect(not panel.source_art_available(), "missing character texture reports unavailable art")
+	expect(not (panel.find_child("SourceSalePortrait0", true, false) is TextureRect), "missing character texture keeps a placeholder")
+	panel.set_visual_accessor(visuals)
 
 	# Detached snapshot.
 	var live := _board_model()
@@ -586,7 +648,9 @@ func _run() -> void:
 		overlay_panel.set_visual_accessor(overlay)
 		var overlay_model := _board_model("MultiverseJourney")
 		expect(overlay_panel.configure(overlay_model), "authorized overlay configures the board")
-		expect(overlay_panel.source_art_status().get("board",false) and not overlay_panel.source_art_available(), "authorized overlay has source board while portrait remains pending")
+		expect(overlay_panel.source_art_status().get("board",false), "authorized overlay board frame resolves")
+		expect(overlay_panel.source_art_status().get("portrait_0", true) == false, "overlay without a character accessor keeps portraits fail-closed")
+		expect(not overlay_panel.source_art_available(), "authorized overlay lacks character portraits so art stays unavailable")
 		var board_art := overlay_panel.find_child("SourceSaleBoard", true, false) as TextureRect
 		expect(board_art != null and board_art.texture.get_size() == Vector2(596, 348), "authorized board frame keeps source geometry")
 		expect_equal(_count(overlay_panel, "SourceSaleOffer"), 14, "authorized overlay renders every source offer tile")

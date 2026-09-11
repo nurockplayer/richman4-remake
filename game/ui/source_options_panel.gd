@@ -209,6 +209,23 @@ func set_visuals(accessor: Variant) -> void:
 
 ## Report the track currently playing in the host audio layer.  The default
 ## stays unknown so the presenter never invents a selection from a preview.
+## Restore an unpersisted host draft after a failed write without changing
+## the opening snapshot that controls track-preview permission.
+func restore_draft(settings_value: Dictionary) -> bool:
+	var candidate := _model.duplicate(true)
+	candidate["settings"] = settings_value.duplicate(true)
+	if not _model_valid or not _validate_model(candidate):
+		return false
+	_draft_settings = _settings_copy(settings_value)
+	_closed = false
+	_is_open = true
+	_suspended = false
+	_pressed_action = ""
+	_render()
+	show()
+	return true
+
+
 func set_current_track(index: int) -> void:
 	_current_track = index if index >= -1 and index < TRACK_LABELS.size() else -1
 	_render()

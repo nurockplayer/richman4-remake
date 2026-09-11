@@ -25,6 +25,10 @@ const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
+const SourceOptionsController = preload("res://game/ui/source_options_controller.gd")
+const SourcePreferences = preload("res://game/ui/source_preferences.gd")
+const SystemSettings = preload("res://game/platform/system_settings.gd")
+const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
@@ -74,6 +78,15 @@ var source_stock_panel: Control
 var source_save_menu: Control
 var source_bank_controller: Control
 var source_monthly_controller: Control
+var source_options_controller: Control
+var source_settings_path := SystemSettings.DEFAULT_PATH
+var source_hotkeys_path := SystemHotkeys.DEFAULT_PATH
+var _source_settings: Dictionary = SystemSettings.new().defaults()
+var _source_bindings: Array = SystemHotkeys.new().defaults()
+var _source_preferences := SourcePreferences.new()
+var _runtime_start_date: Dictionary = {}
+var _source_options_confirmation: ConfirmationDialog
+var _source_options_command := ""
 var source_help_controller: Control
 var legacy_interface_root: Control
 
@@ -215,6 +228,7 @@ func _ready() -> void:
 	_build_interface()
 	_build_source_shell()
 	_setup_audio()
+	_load_source_preferences()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
@@ -245,23 +259,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_SPACE:
-			if roll_button != null and not roll_button.disabled:
-				_on_roll_pressed()
+	if event is InputEventKey:
+		var command: String = _source_preferences.hotkey_command(event, _source_bindings)
+		# Preserve the admitted source-picker aliases while the corresponding
+		# source key is still at its default. A user remap removes the alias.
+		if command.is_empty() and event.pressed and not event.echo and not event.alt_pressed and not event.meta_pressed and not event.shift_pressed:
+			if event.ctrl_pressed and _source_bindings.size() == 28:
+				if event.keycode == KEY_S and _source_bindings[22] == 0x53:
+					command = "save"
+				elif event.keycode == KEY_L and _source_bindings[23] == 0x4c:
+					command = "load"
+			elif not event.ctrl_pressed and event.keycode == KEY_N:
 				get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_N:
-			if state.get("phase", "") == "game_over":
-				_restart_game()
-			else:
-				_on_new_game_pressed()
+				if state.get("phase", "") == "game_over":
+					_restart_game()
+				else:
+					_on_new_game_pressed()
+				return
+		if not command.is_empty():
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_S and event.ctrl_pressed:
-			_on_source_save_requested()
-			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_L and event.ctrl_pressed:
-			_on_source_load_requested()
-			get_viewport().set_input_as_handled()
+			match command:
+				"roll": _on_source_roll_requested()
+				"stocks": _on_source_stocks_requested()
+				"cards": _on_source_cards_requested()
+				"tools": _on_source_tools_requested()
+				"inspect": _on_source_inspect_requested()
+				"map": _on_source_map_requested()
+				"options": _on_source_option_requested()
+				"save": _on_source_save_requested()
+				"load": _on_source_load_requested()
+				"help": _on_source_help_requested()
 
 func _build_interface() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -341,12 +368,131 @@ func _build_source_shell() -> void:
 	_build_source_bank_controller()
 	_build_source_monthly_controller()
 	_build_source_help_controller()
+	_build_source_options_controller()
 	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
 	if setup_panel != null:
 		setup_panel.confirmed.connect(_on_source_setup_confirmed)
 		setup_panel.cancelled.connect(_on_source_setup_cancelled)
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
+
+func _source_options_owner() -> Object:
+	return game_state if game_state != null else self
+
+func _future_start_date() -> Dictionary:
+	if _runtime_start_date.is_empty():
+		_runtime_start_date = _system_start_date()
+		if _runtime_start_date.is_empty():
+			_runtime_start_date = {"year": 1998, "month": 1, "day": 1}
+	return _runtime_start_date.duplicate(true)
+
+func _build_source_options_controller() -> void:
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceOptionsController.new()
+	controller.z_index = 70
+	controller.host_status_text = "目前套用音樂與移動速度；動畫、音效、自動存檔、視窗模式尚未接入。"
+	controller.settings_path = source_settings_path
+	controller.hotkeys_path = source_hotkeys_path
+	controller.finished.connect(func() -> void:
+		_ai_pending = false
+		_update_all())
+	controller.settings_committed.connect(func(settings: Dictionary) -> void:
+		_source_settings = settings.duplicate(true)
+		_source_preferences.apply(_source_settings, audio_controller)
+		_update_audio_button())
+	controller.date_committed.connect(func(date: Dictionary) -> void:
+		_runtime_start_date = date.duplicate(true))
+	controller.hotkeys_committed.connect(func(bindings: Array) -> void:
+		_source_bindings = bindings.duplicate(true))
+	controller.preview_requested.connect(func(track: int) -> void:
+		if audio_controller != null:
+			audio_controller.play_track(track)
+		_update_source_current_track())
+	controller.command_requested.connect(_on_source_options_command)
+	canvas.add_child(controller)
+	source_options_controller = controller
+	_source_options_confirmation = ConfirmationDialog.new()
+	_source_options_confirmation.title = "確認"
+	_source_options_confirmation.confirmed.connect(_confirm_source_options_command)
+	_source_options_confirmation.canceled.connect(_cancel_source_options_command)
+	add_child(_source_options_confirmation)
+
+func _source_options_modal_open() -> bool:
+	return source_options_controller != null and source_options_controller.is_open()
+
+func _source_options_operation_allowed() -> bool:
+	if source_shell == null or _source_options_modal_open() or _source_help_modal_open():
+		return false
+	if not _source_save_operation_allowed() or (source_save_menu != null and source_save_menu.visible):
+		return false
+	return true
+
+func _load_source_preferences() -> void:
+	_source_preferences.capture_audio_baseline(audio_controller)
+	var settings: Dictionary = SystemSettings.new().read_settings(source_settings_path)
+	if settings.get("ok", false):
+		_source_settings = settings.settings.duplicate(true)
+		_source_preferences.apply(_source_settings, audio_controller)
+	else:
+		_append_local_log("系統設定讀取失敗；請由選項畫面查看錯誤。")
+	var hotkeys: Dictionary = SystemHotkeys.new().read_bindings(source_hotkeys_path)
+	if hotkeys.get("ok", false):
+		_source_bindings = hotkeys.bindings.duplicate(true)
+	else:
+		_source_bindings = []
+		_append_local_log("熱鍵設定讀取失敗；快捷鍵暫停使用。")
+
+func _update_source_current_track() -> void:
+	if source_options_controller == null:
+		return
+	var track := -1
+	if audio_controller != null and bool(audio_controller.get("enabled")):
+		var player: Variant = audio_controller.get("player")
+		if player != null and bool(player.get("playing")):
+			track = int(audio_controller.get("current_track"))
+	source_options_controller.set_current_track(track)
+
+func _on_source_options_command(command: String) -> void:
+	if not _source_options_modal_open():
+		return
+	if command == "help":
+		if source_help_controller != null:
+			source_help_controller.get_parent().move_child(source_help_controller, -1)
+		if source_help_controller == null or not source_help_controller.open(_source_options_owner(), str(source_shell.get("_source_edition")), source_shell.get("_visuals")):
+			source_options_controller.resume_parent()
+		return
+	if command not in ["restart", "surrender", "quit"]:
+		source_options_controller.resume_parent()
+		return
+	_source_options_command = command
+	if command == "surrender":
+		# No public surrender transition exists yet; never emulate it with a
+		# private bankruptcy helper or silently discard the current match.
+		_source_options_confirmation.dialog_text = "認輸投降流程尚未接入；目前棋局保持不變。"
+	else:
+		_source_options_confirmation.dialog_text = "重新開始遊戲？未儲存的進度將會失去。" if command == "restart" else "結束遊戲？未儲存的進度將會失去。"
+	_source_options_confirmation.popup_centered()
+
+func _cancel_source_options_command() -> void:
+	_source_options_command = ""
+	if _source_options_modal_open():
+		source_options_controller.resume_parent()
+
+func _confirm_source_options_command() -> void:
+	var command := _source_options_command
+	_source_options_command = ""
+	if not _source_options_modal_open():
+		return
+	if command == "surrender":
+		source_options_controller.resume_parent()
+		return
+	if command == "restart":
+		source_options_controller.cancel()
+		_on_source_start_requested()
+	elif command == "quit":
+		get_tree().quit()
 
 func _build_source_bank_controller() -> void:
 	var canvas: Control = source_shell.get("reference_canvas")
@@ -367,7 +513,7 @@ func _source_bank_modal_open() -> bool:
 func _sync_source_bank() -> void:
 	if source_bank_controller == null or source_shell == null:
 		return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_help_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_help_modal_open() or _source_options_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup, fate_popup, auction_popup]:
@@ -394,10 +540,15 @@ func _build_source_help_controller() -> void:
 	if canvas == null:
 		return
 	var controller := SourceHelpController.new()
-	controller.z_index = 60
+	controller.z_index = 80
 	controller.finished.connect(func() -> void:
-		_ai_pending = false
-		_refresh_from_state())
+		if source_options_controller != null and source_options_controller.is_open():
+			source_options_controller.resume_parent()
+			_ai_pending = false
+			_update_all()
+		else:
+			_ai_pending = false
+			_refresh_from_state())
 	canvas.add_child(controller)
 	source_help_controller = controller
 	source_shell.get("game_screen").visibility_changed.connect(_update_source_help_gate)
@@ -415,7 +566,7 @@ func _source_help_operation_allowed() -> bool:
 func _sync_source_monthly() -> void:
 	if source_monthly_controller == null or source_shell == null:
 		return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_help_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_help_modal_open() or _source_options_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup, fate_popup, auction_popup]:
@@ -456,7 +607,7 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested(stage: int = 0) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
@@ -481,6 +632,7 @@ func _on_source_start_requested(stage: int = 0) -> void:
 	var defaults := _setup_options_from_state()
 	if defaults.is_empty():
 		defaults = _default_setup_options(player_count, selected)
+	defaults["start_date"] = _future_start_date()
 	defaults["player_count"] = player_count
 	var catalog: Array = _map_catalog.duplicate(true)
 	source_shell.call("show_setup", catalog, selected, defaults)
@@ -489,7 +641,7 @@ func _on_source_new_stage_requested() -> void:
 	_on_source_start_requested(1)
 
 func _on_source_quit_requested() -> void:
-	if source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
+	if not _source_options_modal_open() and source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
 		get_tree().quit()
 
 func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
@@ -617,8 +769,14 @@ func _on_source_save_requested() -> void:
 	_open_source_save_menu("save")
 
 func _on_source_option_requested() -> void:
-	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
-	_refresh_log_only()
+	if source_options_controller == null or not _source_options_operation_allowed():
+		return
+	var mode := "title" if source_shell.is_title_visible() else "game"
+	if source_options_controller.open(_source_options_owner(), mode, str(source_shell.get("_source_edition")), source_shell.get("_visuals"), _future_start_date(), _system_start_date()):
+		_presentation_generation += 1
+		_ai_pending = false
+		_update_source_current_track()
+		_update_all()
 
 func _on_source_help_requested() -> void:
 	if source_help_controller == null or not _source_help_operation_allowed():
@@ -633,7 +791,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -643,7 +801,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -659,7 +817,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -691,14 +849,14 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if board_view == null:
 		return
@@ -1397,7 +1555,7 @@ func _system_start_date() -> Dictionary:
 	return {}
 
 func _default_setup_options(player_count: int, map_definition: Dictionary = {}) -> Dictionary:
-	var date := _system_start_date()
+	var date := _future_start_date()
 	if date.is_empty():
 		date = {"year": 1998, "month": 1, "day": 1}
 	var character_ids: Array = []
@@ -1971,7 +2129,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2127,6 +2285,7 @@ func _on_audio_folder_selected(path: String) -> void:
 	_refresh_log_only()
 
 func _on_audio_playback_changed(track_name: String) -> void:
+	_update_source_current_track()
 	if event_status_label != null:
 		event_status_label.text = "播放：%s" % track_name
 
@@ -2141,7 +2300,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2195,10 +2354,10 @@ func _source_modal_open() -> bool:
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open()
+	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2572,7 +2731,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2648,6 +2807,8 @@ func _update_bank_popup() -> void:
 	bank_loan_button.disabled = loan_blocked or not _has_action_option(options, "take_loan") or int(state.get("bank", {}).get("cash", 0)) < 10000
 
 func _on_tile_selected(index: int) -> void:
+	if _source_options_modal_open():
+		return
 	_selected_tile = index
 	var tile := _tile_for_index(index)
 	if not tile.is_empty():
@@ -2701,9 +2862,11 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return not _source_options_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_options_modal_open():
+		return {"ok": false, "message": "請先關閉系統選項。"}
 	if _source_help_modal_open():
 		return {"ok": false, "message": "請先關閉遊戲說明。"}
 	if _source_monthly_modal_open():
@@ -2750,13 +2913,18 @@ func _handle_result(result: Dictionary) -> void:
 			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
-			board_view.play_movement(moves)
+			board_view.play_movement(moves, _source_preferences.movement_seconds(_source_settings))
 			return
 	if result.is_empty():
 		_append_local_log("模擬層未回傳事件；請查看目前回合狀態。")
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	if source_options_controller != null:
+		source_options_controller.cancel()
+	if _source_options_confirmation != null:
+		_source_options_confirmation.hide()
+	_source_options_command = ""
 	if source_help_controller != null:
 		source_help_controller.cancel()
 	if source_monthly_controller != null:
@@ -2849,18 +3017,20 @@ func _update_all() -> void:
 func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell == null:
 		return
+	if source_options_controller != null:
+		source_options_controller.sync(_source_options_owner())
 	if source_help_controller != null:
-		source_help_controller.sync(game_state)
+		source_help_controller.sync(_source_options_owner())
 	if source_shell.has_method("sync_snapshot"):
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):
 		_update_source_help_gate()
-		source_shell.call("set_toolbar_enabled", "options", false)
+		source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open() and not _source_monthly_modal_open() and not _source_help_modal_open())
+		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open() and not _source_monthly_modal_open() and not _source_help_modal_open() and not _source_options_modal_open())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
 		source_shell.call("set_toolbar_enabled", "cards", false)
 		source_shell.call("set_toolbar_enabled", "tools", false)
@@ -3076,7 +3246,7 @@ func _update_property_card(tile: Dictionary) -> void:
 func _update_actions(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var game_over := phase == "game_over"
-	var human_turn := not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var human_turn := not _source_options_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()

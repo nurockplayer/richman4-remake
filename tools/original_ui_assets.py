@@ -35,7 +35,7 @@ from decode_original_images import (
 # archive indices, not screen positions; see docs/original-ui-assets.md.
 UI_RESOURCES = {
     "Data": (1, 2, 3),
-    "Panel": (0, 1, 2, 21, 23, 24, 25, 75, 76),
+    "Panel": (0, 1, 2, 21, 23, 24, 25, 75, 76, 77),
 }
 
 # S11–S13 and S17–S18 use explicitly bound source Panel entries in both
@@ -125,6 +125,12 @@ EXPECTED_UI_CHUNK_COUNTS = {
     for _edition in ("Game", "MultiverseJourney")
     for _resource_index, chunk_count in BANK_UI_CHUNK_COUNTS.items()
 }
+# S04 was verified independently in both editions: Panel77 has the same
+# 18-chunk layout. Retain each edition's own archive/payload identity.
+for _edition in ("Game", "MultiverseJourney"):
+    REQUIRED_UI_CHUNKS[(_edition, "Panel", 77)] = tuple(range(18))
+    EXPECTED_UI_CHUNK_COUNTS[(_edition, "Panel", 77)] = 18
+
 MONTHLY_REQUIRED_UI_RESOURCES = {
     (_edition, "Panel"): (25, 76)
     for _edition in ("Game", "MultiverseJourney")

@@ -1,6 +1,9 @@
 class_name Richman4GameState
 extends RefCounted
 
+const TrusteePreferences = preload("res://game/core/trustee_preferences.gd")
+const TrusteeStrategy = preload("res://game/core/trustee_strategy.gd")
+
 ## Deterministic, serializable simulation for the Godot runtime.
 ##
 ## The original executable and data files are kept outside this repository. The
@@ -2348,7 +2351,7 @@ func _set_action_options(player_id: int) -> void:
 		if _is_inventory() and phase == "await_roll":
 			var pending_remote: Variant = state.get("pending_remote_dice", {})
 			if typeof(pending_remote) != TYPE_DICTIONARY or pending_remote.is_empty():
-				if player.get("cards", []).size() > 0:
+				if player.get("cards", []).size() > 0 and TrusteeStrategy.action_allowed(state, "use_card", {}):
 					options.push_front("use_card")
 				var tools: Dictionary = player.get("tools", {})
 				if not _inventory_movement_blocked(player):
@@ -3446,6 +3449,22 @@ func _upgrade_price(tile: Dictionary) -> int:
 func _player_owns_tile(player_id: int, tile_index: int) -> bool:
 	var tile: Dictionary = _tile_at(tile_index)
 	return int(tile.get("owner", -1)) == player_id
+
+
+func trustee_rows() -> Array:
+	return TrusteePreferences.rows(state)
+
+
+func apply_trustee_settings(rows: Array) -> bool:
+	if state.get("phase", "") not in ["await_roll", "await_action"] or _trap_pending() or not _pending_finance().is_empty() or not AuctionRules.response(self).is_empty() or BankVisit.has_pending(state) or int(state.get("company_service_pending", 0)) > 0:
+		return false
+	return TrusteePreferences.commit(state, rows)
+
+
+func request_trustee_recovery() -> bool:
+	if state.get("phase", "") == "game_over":
+		return false
+	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
@@ -5257,6 +5276,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if _trustee_ai_dispatch and not TrusteeStrategy.action_allowed(state, normalized, params):
+		return _error("託管設定停用此操作")
 	var bank_token := pending_bank_visit()
 	if BankVisit.has_pending(state) or state.get("phase", "") == "await_bank":
 		if bank_token.is_empty() or normalized not in (BankVisit.ATM_ACTIONS if bank_token.kind == "pass" else BankVisit.BANK_ACTIONS):
@@ -6594,6 +6615,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	if not (_is_setup() and wraps):
 		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
+	TrusteePreferences.recover(state)
 	_admit_loan_block(_player(next_id))
 	_engineering_admit(next_id)
 	AllianceRules.admit_player(self, next_id)
@@ -6914,7 +6936,19 @@ func _check_game_over(reason: String = "") -> void:
 		_record_event("game_over", result_event)
 
 
+var _trustee_ai_dispatch := false
+var _trustee_bank_balanced := false
+
+
 func run_ai_turn() -> Dictionary:
+	_trustee_ai_dispatch = true
+	_trustee_bank_balanced = false
+	var result := _run_ai_turn_dispatch()
+	_trustee_ai_dispatch = false
+	return result
+
+
+func _run_ai_turn_dispatch() -> Dictionary:
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if not AuctionRules.response(self).is_empty():
@@ -7100,7 +7134,7 @@ func _ai_action(player_id: int) -> void:
 			if bool(buy_result.get("ok", false)):
 				return
 		var property_cap: int = _property_level_cap(tile, _is_remodel())
-		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
+		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile) + TrusteeStrategy.upgrade_reserve(state, player_id):
 			var upgrade_result: Dictionary = choose_action("upgrade")
 			if bool(upgrade_result.get("ok", false)):
 				return
@@ -7144,16 +7178,21 @@ func _ai_action(player_id: int) -> void:
 			var face_price := int(company.stock_value) / 10000
 			if face_price > 0:
 				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
-				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
-	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
+				if quantity > 0 and TrusteeStrategy.may_buy(state, player_id, OriginalStockMarket.symbol(int(company.stock_index)), quantity) and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
+	var trustee_preferences := TrusteePreferences.for_player(state, player_id)
+	if not trustee_preferences.is_empty() and not _trustee_bank_balanced and bool(state.get("bank_access", false)) and not _is_sunday():
+		_trustee_bank_balanced = true
+		if TrusteeStrategy.balance_bank(self, player_id, trustee_preferences):
+			return
+	if trustee_preferences.is_empty() and bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
 		var deposit_amount := mini(int(player.get("cash", 0)) / 4, bank_transfer_limit("deposit", player_id))
 		if deposit_amount > 0 and bool(choose_action("deposit", {"amount": deposit_amount}).get("ok", false)):
 			return
-	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
+	if TrusteeStrategy.may_invest(state, player_id) and not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
 		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]
 		var price: int = int(prices.get(symbol, 100))
-		if price > 0:
+		if price > 0 and TrusteeStrategy.may_buy(state, player_id, symbol, 1):
 			var stock_result: Dictionary = choose_action("buy_stock", {"symbol": symbol, "quantity": 1})
 			if not _is_companies() or bool(stock_result.get("ok", false)):
 				return
@@ -8255,7 +8294,7 @@ static func _validate_graph_source_classification(tile: Dictionary, index: int, 
 
 
 static func validate_save(data: Dictionary) -> Dictionary:
-	var errors: Array = []
+	var errors: Array = TrusteePreferences.validate(data)
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
 	var building_cards_save: bool = _valid_int(version_marker, BUILDING_CARD_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION)

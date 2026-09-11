@@ -23,6 +23,7 @@ const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
+const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const SourceMinigameAssets = preload("res://game/platform/source_minigame_assets.gd")
@@ -226,6 +227,17 @@ var _company_service_target: OptionButton
 var _company_service_type: OptionButton
 var _company_service_button: Button
 var _presentation_busy := false
+var source_inventory_panel: Control
+var _inventory_owner: Variant = null
+var _inventory_generation := -1
+var _inventory_mode := ""
+var _inventory_applying := false
+var _inventory_target_active := false
+var _inventory_attempt := 0
+var _inventory_prior_auto_quit := true
+var _inventory_quit_policy_held := false
+var _inventory_window: Window
+var _inventory_close_callback := Callable()
 var source_trustee_controller: Control
 var _trustee_owner: Object
 var _trustee_generation := -1
@@ -405,6 +417,7 @@ func _build_source_shell() -> void:
 	_build_source_help_controller()
 	_build_source_options_controller()
 	_build_source_trustee_controller()
+	_build_source_inventory_panel()
 	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
 	if setup_panel != null:
 		setup_panel.confirmed.connect(_on_source_setup_confirmed)
@@ -460,7 +473,7 @@ func _source_options_modal_open() -> bool:
 	return source_options_controller != null and source_options_controller.is_open()
 
 func _source_options_operation_allowed() -> bool:
-	if _source_autosave.pending() or source_shell == null or _source_options_modal_open() or _source_trustee_modal_open() or _source_help_modal_open():
+	if _source_autosave.pending() or source_shell == null or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open() or _source_help_modal_open():
 		return false
 	if not _source_save_operation_allowed() or (source_save_menu != null and source_save_menu.visible):
 		return false
@@ -551,7 +564,7 @@ func _source_bank_modal_open() -> bool:
 func _sync_source_bank() -> void:
 	if source_bank_controller == null or source_shell == null:
 		return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup, fate_popup, auction_popup]:
@@ -604,7 +617,7 @@ func _source_help_operation_allowed() -> bool:
 func _sync_source_monthly() -> void:
 	if source_monthly_controller == null or source_shell == null:
 		return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup, fate_popup, auction_popup]:
@@ -645,7 +658,7 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested(stage: int = 0) -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
@@ -679,7 +692,7 @@ func _on_source_new_stage_requested() -> void:
 	_on_source_start_requested(1)
 
 func _on_source_quit_requested() -> void:
-	if not _source_options_modal_open() and not _source_trustee_modal_open() and source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
+	if not _source_options_modal_open() and not _source_trustee_modal_open() and not _source_inventory_modal_open() and source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
 		get_tree().quit()
 
 func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
@@ -918,11 +931,18 @@ func _release_trustee_window_policy() -> void:
 
 func _restore_trustee_window_policy() -> void:
 	if _trustee_quit_policy_held and not _source_trustee_modal_open():
-		get_tree().auto_accept_quit = _trustee_prior_auto_quit
+		if _inventory_quit_policy_held:
+			_inventory_prior_auto_quit = _trustee_prior_auto_quit
+		else:
+			get_tree().auto_accept_quit = _trustee_prior_auto_quit
 		_trustee_quit_policy_held = false
 
 func _exit_tree() -> void:
-	if _trustee_quit_policy_held:
+	if _inventory_quit_policy_held and _trustee_quit_policy_held:
+		get_tree().auto_accept_quit = _inventory_prior_auto_quit or _trustee_prior_auto_quit
+	elif _inventory_quit_policy_held:
+		get_tree().auto_accept_quit = _inventory_prior_auto_quit
+	elif _trustee_quit_policy_held:
 		get_tree().auto_accept_quit = _trustee_prior_auto_quit
 
 func _source_view_operation_allowed() -> bool:
@@ -935,7 +955,7 @@ func _on_source_view_requested() -> void:
 		source_shell.cycle_view_mode()
 
 func _on_source_map_requested() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -945,23 +965,23 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
 
 func _on_source_tools_requested() -> void:
-	_on_cards_pressed()
+	_open_source_inventory("tools")
 
 func _on_source_cards_requested() -> void:
-	_on_cards_pressed()
+	_open_source_inventory("cards")
 
 func _on_source_sale_requested() -> void:
 	_append_local_log("出售功能請從來源股市畫面操作；目前此指令保留待接入。")
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -993,14 +1013,14 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if board_view == null:
 		return
@@ -1494,6 +1514,7 @@ func _build_popups() -> void:
 	cards_popup_list.add_theme_constant_override("separation", 7)
 	inventory_scroll.add_child(cards_popup_list)
 	cards_box.add_child(_make_button("關閉", cards_popup.hide))
+	cards_popup.popup_hide.connect(_inventory_target_hidden)
 
 	facility_popup = _make_popup(Vector2i(590, 390))
 	var facility_box := _popup_box(facility_popup)
@@ -2273,7 +2294,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2444,7 +2465,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2499,10 +2520,10 @@ func _source_modal_open() -> bool:
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open()
+	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2844,8 +2865,10 @@ func _on_bank_withdraw_focus_exited() -> void:
 	_bank_withdraw_focus_text = ""
 
 func _on_cards_pressed() -> void:
-	if not _is_human_turn():
+	if _source_inventory_modal_open() or not _is_human_turn():
 		return
+	cards_popup.min_size = Vector2i(640, 500)
+	cards_popup_list.get_parent().custom_minimum_size = Vector2(0, 330)
 	_update_cards_popup()
 	cards_popup.popup_centered(Vector2i(640, 540))
 	_settle_inventory_popup(cards_popup, Vector2i(640, 540))
@@ -2877,7 +2900,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or (_source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open()) or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2953,7 +2976,7 @@ func _update_bank_popup() -> void:
 	bank_loan_button.disabled = loan_blocked or not _has_action_option(options, "take_loan") or int(state.get("bank", {}).get("cash", 0)) < 10000
 
 func _on_tile_selected(index: int) -> void:
-	if _source_options_modal_open() or _source_trustee_modal_open():
+	if _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open():
 		return
 	_selected_tile = index
 	var tile := _tile_for_index(index)
@@ -3008,9 +3031,11 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _source_options_modal_open() and not _source_trustee_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_options_modal_open() and not _source_trustee_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_inventory_modal_open() and not _inventory_applying:
+		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_trustee_modal_open():
 		return {"ok": false, "message": "請先完成託管設定。"}
 	_source_autosave.sync_owner(game_state)
@@ -3081,6 +3106,7 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	_close_source_inventory(false)
 	_release_trustee_window_policy()
 	_trustee_owner = null
 	_trustee_generation = -1
@@ -3194,6 +3220,8 @@ func _update_all() -> void:
 func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell == null:
 		return
+	if _source_inventory_modal_open() and (_inventory_owner != game_state or _inventory_generation != _presentation_generation):
+		_close_source_inventory(false)
 	if _source_trustee_modal_open() and _trustee_owner != game_state:
 		source_trustee_controller.cancel()
 	if source_options_controller != null:
@@ -3209,10 +3237,10 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "ai", _source_trustee_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open() and not _source_monthly_modal_open() and not _source_lottery_modal_open() and not _source_minigame_modal_open() and not _source_help_modal_open() and not _source_options_modal_open() and not _source_trustee_modal_open())
+		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy and not _source_bank_modal_open() and not _source_monthly_modal_open() and not _source_lottery_modal_open() and not _source_minigame_modal_open() and not _source_help_modal_open() and not _source_options_modal_open() and not _source_trustee_modal_open() and not _source_inventory_modal_open())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
-		source_shell.call("set_toolbar_enabled", "cards", false)
-		source_shell.call("set_toolbar_enabled", "tools", false)
+		source_shell.call("set_toolbar_enabled", "cards", _source_inventory_operation_allowed())
+		source_shell.call("set_toolbar_enabled", "tools", _source_inventory_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "sale", false)
 	_sync_source_bank()
 	_sync_source_monthly()
@@ -3429,7 +3457,7 @@ func _update_property_card(tile: Dictionary) -> void:
 func _update_actions(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var game_over := phase == "game_over"
-	var human_turn := not _source_options_modal_open() and not _source_trustee_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var human_turn := not _source_options_modal_open() and not _source_trustee_modal_open() and not _source_inventory_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
@@ -3486,6 +3514,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
 	elif SleepPresentation.automatic(player):
 		action_hint_label.text = SleepPresentation.hint(player)
+	elif _source_inventory_modal_open():
+		action_hint_label.text = "請選擇卡片" if _inventory_mode == "cards" else "請選擇道具"
 	elif not human_turn:
 		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
 	elif phase == "await_route":
@@ -3712,6 +3742,9 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 	_handle_result(result)
 
 func _update_cards_popup() -> void:
+	var adapter_owner: Variant = _inventory_owner
+	var adapter_generation := _inventory_generation
+	var adapter_attempt := _inventory_attempt
 	for child in cards_popup_list.get_children():
 		child.free()
 	var cards := _as_array(_current_player().get("cards", []))
@@ -3814,6 +3847,7 @@ func _update_cards_popup() -> void:
 				preview.name = "SummonGodTarget"
 				row.add_child(preview)
 			var use := _make_button("使用", func() -> void:
+				if not _inventory_adapter_current(adapter_owner, adapter_generation) or (adapter_owner != null and adapter_attempt != _inventory_attempt): return
 				var params: Dictionary = {"card_id": card_id}
 				if theft_picker != null:
 					var selected: Dictionary = theft_picker.selection()
@@ -3836,7 +3870,7 @@ func _update_cards_popup() -> void:
 					params["tile_id"] = tile_option.get_selected_id()
 				# Close inventory before a card can open its reaction window.
 				cards_popup.hide()
-				var result := _invoke_game("choose_action", ["use_card", params])
+				var result := _apply_inventory_action("use_card", params)
 				_append_local_log("使用卡片 %s：%s" % [card_id, _result_text(result, "已送出卡片指令。")])
 				_handle_result(result)
 			)
@@ -4868,6 +4902,9 @@ func _shop_transaction(action: String, item_kind: String, item_id: String, quant
 	call_deferred("_update_shop_popup")
 
 func _append_tool_inventory() -> void:
+	var adapter_owner: Variant = _inventory_owner
+	var adapter_generation := _inventory_generation
+	var adapter_attempt := _inventory_attempt
 	var player := _current_player()
 	var vehicle := str(player.get("vehicle", "walking"))
 	var vehicle_names := {"walking": "步行", "motorcycle": "機車", "car": "汽車", "engineering": "工程車"}
@@ -4935,6 +4972,7 @@ func _append_tool_inventory() -> void:
 			tile_option = _make_inventory_tile_picker(item_id)
 			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:
+			if not _inventory_adapter_current(adapter_owner, adapter_generation) or (adapter_owner != null and adapter_attempt != _inventory_attempt): return
 			var params: Dictionary = {"tool_id": item_id}
 			if value_option != null:
 				params["value"] = value_option.get_selected_id()
@@ -4945,7 +4983,7 @@ func _append_tool_inventory() -> void:
 				if transport_selection.is_empty():
 					return
 				params.merge(transport_selection)
-			var result := _invoke_game("choose_action", ["use_tool", params])
+			var result := _apply_inventory_action("use_tool", params)
 			_append_local_log("使用道具 %s：%s" % [item_id, _result_text(result, "已送出道具指令。")])
 			_handle_result(result)
 			cards_popup.hide()
@@ -5064,7 +5102,7 @@ func _flush_source_autosave() -> void:
 		_autosave_failure_dialog.popup_centered()
 
 func _source_modal_open_without_autosave() -> bool:
-	return source_shell != null and (source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()) or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
+	return _source_inventory_modal_open() or source_shell != null and (source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()) or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 
 func _build_source_lottery_controller() -> void:
 	var canvas: Control = source_shell.get("reference_canvas")
@@ -5086,7 +5124,7 @@ func _source_lottery_modal_open() -> bool:
 
 func _sync_source_lottery() -> void:
 	if source_lottery_controller == null or source_shell == null: return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup, fate_popup, auction_popup]:
@@ -5116,7 +5154,7 @@ func _source_minigame_modal_open() -> bool:
 
 func _sync_source_minigame() -> void:
 	if source_minigame_controller == null or source_shell == null: return
-	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open()
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_trustee_modal_open() or _source_inventory_modal_open()
 	blocked = blocked or source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()
 	blocked = blocked or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)
 	for popup in [news_popup,fate_popup,auction_popup]:
@@ -5126,3 +5164,146 @@ func _sync_source_minigame() -> void:
 
 func _source_minigame_input_data() -> Dictionary:
 	return SourceMinigameAssets.input_data()
+
+# S19 owns only list lifetime; existing rows remain the validated S22 adapters.
+func _build_source_inventory_panel() -> void:
+	var panel := SourceInventoryPanel.new()
+	panel.z_index = 70
+	panel.selected.connect(_source_inventory_selected.bind(panel))
+	panel.cancelled.connect(func() -> void:
+		if panel == source_inventory_panel: _close_source_inventory())
+	source_shell.reference_canvas.add_child(panel)
+	source_inventory_panel = panel
+	panel.close()
+
+func _source_inventory_modal_open() -> bool:
+	return _inventory_owner != null
+
+func _source_inventory_operation_allowed() -> bool:
+	return _has_original_inventory() and _is_human_turn() and not _source_modal_open() and _source_save_operation_allowed() and not _ai_pending and state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+
+func _open_source_inventory(mode: String) -> void:
+	if not _source_inventory_operation_allowed(): return
+	if source_inventory_panel != null:
+		source_inventory_panel.get_parent().remove_child(source_inventory_panel)
+		source_inventory_panel.queue_free()
+	_build_source_inventory_panel()
+	_presentation_generation += 1
+	_inventory_generation = _presentation_generation
+	_inventory_owner = game_state
+	_inventory_mode = mode
+	_ai_pending = false
+	if not _inventory_quit_policy_held:
+		_inventory_prior_auto_quit = get_tree().auto_accept_quit
+		_inventory_quit_policy_held = true
+	get_tree().auto_accept_quit = false
+	_inventory_window = get_window()
+	var panel := source_inventory_panel
+	_inventory_close_callback = func() -> void:
+		if panel == source_inventory_panel: _close_source_inventory()
+	_inventory_window.close_requested.connect(_inventory_close_callback)
+	_show_source_inventory_list()
+	_update_all()
+
+func _show_source_inventory_list() -> void:
+	if not _inventory_adapter_current(_inventory_owner, _inventory_generation) or _inventory_owner == null: return
+	_inventory_target_active = false
+	_inventory_attempt += 1
+	var cards: Array = []
+	for item in _current_player().get("cards", []):
+		var record := InventoryCatalogue.card(str(item))
+		if not record.is_empty(): cards.append(record)
+	var tools: Array = []
+	for record in InventoryCatalogue.tools():
+		var count := int(_current_player().get("tools", {}).get(record.id, 0))
+		if count > 0:
+			record["count"] = count
+			tools.append(record)
+	source_inventory_panel.set_visual_accessor(source_shell.get("_visuals"))
+	source_inventory_panel.configure({"mode": _inventory_mode, "edition": source_shell.get("_source_edition"), "cards": cards, "tools": tools, "vehicle": _current_player().get("vehicle", "walking")})
+
+func _inventory_adapter_current(owner: Variant, generation: int) -> bool:
+	if owner == null: return not _source_inventory_modal_open()
+	return owner == game_state and owner == _inventory_owner and generation == _presentation_generation and generation == _inventory_generation
+
+func _source_inventory_selected(source_id: int, panel: Control) -> void:
+	if panel != source_inventory_panel or _inventory_owner == null or not _inventory_adapter_current(_inventory_owner, _inventory_generation): return
+	panel.close()
+	if _inventory_mode == "tools" and source_id == 14:
+		if str(_current_player().get("vehicle", "walking")) not in ["motorcycle", "car"]:
+			_show_source_inventory_list()
+			return
+		var result := _apply_inventory_action("set_vehicle", {"vehicle": "walking"})
+		_append_local_log(_result_text(result, "已收回交通工具。"))
+		_handle_result(result)
+		return
+	var catalogue: Array = InventoryCatalogue.cards() if _inventory_mode == "cards" else InventoryCatalogue.tools()
+	var item_id := ""
+	for record in catalogue:
+		if int(record.source_id) == source_id: item_id = str(record.id)
+	if item_id.is_empty():
+		_show_source_inventory_list()
+		return
+	_update_cards_popup()
+	var prefix := "UseCard_" if _inventory_mode == "cards" else "UseTool_"
+	var use: Button = cards_popup_list.find_child(prefix + item_id, true, false)
+	if use == null or use.disabled:
+		_append_local_log("目前無法使用%s；持有物品保持不變。" % item_id)
+		_show_source_inventory_list()
+		_refresh_log_only()
+		return
+	var row := use.get_parent()
+	var has_choice := false
+	for child in row.get_children():
+		if child is OptionButton or child is TheftPicker or child is TransportPicker: has_choice = true
+	if not has_choice:
+		use.pressed.emit()
+		return
+	for child in cards_popup_list.get_children(): child.visible = child == row
+	_inventory_target_active = true
+	# A single validated target row must fit the 640x480 source host too.
+	cards_popup.min_size = Vector2i(600, 260)
+	cards_popup_list.get_parent().custom_minimum_size = Vector2(0, 100)
+	cards_popup.popup_centered(Vector2i(620, 280))
+	_settle_inventory_popup(cards_popup, Vector2i(620, 280))
+
+func _apply_inventory_action(action: String, params: Dictionary) -> Dictionary:
+	var source_session := _source_inventory_modal_open()
+	if source_session and not _inventory_adapter_current(_inventory_owner, _inventory_generation): return {"ok": false}
+	_inventory_applying = source_session
+	var result := _invoke_game("choose_action", [action, params])
+	_inventory_applying = false
+	if source_session:
+		if bool(result.get("ok", false)):
+			_close_source_inventory(false)
+		else:
+			call_deferred("_show_source_inventory_list")
+	return result
+
+func _inventory_target_hidden() -> void:
+	if _inventory_target_active and _source_inventory_modal_open():
+		call_deferred("_show_source_inventory_list")
+
+func _close_source_inventory(refresh: bool = true) -> void:
+	if _inventory_owner == null: return
+	_inventory_owner = null
+	_inventory_generation = -1
+	_inventory_mode = ""
+	_inventory_target_active = false
+	if source_inventory_panel != null: source_inventory_panel.close()
+	if cards_popup != null: cards_popup.hide()
+	if is_instance_valid(_inventory_window) and _inventory_close_callback.is_valid() and _inventory_window.close_requested.is_connected(_inventory_close_callback):
+		_inventory_window.close_requested.disconnect(_inventory_close_callback)
+	_inventory_window = null
+	_inventory_close_callback = Callable()
+	call_deferred("_restore_inventory_quit_policy")
+	_ai_pending = false
+	if refresh: _update_all()
+
+func _restore_inventory_quit_policy() -> void:
+	if _inventory_quit_policy_held and not _source_inventory_modal_open():
+		if _trustee_quit_policy_held:
+			_trustee_prior_auto_quit = _inventory_prior_auto_quit
+		else:
+			get_tree().auto_accept_quit = _inventory_prior_auto_quit
+		_inventory_quit_policy_held = false

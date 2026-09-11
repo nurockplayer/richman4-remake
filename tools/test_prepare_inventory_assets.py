@@ -6,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
+import tempfile
 import unittest
 import zlib
 
@@ -42,7 +44,10 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 class InventoryAssetTests(unittest.TestCase):
     def test_identity_enumerates_both_panel11_resources(self):
-        identity_path = Path(os.environ.get("PANEL11_IDENTITY", ""))
+        identity_value = os.environ.get("PANEL11_IDENTITY")
+        if not identity_value:
+            self.skipTest("PANEL11_IDENTITY is not set")
+        identity_path = Path(identity_value)
         if not identity_path.is_file():
             self.skipTest("PANEL11_IDENTITY is not set")
         selected = _load_identity(identity_path)
@@ -50,7 +55,10 @@ class InventoryAssetTests(unittest.TestCase):
         self.assertTrue(all(len(value["chunks"]) == CHUNK_COUNT for value in selected.values()))
 
     def test_generated_output_keeps_background_and_icon_alpha_roles(self):
-        root = Path(os.environ.get("INVENTORY_ASSET_ROOT", ""))
+        root_value = os.environ.get("INVENTORY_ASSET_ROOT")
+        if not root_value:
+            self.skipTest("INVENTORY_ASSET_ROOT is not set")
+        root = Path(root_value)
         if not root.is_dir():
             self.skipTest("INVENTORY_ASSET_ROOT is not set")
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
@@ -67,6 +75,36 @@ class InventoryAssetTests(unittest.TestCase):
                     self.assertTrue(any(value == 0 for value in alpha))
                 else:
                     self.assertTrue(all(value == 255 for value in alpha))
+
+    def test_generated_output_skips_without_asset_root_configuration(self):
+        test_file = str(Path(__file__).resolve())
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            (temporary_path / "manifest.json").write_text("not JSON", encoding="utf-8")
+            for configured_value in (None, ""):
+                environment = os.environ.copy()
+                if configured_value is None:
+                    environment.pop("INVENTORY_ASSET_ROOT", None)
+                else:
+                    environment["INVENTORY_ASSET_ROOT"] = configured_value
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        test_file,
+                        "InventoryAssetTests.test_generated_output_keeps_background_and_icon_alpha_roles",
+                        "-v",
+                    ],
+                    cwd=temporary,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                self.assertIn("Ran 1 test", output)
+                self.assertIn("OK (skipped=1)", output)
+                self.assertIn("INVENTORY_ASSET_ROOT is not set", output)
 
     def test_base_manifest_paths_resolve_through_private_parent_link(self):
         with self.subTest("nested map character and UI records"):

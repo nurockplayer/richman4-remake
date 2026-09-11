@@ -34,10 +34,10 @@ The rows are work batches, not permission to start them in parallel when writers
 
 1. **Terra freezes the smallest reference contract**: exact original version/provenance, entry/state, visible information/controls and allowed deviations. Reuse existing docs before researching more.
 2. **DeepSeek handles bounded implementation/tests/mechanical changes** through `~/.local/bin/deepseek-worker` when the write boundary is isolated and explicit.
-3. Worker returns exact files changed, focused checks and blockers. Terra reviews the diff; worker exit code alone is not acceptance.
+3. Worker returns exact files changed, focused checks and blockers. Terra reviews the diff; worker exit code alone is not acceptance. **If DeepSeek has one substantive failure, loops, or returns poor-quality/incomplete work, do not keep retrying it: hand the same frozen bounded task to `~/.local/bin/luna-worker`. If Luna also fails or the task proves ambiguous/shared/core, Terra takes it back.**
 4. Render/capture a coherent screen/system batch only after the implementation is stable enough to review.
 5. **Astra reviews the actual rendered batch** against the pinned original references and reports only material visual/interaction differences, ordered by impact.
-6. **Terra decides** which findings are worth fixing, sends bounded fixes back to DeepSeek where safe, then owns integration/native/final verification.
+6. **Terra decides** which findings are worth fixing. Bounded fixes follow the same **DeepSeek → Luna → Terra** fallback; Astra is not an implementation fallback. Terra then owns integration/native/final verification.
 7. Leave a GitHub checkpoint at a meaningful milestone or at least every 60 minutes during long work; update #52 only when the concise handoff materially changes.
 
 ## Visual priority

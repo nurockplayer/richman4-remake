@@ -23,6 +23,29 @@ manual save and load. Active snapshots are deliberately not valid save files;
 load/new-owner replacement cancels old controller generations. After return,
 normal saves and deterministic continuation work as before.
 
+## Public AI match runner
+
+`run_ai_turn()` keeps the pending result for MainUI's delayed controller finish.
+The non-presenting `run_ai_match()` driver instead completes an already-finished
+shortcut through `finish_minigame(encounter_id)`, then resumes the same actor's
+turn. It uses the existing admission reward; it does not reroll or assign points
+itself. An interactive human session, including one that has reached its model
+deadline, still requires its normal result-return boundary. A waiting response
+must not be counted as a completed turn.
+
+The asset-free `source_minigame_ai_runner.gd` regression covers public match
+progression and preserves the direct turn-runner presentation contract. Actual
+installed-catalog reproduction is separate: direct placement on a real event
+node and internal landing admission precede the public match call, so it is not
+ordinary-roll end-to-end evidence. A separate fixed-seed installed Game map1
+case starts normally with seed1 and reaches balloon through public AI turn
+call67 (actor2, node24, reward52), then verifies public match continuation.
+Its four immutable assertions reproduced4/4 RED and4/0 GREEN. The narrow native
+`source_minigame_ai_controller_native.gd` gate uses the real MainUI/controller
+and timeout handler for AI/trustee result return and one daily autosave. Its
+harness disables wall-clock AI scheduling and invokes that handler explicitly;
+it does not establish physical OS input or original-runtime timing.
+
 ## Controls and timing
 
 - Balloon: source point/click,150×100ms active ticks, source16 slots and spawn

@@ -86,6 +86,7 @@ run_checked python3 tools/test_prepare_lottery_assets.py
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_models.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_source_reclaim.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_balloon_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_runner.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
 # These immutable gates require the complete owner-private installed catalog.
@@ -105,6 +106,7 @@ if [[ "${RICHMAN4_MINIGAME_NATIVE_CHECKS:-0}" == "1" ]]; then
   : "${RICHMAN4_MINIGAME_CAPTURE:?native minigames require a private capture directory}"
   run_checked "$GODOT_BIN" --path . --script tests/source_minigame_bomb_mapping_native.gd
   run_checked "$GODOT_BIN" --path . --script tests/source_minigame_natural_scoring_native.gd
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_ai_controller_native.gd
   for minigame_edition in Game MultiverseJourney; do
     RICHMAN4_MINIGAME_EDITION="$minigame_edition" run_checked "$GODOT_BIN" --path . --script tests/source_minigame_native.gd
   done

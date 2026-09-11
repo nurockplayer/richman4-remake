@@ -7843,6 +7843,11 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 		return _error("請先回應陷害卡")
 	if max_turns < 1:
 		return _error("最大回合數無效")
+	# An admitted interactive session belongs to its human result controller.
+	# Do not change its controls or reinterpret it as a new AI shortcut.
+	var pending_minigame: Dictionary = minigame_snapshot()
+	if not pending_minigame.is_empty() and not bool(pending_minigame.get("shortcut", false)):
+		return _result(false, "等待小遊戲結果", {"completed_turns": 0, "awaiting_response": true})
 	for player in _players():
 		if bool(player.get("alive", false)):
 			player["is_ai"] = true
@@ -7850,8 +7855,19 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 	var completed: int = 0
 	while state.get("phase", "") != "game_over" and completed < max_turns:
 		var result: Dictionary = run_ai_turn()
+		# MainUI uses run_ai_turn() and owns its delayed result presentation.
+		# This non-presenting driver consumes only an already-finished shortcut,
+		# through the same encounter-validated, once-only settlement boundary.
+		if bool(result.get("ok", false)):
+			pending_minigame = minigame_snapshot()
+			if bool(pending_minigame.get("shortcut", false)) and bool(pending_minigame.get("finished", false)):
+				result = finish_minigame(int(pending_minigame.get("encounter_id", -1)))
+				if bool(result.get("ok", false)):
+					result = run_ai_turn()
 		if not bool(result.get("ok", false)):
 			return _result(false, str(result.get("message", "AI 失敗")), {"completed_turns": completed})
+		if bool(result.get("awaiting_response", false)):
+			return _result(false, str(result.get("message", "等待玩家回應")), {"completed_turns": completed, "awaiting_response": true})
 		completed += 1
 	if state.get("phase", "") != "game_over":
 		return _result(false, "AI 對局在限制內未結束", {"completed_turns": completed})

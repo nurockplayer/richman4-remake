@@ -3,8 +3,9 @@ extends RefCounted
 
 ## Validated JSON storage for the S34 save/load picker.
 ##
-## Slot zero is the existing default save and is intentionally read-only.  The
-## writable source-shaped rows are 1..5 and always resolve to canonical files
+## Row zero selects owned AUTO or the read-only legacy fallback; write(0)
+## stays read-only. Automatic writes have an explicit separate entry point.
+## Writable source-shaped rows 1..5 always resolve to canonical files
 ## below the configured remake-owned directory.  This module does not adopt a
 ## loaded game; callers receive the validated snapshot and may apply it only
 ## after their own presentation/legacy guards.
@@ -19,6 +20,9 @@ const FIRST_WRITABLE_SLOT := 1
 const LAST_WRITABLE_SLOT := 5
 const SLOT_FILE_PREFIX := "slot-"
 const SLOT_FILE_SUFFIX := ".json"
+const AUTOMATIC_FILE_NAME := "auto.json"
+const SOURCE_IDENTITY_AUTOMATIC := "automatic"
+const SOURCE_IDENTITY_LEGACY := "legacy"
 
 const STATUS_EMPTY := "empty"
 const STATUS_VALID := "valid"
@@ -83,6 +87,7 @@ class FileSystemIO extends RefCounted:
 
 var _slot_directory: String
 var _default_save_path: String
+var _automatic_path: String
 var _io: Object
 var _temporary_sequence := 0
 
@@ -98,6 +103,7 @@ func _init(
 		default_save_path = DEFAULT_SAVE_PATH
 	_slot_directory = _canonical_path(slot_directory)
 	_default_save_path = _canonical_path(default_save_path)
+	_automatic_path = _slot_directory.path_join(AUTOMATIC_FILE_NAME).simplify_path()
 	_io = io_adapter if io_adapter != null else FileSystemIO.new()
 
 
@@ -115,6 +121,11 @@ func slot_path(slot_id: Variant) -> String:
 
 func default_path() -> String:
 	return _default_save_path
+
+
+## Return the canonical path used by the automatic save source.
+func automatic_path() -> String:
+	return _automatic_path
 
 
 ## Scan all six source-shaped load rows.  The scan operation itself succeeds
@@ -142,7 +153,7 @@ func preview(slot_id: Variant) -> Dictionary:
 	var resolved := _resolve_slot(slot_id)
 	if not bool(resolved.get("ok", false)):
 		return _error_result(str(resolved.get("error", "invalid_slot_id")), slot_id)
-	return _inspect(int(resolved.slot), str(resolved.path), false)
+	return _inspect(int(resolved.slot), str(resolved.path), false, null, str(resolved.get("source_identity", "")))
 
 
 func preview_slot(slot_id: Variant) -> Dictionary:
@@ -158,14 +169,14 @@ func read(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
 	if not bool(resolved.get("ok", false)):
 		return _error_result(str(resolved.get("error", "invalid_slot_id")), slot_id)
 	if not _valid_expected_fingerprint(expected_fingerprint):
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_ERROR,
 			"error": "invalid_expected_fingerprint",
 			"slot": int(resolved.slot),
 			"path": str(resolved.path),
-		}
-	return _inspect(int(resolved.slot), str(resolved.path), true, expected_fingerprint)
+		}, str(resolved.get("source_identity", "")))
+	return _inspect(int(resolved.slot), str(resolved.path), true, expected_fingerprint, str(resolved.get("source_identity", "")))
 
 
 func read_slot(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
@@ -181,72 +192,88 @@ func write(slot_id: Variant, payload: Variant, expected_fingerprint: Variant = n
 		return _error_result(str(resolved.get("error", "invalid_slot_id")), slot_id)
 	var slot := int(resolved.slot)
 	if slot == FIRST_SLOT:
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_READONLY,
 			"error": "readonly_slot",
 			"slot": slot,
 			"path": str(resolved.path),
-		}
+		}, str(resolved.get("source_identity", "")))
+	return _write_payload(slot, str(resolved.path), payload, expected_fingerprint, "")
+
+
+## Validate and atomically write the automatic source.  The payload and
+## transaction path are intentionally independent from row zero's legacy file
+## and from manual rows 1..5.
+func write_automatic(payload: Variant, expected_fingerprint: Variant = null) -> Dictionary:
+	if _automatic_path_conflicts():
+		return _annotate({
+			"ok": false,
+			"status": STATUS_ERROR,
+			"error": "automatic_path_conflict",
+			"slot": FIRST_SLOT,
+			"path": _automatic_path,
+		}, SOURCE_IDENTITY_AUTOMATIC)
+	return _write_payload(FIRST_SLOT, _automatic_path, payload, expected_fingerprint, SOURCE_IDENTITY_AUTOMATIC)
+
+
+func _write_payload(slot: int, destination: String, payload: Variant, expected_fingerprint: Variant, source_identity: String) -> Dictionary:
 	if typeof(payload) != TYPE_DICTIONARY:
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_INVALID,
 			"error": "invalid_payload",
 			"slot": slot,
-			"path": str(resolved.path),
-		}
+			"path": destination,
+		}, source_identity)
 	if not _valid_expected_fingerprint(expected_fingerprint):
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_ERROR,
 			"error": "invalid_expected_fingerprint",
-			"slot": slot,
-			"path": str(resolved.path),
-		}
+			"slot": slot, "path": destination,
+		}, source_identity)
 
 	var snapshot: Dictionary = payload.duplicate(true)
 	var validation := _validate_snapshot(snapshot)
 	if not bool(validation.get("ok", false)):
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_INVALID,
 			"error": "invalid_payload",
 			"validation_errors": validation.get("errors", []),
 			"slot": slot,
-			"path": str(resolved.path),
-		}
-
-	var destination := str(resolved.path)
+			"path": destination,
+		}, source_identity)
 	var directory_error := _ensure_slot_directory()
 	if directory_error != OK:
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_ERROR,
 			"error": "directory_create_failed",
 			"io_error": directory_error,
 			"slot": slot,
 			"path": destination,
-		}
+		}, source_identity)
 
 	var lock := _io_call("acquire_write_lock", [destination])
 	if not bool(lock.get("ok", false)):
-		return {
+		return _annotate({
 			"ok": false, "status": STATUS_ERROR, "error": "slot_write_busy",
 			"io_error": lock.get("io_error", ERR_CANT_CREATE),
 			"slot": slot, "path": destination,
-		}
-	var result := _write_locked(slot, destination, snapshot, expected_fingerprint)
+		}, source_identity)
+	var result := _write_locked(slot, destination, snapshot, expected_fingerprint, source_identity)
 	var release_error := int(_io_call_value("release_write_lock", [str(lock.path)], ERR_CANT_CREATE))
 	if release_error != OK:
 		# A successful rename remains a successful save. Surface the cleanup
 		# failure without pretending that the committed destination was lost.
 		result["lock_cleanup_error"] = release_error
-	return result
+	return _annotate(result, source_identity)
 
 
-func _write_locked(slot: int, destination: String, snapshot: Dictionary, expected_fingerprint: Variant) -> Dictionary:
-	var fingerprint_result := _current_fingerprint(destination)
+func _write_locked(slot: int, destination: String, snapshot: Dictionary, expected_fingerprint: Variant, source_identity: String = "") -> Dictionary:
+	var fingerprint_result := _current_fingerprint(destination, source_identity)
 	if expected_fingerprint != null:
 		var current_fingerprint := str(fingerprint_result.get("fingerprint", ""))
 		var current_readable := bool(fingerprint_result.get("ok", false))
@@ -317,7 +344,7 @@ func _write_locked(slot: int, destination: String, snapshot: Dictionary, expecte
 	if expected_fingerprint != null:
 		# Re-check immediately before rename so a writer that occupied an empty
 		# destination while this write was preparing its temporary is rejected.
-		var final_fingerprint_result := _current_fingerprint(destination)
+		var final_fingerprint_result := _current_fingerprint(destination, source_identity)
 		var final_fingerprint := str(final_fingerprint_result.get("fingerprint", ""))
 		var final_readable := bool(final_fingerprint_result.get("ok", false))
 		var final_exists := bool(final_fingerprint_result.get("exists", false))
@@ -343,7 +370,7 @@ func _write_locked(slot: int, destination: String, snapshot: Dictionary, expecte
 	# The validated temporary bytes are the exact bytes committed by rename.
 	# Avoid a fallible post-rename operation: once rename succeeds, no later
 	# check is allowed to report a failure after the old destination is gone.
-	var fingerprint := _fingerprint_bytes(bytes)
+	var fingerprint := _fingerprint_bytes(bytes, source_identity)
 	return {
 		"ok": true,
 		"status": STATUS_WRITTEN,
@@ -364,7 +391,13 @@ func _resolve_slot(slot_id: Variant) -> Dictionary:
 		return {"ok": false, "error": "invalid_slot_id"}
 	var slot := int(slot_id)
 	if slot == FIRST_SLOT:
-		return {"ok": true, "slot": slot, "path": _default_save_path}
+		var automatic_exists := not _automatic_path_conflicts() and bool(_io_call_value("file_exists", [_automatic_path], false))
+		return {
+			"ok": true,
+			"slot": slot,
+			"path": _automatic_path if automatic_exists else _default_save_path,
+			"source_identity": SOURCE_IDENTITY_AUTOMATIC if automatic_exists else SOURCE_IDENTITY_LEGACY,
+		}
 	return {
 		"ok": true,
 		"slot": slot,
@@ -372,57 +405,70 @@ func _resolve_slot(slot_id: Variant) -> Dictionary:
 	}
 
 
+func _is_manual_path(path: String) -> bool:
+	for slot_id in range(FIRST_WRITABLE_SLOT, LAST_WRITABLE_SLOT + 1):
+		var manual_path := _slot_directory.path_join(SLOT_FILE_PREFIX + str(slot_id) + SLOT_FILE_SUFFIX).simplify_path()
+		if path == manual_path:
+			return true
+	return false
+
+
+func _automatic_path_conflicts() -> bool:
+	return _default_save_path == _automatic_path or _is_manual_path(_default_save_path)
+
+
 func _inspect(
 		slot: int,
 		path: String,
 		include_snapshot: bool,
 		expected_fingerprint: Variant = null,
+		source_identity: String = "",
 ) -> Dictionary:
 	var read_result := _io_call("read_bytes", [path])
 	if not bool(read_result.get("ok", false)):
 		if str(read_result.get("error", "")) == "missing" or not bool(_io_call_value("file_exists", [path], false)):
 			if expected_fingerprint != null and not str(expected_fingerprint).is_empty():
-				return _stale_result(slot, path, str(expected_fingerprint), "destination_changed")
-			return {
+				return _stale_result(slot, path, str(expected_fingerprint), "destination_changed", source_identity)
+			return _annotate({
 				"ok": true,
 				"status": STATUS_EMPTY,
 				"slot": slot,
 				"path": path,
 				"fingerprint": "",
-			}
-		return {
+			}, source_identity)
+		return _annotate({
 			"ok": false,
 			"status": STATUS_UNREADABLE,
 			"error": str(read_result.get("error", "read_failed")),
 			"slot": slot,
 			"path": path,
 			"fingerprint": "",
-		}
+		}, source_identity)
 	var bytes: Variant = read_result.get("bytes", null)
 	if typeof(bytes) != TYPE_PACKED_BYTE_ARRAY:
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_UNREADABLE,
 			"error": "invalid_io_bytes",
 			"slot": slot,
 			"path": path,
 			"fingerprint": "",
-		}
-	var fingerprint := _fingerprint_bytes(bytes)
+		}, source_identity)
+	var fingerprint := _fingerprint_bytes(bytes, source_identity)
 	if expected_fingerprint != null and fingerprint != str(expected_fingerprint):
-		return _stale_result(slot, path, str(expected_fingerprint), "destination_changed")
+		return _stale_result(slot, path, str(expected_fingerprint), "destination_changed", source_identity)
 	var decoded := _decode_and_validate(bytes)
 	if str(decoded.get("status", "")) == STATUS_CORRUPT:
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_CORRUPT,
 			"error": decoded.get("error", "malformed_json"),
 			"slot": slot,
 			"path": path,
 			"fingerprint": fingerprint,
-		}
+		}, source_identity)
 	if not bool(decoded.get("ok", false)):
-		return {
+		return _annotate({
 			"ok": false,
 			"status": STATUS_INVALID,
 			"error": decoded.get("error", "save_validation_failed"),
@@ -430,7 +476,7 @@ func _inspect(
 			"slot": slot,
 			"path": path,
 			"fingerprint": fingerprint,
-		}
+		}, source_identity)
 	var result := {
 		"ok": true,
 		"status": STATUS_VALID,
@@ -441,7 +487,7 @@ func _inspect(
 	}
 	if include_snapshot:
 		result["snapshot"] = decoded.snapshot.duplicate(true)
-	return result
+	return _annotate(result, source_identity)
 
 
 func _validate_snapshot(snapshot: Dictionary) -> Dictionary:
@@ -587,7 +633,7 @@ func _date_text(date: Dictionary) -> String:
 	return ""
 
 
-func _current_fingerprint(path: String) -> Dictionary:
+func _current_fingerprint(path: String, source_identity: String = "") -> Dictionary:
 	var exists := bool(_io_call_value("file_exists", [path], false))
 	if not exists:
 		return {"ok": true, "exists": false, "fingerprint": ""}
@@ -597,7 +643,7 @@ func _current_fingerprint(path: String) -> Dictionary:
 	var bytes: Variant = read_result.get("bytes", null)
 	if typeof(bytes) != TYPE_PACKED_BYTE_ARRAY:
 		return {"ok": false, "exists": true, "fingerprint": "", "error": "invalid_io_bytes"}
-	return {"ok": true, "exists": true, "fingerprint": _fingerprint_bytes(bytes)}
+	return {"ok": true, "exists": true, "fingerprint": _fingerprint_bytes(bytes, source_identity)}
 
 
 func _ensure_slot_directory() -> int:
@@ -618,8 +664,8 @@ func _cleanup_temporary(path: String, owned: bool) -> void:
 		_io_call_value("remove", [path], ERR_CANT_CREATE)
 
 
-func _stale_result(slot: int, path: String, expected: String, reason: String) -> Dictionary:
-	return {
+func _stale_result(slot: int, path: String, expected: String, reason: String, source_identity: String = "") -> Dictionary:
+	return _annotate({
 		"ok": false,
 		"status": STATUS_STALE,
 		"error": "stale_destination",
@@ -627,7 +673,13 @@ func _stale_result(slot: int, path: String, expected: String, reason: String) ->
 		"expected_fingerprint": expected,
 		"slot": slot,
 		"path": path,
-	}
+	}, source_identity)
+
+
+func _annotate(result: Dictionary, source_identity: String) -> Dictionary:
+	if not source_identity.is_empty():
+		result["source_identity"] = source_identity
+	return result
 
 
 func _error_result(error: String, slot_id: Variant) -> Dictionary:
@@ -655,10 +707,14 @@ func _valid_expected_fingerprint(value: Variant) -> bool:
 	return true
 
 
-func _fingerprint_bytes(bytes: PackedByteArray) -> String:
+func _fingerprint_bytes(bytes: PackedByteArray, source_identity: String = "") -> String:
 	var context := HashingContext.new()
 	if context.start(HashingContext.HASH_SHA256) != OK:
 		return ""
+	if source_identity == SOURCE_IDENTITY_AUTOMATIC:
+		# Keep legacy/manual fingerprints byte-derived for compatibility while
+		# making row-zero source changes stale even when bytes are identical.
+		context.update("richman4-save-source:automatic\n".to_utf8_buffer())
 	context.update(bytes)
 	return context.finish().hex_encode()
 

@@ -26,6 +26,7 @@ const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const SourceOptionsController = preload("res://game/ui/source_options_controller.gd")
+const SourceAutosave = preload("res://game/ui/source_autosave.gd")
 const SourcePreferences = preload("res://game/ui/source_preferences.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
 const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
@@ -79,6 +80,10 @@ var source_save_menu: Control
 var source_bank_controller: Control
 var source_monthly_controller: Control
 var source_options_controller: Control
+var source_save_directory := "user://richman4-save-slots"
+var source_legacy_save_path := SAVE_PATH
+var _source_autosave := SourceAutosave.new()
+var _autosave_failure_dialog: ConfirmationDialog
 var source_settings_path := SystemSettings.DEFAULT_PATH
 var source_hotkeys_path := SystemHotkeys.DEFAULT_PATH
 var _source_settings: Dictionary = SystemSettings.new().defaults()
@@ -392,7 +397,7 @@ func _build_source_options_controller() -> void:
 		return
 	var controller := SourceOptionsController.new()
 	controller.z_index = 70
-	controller.host_status_text = "目前套用音樂與移動速度；動畫、音效、自動存檔、視窗模式尚未接入。"
+	controller.host_status_text = "目前套用音樂、移動速度與每日自動存檔；動畫、音效、視窗模式尚未接入。"
 	controller.settings_path = source_settings_path
 	controller.hotkeys_path = source_hotkeys_path
 	controller.finished.connect(func() -> void:
@@ -423,7 +428,7 @@ func _source_options_modal_open() -> bool:
 	return source_options_controller != null and source_options_controller.is_open()
 
 func _source_options_operation_allowed() -> bool:
-	if source_shell == null or _source_options_modal_open() or _source_help_modal_open():
+	if _source_autosave.pending() or source_shell == null or _source_options_modal_open() or _source_help_modal_open():
 		return false
 	if not _source_save_operation_allowed() or (source_save_menu != null and source_save_menu.visible):
 		return false
@@ -607,7 +612,7 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested(stage: int = 0) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell == null or not source_shell.has_method("show_setup"):
 		_on_new_game_pressed()
@@ -703,6 +708,7 @@ func _on_source_setup_cancelled() -> void:
 func _build_source_save_menu() -> void:
 	var menu := SourceSaveMenu.new()
 	menu.name = "SourceSaveMenu"
+	menu.storage = SourceSaveMenu.SaveSlots.new(source_save_directory, source_legacy_save_path)
 	menu.z_index = 30
 	menu.hide()
 	source_shell.add_child(menu)
@@ -728,7 +734,7 @@ func _source_save_operation_allowed() -> bool:
 	return true
 
 func _open_source_save_menu(mode: String) -> void:
-	if source_save_menu == null or source_save_menu.visible or not _source_save_operation_allowed():
+	if source_save_menu == null or source_save_menu.visible or _source_autosave.pending() or not _source_save_operation_allowed():
 		return
 	var snapshot: Dictionary = {}
 	if mode == "save":
@@ -791,7 +797,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -801,7 +807,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -817,7 +823,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -849,14 +855,14 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if board_view == null:
 		return
@@ -2129,7 +2135,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2300,7 +2306,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2349,6 +2355,7 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _source_modal_open() -> bool:
+	if _source_autosave.pending(): return true
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
@@ -2364,6 +2371,7 @@ func _reject_load_during_presentation() -> void:
 	_refresh_log_only()
 
 func _load_game_from_path(path: String) -> void:
+	if _source_autosave.pending(): return
 	if _load_blocked_by_presentation():
 		_reject_load_during_presentation()
 		return
@@ -2731,7 +2739,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_help_modal_open() or _source_options_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2865,6 +2873,9 @@ func _is_human_turn() -> bool:
 	return not _source_options_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	_source_autosave.sync_owner(game_state)
+	if _source_autosave.pending():
+		return {"ok": false, "message": "請先完成每日自動存檔。"}
 	if _source_options_modal_open():
 		return {"ok": false, "message": "請先關閉系統選項。"}
 	if _source_help_modal_open():
@@ -2890,6 +2901,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		if result is Dictionary:
 			if source_monthly_controller != null:
 				source_monthly_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
+			if bool(result.get("ok", false)):
+				_source_autosave.capture_transition(game_state, before, _read_snapshot(), bool(_source_settings.get("autosave", false)))
 			result["_presentation_before"] = before
 			result["_presentation_generation"] = _presentation_generation
 			result["_presentation_owner"] = game_state
@@ -2920,6 +2933,9 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	_source_autosave.cancel()
+	if _autosave_failure_dialog != null:
+		_autosave_failure_dialog.hide()
 	if source_options_controller != null:
 		source_options_controller.cancel()
 	if _source_options_confirmation != null:
@@ -2957,6 +2973,7 @@ func _on_movement_finished() -> void:
 		_refresh_from_state(result)
 
 func _refresh_from_state(result: Dictionary = {}) -> void:
+	_source_autosave.sync_owner(game_state)
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	var snapshot := _read_snapshot()
@@ -2972,6 +2989,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 		source_shell.call("show_game")
 	_sync_source_bank()
 	_sync_source_monthly()
+	_flush_source_autosave()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -3050,6 +3068,8 @@ func _update_load_gate() -> void:
 	# Defer until any enclosing snapshot refresh has finished its other gates.
 	if _source_monthly_modal_open():
 		_sync_source_monthly.call_deferred()
+	if _source_autosave.pending():
+		_flush_source_autosave.call_deferred()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -3457,6 +3477,7 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
+	if _source_autosave.pending(): return
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if _source_modal_open():
@@ -3486,6 +3507,9 @@ func _maybe_schedule_ai_turn() -> void:
 	timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
 
 func _on_ai_timer_timeout(generation := -1) -> void:
+	if _source_autosave.pending():
+		_ai_pending = false
+		return
 	if _legacy_save_modal_open():
 		_ai_pending = false
 		return
@@ -4837,3 +4861,40 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 		picker.disabled = true
 		picker.tooltip_text = "關閉背包後，可縮放或平移地圖，再重新選擇目標。"
 	return picker
+
+func _flush_source_autosave() -> void:
+	if source_save_menu == null: return
+	var blocked := not _source_save_operation_allowed() or _source_modal_open_without_autosave()
+	var result: Dictionary = _source_autosave.flush(game_state, source_save_menu.storage, blocked)
+	if result.is_empty(): return
+	_ai_pending = false
+	if bool(result.get("ok", false)):
+		_append_local_log("已完成每日自動存檔（AUTO）。")
+		_refresh_log_only()
+	elif _source_autosave.failed():
+		_append_local_log("每日自動存檔失敗：" + str(result.get("error", "unknown")))
+		if is_instance_valid(_autosave_failure_dialog):
+			_autosave_failure_dialog.hide()
+			_autosave_failure_dialog.queue_free()
+		var dialog := ConfirmationDialog.new()
+		_autosave_failure_dialog = dialog
+		var owner := game_state
+		var generation := _presentation_generation
+		dialog.title = "每日自動存檔失敗"
+		dialog.ok_button_text = "重試"
+		dialog.cancel_button_text = "略過本次"
+		dialog.confirmed.connect(func() -> void:
+			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
+			_source_autosave.retry()
+			_flush_source_autosave.call_deferred())
+		dialog.canceled.connect(func() -> void:
+			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
+			_source_autosave.skip()
+			_ai_pending = false
+			_refresh_from_state())
+		add_child(dialog)
+		_autosave_failure_dialog.dialog_text = "未寫入新的 AUTO 存檔。可以重試，或略過本次並繼續遊戲。"
+		_autosave_failure_dialog.popup_centered()
+
+func _source_modal_open_without_autosave() -> bool:
+	return source_shell != null and (source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()) or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)

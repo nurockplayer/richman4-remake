@@ -1,6 +1,13 @@
 extends SceneTree
 const Fixture = preload("res://tests/fixtures/company_fixture.gd")
 class TitleTestUI extends "res://game/ui/main_ui.gd":
+	func _init() -> void:
+		var folder := "/tmp/richman4-title-host-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+		DirAccess.make_dir_recursive_absolute(folder)
+		source_settings_path = folder.path_join("settings.json")
+		source_hotkeys_path = folder.path_join("hotkeys.json")
+		source_save_directory = folder.path_join("slots")
+		source_legacy_save_path = folder.path_join("legacy.json")
 	var quit_intents := 0
 	var option_intents := 0
 	func _on_source_option_requested() -> void: option_intents += 1

@@ -301,6 +301,8 @@ static func classify_source_node(type_and_idx: Variant, event_code: Variant, ori
 		return {"ok": true, "kind": "points", "points": {10: 50, 11: 30, 12: 10}[event]}
 	if event == 2:
 		return {"ok": true, "kind": "news"}
+	if event in [6, 7, 8]:
+		return {"ok": true, "kind": "minigame"}
 	if event == 9:
 		return {"ok": true, "kind": "lottery"}
 	if event == 3:
@@ -466,6 +468,8 @@ static func normalize_map(raw: Variant, original_facilities: bool = false) -> Di
 			tile.points = int(classification.points)
 		elif classification.kind == "news":
 			tile.kind = "news"
+		elif classification.kind == "minigame":
+			tile.kind = "minigame"
 		elif classification.kind == "lottery":
 			tile.kind = "lottery"
 		elif classification.kind == "fate":

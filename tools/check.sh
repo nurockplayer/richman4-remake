@@ -82,6 +82,35 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_public_purchase.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_cancel_lifecycle.gd
 run_checked python3 tools/test_prepare_lottery_assets.py
+# Issue #157 deterministic models and source presenters are asset-free CI gates.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_models.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_source_reclaim.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_balloon_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_runner.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
+# These immutable gates require the complete owner-private installed catalog.
+# Public fixture-only CI cannot substitute for normal source event admission.
+if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_core.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_catalog.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_return_autosave.gd
+else
+  echo "PRECONDITION_UNMET: source minigame core/catalog gates require RICHMAN4_MAP_CATALOG"
+fi
+# Native gates need an actual display and a fresh private capture directory.
+# Public headless CI never treats these as covered by the model tests.
+if [[ "${RICHMAN4_MINIGAME_NATIVE_CHECKS:-0}" == "1" ]]; then
+  : "${RICHMAN4_MAP_CATALOG:?native minigames require the installed catalog}"
+  : "${RICHMAN4_SCENE_MANIFEST:?native minigames require the prepared scene}"
+  : "${RICHMAN4_MINIGAME_CAPTURE:?native minigames require a private capture directory}"
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_bomb_mapping_native.gd
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_natural_scoring_native.gd
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_ai_controller_native.gd
+  for minigame_edition in Game MultiverseJourney; do
+    RICHMAN4_MINIGAME_EDITION="$minigame_edition" run_checked "$GODOT_BIN" --path . --script tests/source_minigame_native.gd
+  done
+fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/monthly_statements.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_rendering.gd

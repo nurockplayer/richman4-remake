@@ -30,6 +30,7 @@ const SpecialFinance = preload("res://game/core/special_finance.gd")
 const SourceMinigameFlow = preload("res://game/core/source_minigame_flow.gd")
 const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
+const SourceSale = preload("res://game/core/source_sale_flow.gd")
 const MonthlyStatements = preload("res://game/core/monthly_statements.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -1206,6 +1207,7 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 	state["jackpot"] = 0
 	LotteryFlow.initialize(state)
 	SourceShop.initialize(state)
+	SourceSale.initialize(state)
 	for company in state.companies:
 		company["owner"] = -1
 		company["treasury"] = 10000 - int(state.market.rows[OriginalStockMarket.symbol(int(company.stock_index))].market_supply)
@@ -2317,7 +2319,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_lottery", "await_minigame", "await_shop"]:
+	if phase in ["game_over", "await_lottery", "await_minigame", "await_shop", "await_sale"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -3472,14 +3474,14 @@ func apply_trustee_settings(rows: Array) -> bool:
 
 
 func request_trustee_recovery() -> bool:
-	if state.get("phase", "") == "await_shop": return false
+	if state.get("phase", "") in ["await_shop", "await_sale"]: return false
 	if state.get("phase", "") == "game_over":
 		return false
 	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
-	if state.get("phase", "") == "await_shop": return false
+	if state.get("phase", "") in ["await_shop", "await_sale"]: return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -4859,7 +4861,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_lottery", "await_minigame", "await_shop"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_lottery", "await_minigame", "await_shop", "await_sale"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5300,6 +5302,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	if SourceShop.enabled(self) and action.to_lower().strip_edges() in ["buy_item", "sell_item"]:
 		return SourceShop.trade(self, action.to_lower().strip_edges(), params)
 	if state.get("phase", "") == "await_shop": return _error("請先完成商店操作")
+	if state.get("phase", "") == "await_sale": return _error("請先完成販賣操作")
 	if state.get("phase", "") == "await_minigame":
 		return _error("請先完成小遊戲")
 	if state.get("phase", "") == "await_lottery":
@@ -6624,6 +6627,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 				return
 			# Source expiry follows deadline, market and month-end settlement.
 			LandTenure.expire_today(self)
+			SourceSale.cleanup(self, true)
 		else:
 			var market: Dictionary = state.get("market", {})
 			var trends: Dictionary = market.get("trends", {})
@@ -6972,6 +6976,8 @@ var _trustee_bank_balanced := false
 
 
 func run_ai_turn() -> Dictionary:
+	if state.get("phase", "") == "await_sale":
+		return _result(false, "等待販賣操作", {"awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
 		return _result(false, "等待商店操作", {"awaiting_response": true, "completed": false})
 	_trustee_ai_dispatch = true
@@ -7043,6 +7049,9 @@ func _run_ai_turn_dispatch() -> Dictionary:
 			break
 		safety += 1
 		if state.get("phase", "") == "await_roll":
+			SourceSale.ai_turn(self)
+			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
+				continue
 			if _is_inventory():
 				_ai_roll_action(player_id)
 			# Immediate card effects can end the match or hand off this turn.
@@ -7854,6 +7863,8 @@ func _ai_transport_action(player_id: int) -> bool:
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:
+	if state.get("phase", "") == "await_sale":
+		return _result(false, "等待販賣操作", {"completed_turns": 0, "awaiting_response": true})
 	if state.get("phase", "") == "await_shop":
 		return _result(false, "等待商店操作", {"completed_turns": 0, "awaiting_response": true})
 	if _trap_pending():
@@ -8521,10 +8532,14 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if graph_save:
 		allowed_phases.append("await_route")
 	if companies_save:
-		allowed_phases.append_array(["await_bank", "await_lottery", "await_shop"])
+		allowed_phases.append_array(["await_bank", "await_lottery", "await_shop", "await_sale"])
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	var sale_errors: Array = SourceSale.validate(data, companies_save)
+	if not sale_errors.is_empty():
+		errors.append_array(sale_errors)
+		return {"ok": false, "errors": errors}
 	var shop_errors: Array = SourceShop.validate(data, companies_save)
 	if not shop_errors.is_empty():
 		errors.append_array(shop_errors)
@@ -9846,6 +9861,8 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		LotteryFlow.initialize(candidate)
 	if bool(candidate.get("original_companies", false)) and not candidate.has("shop_visit") and not candidate.has("shop_sequence"):
 		SourceShop.initialize(candidate)
+	if bool(candidate.get("original_companies", false)) and not candidate.has("sale_board"):
+		SourceSale.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -9954,3 +9971,25 @@ func acknowledge_shop_gift(visit_id: int) -> Dictionary:
 
 func leave_shop(visit_id: int) -> Dictionary:
 	return SourceShop.leave(self, visit_id)
+
+
+func can_open_sale() -> bool:
+	return SourceSale.can_open(self)
+
+func open_sale() -> Dictionary:
+	return SourceSale.open(self)
+
+func sale_snapshot() -> Dictionary:
+	return SourceSale.snapshot(self)
+
+func sale_create_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.create_offer(self, params)
+
+func sale_cancel_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.cancel_offer(self, params)
+
+func sale_accept_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.accept_offer(self, params)
+
+func close_sale(session_id: int) -> Dictionary:
+	return SourceSale.close(self, session_id)

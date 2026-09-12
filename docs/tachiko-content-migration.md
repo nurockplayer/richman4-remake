@@ -70,8 +70,10 @@ Tachiko semantic revision。
 
 Rust 負責既有型別、reference、calculation、canonical validation；consumer adapter 負責
 本遊戲的非負整數／範圍、點數單位、category-local ID、行序和 loss gate。
-本域數值可精確表示為小整數；從 Rust Number 投影時先檢查 finite / integer / range，
-再輸出 JSON integer，禁止四捨五入。不要宣稱 Rust 核心已驗證 adapter 自行檢查的條件。
+本域數值可精確表示為小整數；轉成 Tachiko Number 前，以及從 Rust Number 投影時，
+都先檢查 inclusive safe-integer range `[-9007199254740991, 9007199254740991]`、
+finite 與 integer，再輸出 JSON integer，禁止四捨五入。不要宣稱 Rust 核心已驗證
+adapter 自行檢查的條件。
 財務或公式移植另案評估，不能由此推論 float32 行為相同。
 
 ## Acceptance seed 與命令

@@ -8,6 +8,8 @@ use tachiko_workspace_engine::{validate, Document, Entity, EntityId, FieldDefini
 const PREFIX: &str = "RICHMAN4_CATALOG_ORACLE=";
 const CARD_COUNT: usize = 30;
 const TOOL_COUNT: usize = 13;
+const SAFE_INTEGER_MIN: i64 = -9_007_199_254_740_991;
+const SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,7 +105,13 @@ fn consumer_check(c: &Catalog) {
         }
     }
 }
-fn num(v: i64) -> Number { Number::new(v as f64).unwrap_or_else(|e| fail(format!("number rejected: {e}"))) }
+fn checked_number(v: i64, key: &str) -> Result<Number, String> {
+    if !(SAFE_INTEGER_MIN..=SAFE_INTEGER_MAX).contains(&v) {
+        return Err(format!("{key}={v} outside Tachiko Number safe-integer range [{SAFE_INTEGER_MIN}, {SAFE_INTEGER_MAX}]"));
+    }
+    Number::new(v as f64).map_err(|e| format!("{key}={v} rejected by Tachiko Number: {e}"))
+}
+fn num(v: i64) -> Number { checked_number(v, "integer").unwrap_or_else(|e| fail(e)) }
 fn fid(category: &str, key: &str) -> FieldId { format!("field-{category}-{key}").into() }
 fn eid(category: &str, legacy_id: &str) -> EntityId {
     let mut hash = 14_695_981_039_346_656_037_u64;
@@ -185,7 +193,7 @@ fn identity_from_roproj(input: &Path, output: &Path) {
             _ => fail(format!("{key} has no typed legacy_id")),
         };
         let source_id = match entity.fields.get(&fid(category, "source_id")) {
-            Some(Value::Number(value)) if value.get().fract() == 0.0 => value.get() as i64,
+            Some(Value::Number(value)) => checked_f64_integer(value.get(), &format!("{key} source_id")).unwrap_or_else(|e| fail(e)),
             _ => fail(format!("{key} has no integer source_id")),
         };
         records.push(ManifestRecord { category: category.into(), source_id, legacy_id, semantic_id: entity.id.to_string() });
@@ -195,11 +203,37 @@ fn identity_from_roproj(input: &Path, output: &Path) {
     write_new(output, serde_json::to_vec_pretty(&mapping).unwrap_or_else(|e| fail(e.to_string())).as_slice());
 }
 fn value(e: &RuntimeEntity, key: &str) -> JsonValue { e.fields.get(key).cloned().unwrap_or_else(|| fail(format!("runtime field missing: {key}"))) }
-fn integer(v: JsonValue, key: &str) -> i64 {
-    let n = v.as_f64().unwrap_or_else(|| fail(format!("runtime {key} is not numeric")));
-    if !n.is_finite() || n.fract() != 0.0 || n < i64::MIN as f64 || n > i64::MAX as f64 { fail(format!("runtime {key} is not exact integer")); }
-    n as i64
+fn checked_f64_integer(n: f64, key: &str) -> Result<i64, String> {
+    if !n.is_finite() { return Err(format!("runtime {key} is not finite")); }
+    if n.fract() != 0.0 { return Err(format!("runtime {key} is not an integer")); }
+    if n < SAFE_INTEGER_MIN as f64 || n > SAFE_INTEGER_MAX as f64 {
+        return Err(format!("runtime {key}={n} outside Tachiko Number safe-integer range [{SAFE_INTEGER_MIN}, {SAFE_INTEGER_MAX}]"));
+    }
+    Ok(n as i64)
 }
+fn checked_json_integer(v: JsonValue, key: &str) -> Result<i64, String> {
+    let number = match v {
+        JsonValue::Number(number) => number,
+        _ => return Err(format!("runtime {key} is not numeric")),
+    };
+    if let Some(value) = number.as_i64() {
+        return if (SAFE_INTEGER_MIN..=SAFE_INTEGER_MAX).contains(&value) {
+            Ok(value)
+        } else {
+            Err(format!("runtime {key}={value} outside Tachiko Number safe-integer range [{SAFE_INTEGER_MIN}, {SAFE_INTEGER_MAX}]"))
+        };
+    }
+    if let Some(value) = number.as_u64() {
+        return if value <= SAFE_INTEGER_MAX as u64 {
+            Ok(value as i64)
+        } else {
+            Err(format!("runtime {key}={value} outside Tachiko Number safe-integer range [{SAFE_INTEGER_MIN}, {SAFE_INTEGER_MAX}]"))
+        };
+    }
+    let n = number.as_f64().ok_or_else(|| format!("runtime {key} is not numeric"))?;
+    checked_f64_integer(n, key)
+}
+fn integer(v: JsonValue, key: &str) -> i64 { checked_json_integer(v, key).unwrap_or_else(|e| fail(e)) }
 fn text(v: JsonValue, key: &str) -> String { v.as_str().map(str::to_owned).unwrap_or_else(|| fail(format!("runtime {key} is not text"))) }
 fn projection(r: &Runtime) -> JsonValue {
     let settings = r.entities.get("settings").unwrap_or_else(|| fail("runtime settings missing"));
@@ -262,5 +296,42 @@ fn main() {
         Some("mutant") => mutant(Path::new(&a.next().unwrap_or_else(|| fail("input missing"))), Path::new(&a.next().unwrap_or_else(|| fail("output missing"))), &a.next().unwrap_or_else(|| fail("kind missing"))),
         Some(other) => fail(format!("unknown command: {other}")),
         None => fail("usage: import-log|candidate|normalize|mutant"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_integer(value: i64) -> JsonValue { JsonValue::Number(value.into()) }
+
+    #[test]
+    fn safe_integer_boundaries_round_trip_without_change() {
+        for value in [SAFE_INTEGER_MIN, SAFE_INTEGER_MAX] {
+            let number = checked_number(value, "test").expect("safe boundary must be accepted");
+            assert_eq!(number.get(), value as f64);
+            assert_eq!(checked_f64_integer(number.get(), "test"), Ok(value));
+            assert_eq!(checked_json_integer(json_integer(value), "test"), Ok(value));
+        }
+    }
+
+    #[test]
+    fn out_of_range_i64_values_are_rejected_before_number_conversion() {
+        for value in [
+            9_007_199_254_740_992_i64,
+            -9_007_199_254_740_992_i64,
+            9_007_199_254_740_993_i64,
+        ] {
+            assert!(checked_number(value, "test").is_err(), "import accepted {value}");
+            assert!(checked_json_integer(json_integer(value), "test").is_err(), "projection accepted {value}");
+        }
+    }
+
+    #[test]
+    fn rounded_past_safe_integer_is_not_silently_accepted() {
+        let source = 9_007_199_254_740_993_i64;
+        assert_eq!(source as f64, 9_007_199_254_740_992_f64);
+        assert!(checked_f64_integer(source as f64, "test").is_err());
+        assert!(checked_json_integer(json_integer(source), "test").is_err());
     }
 }

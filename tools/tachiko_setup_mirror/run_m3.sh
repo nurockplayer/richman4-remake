@@ -69,5 +69,30 @@ cmp "$WORK/roundtrip-1.json" "$WORK/roundtrip-2.json"
 "$ADAPTER" identity "$WORK/edited.roproj" "$WORK/edited-persisted-ids.json"
 "$ADAPTER" identity "$WORK/edited.roproj" "$WORK/reopened-persisted-ids.json"
 uv run --no-project --offline python "$ROOT/tests/tachiko_setup_mirror/check_setup.py" --projection "$WORK/roundtrip-1.json" --repeat "$WORK/roundtrip-2.json" --edited-projection "$WORK/edited.json" --identity-maps "$WORK/base-import-ids.json" "$WORK/repeat-import-ids.json" "$WORK/base-persisted-ids.json" "$WORK/repeat-persisted-ids.json" "$WORK/edited-persisted-ids.json" "$WORK/reopened-persisted-ids.json"
+
+tree_sha256() {
+  local tree=$1
+  find "$tree" -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+    printf '%s  %s\n' "$(shasum -a 256 "$file" | cut -d' ' -f1)" "${file#"$tree"/}"
+  done | shasum -a 256 | cut -d' ' -f1
+}
+sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+MANIFEST="$WORK/evidence-manifest.txt"
+{
+  echo "richman_head=$(git -C "$ROOT" rev-parse HEAD)"
+  echo "tachiko_head=$TACHIKO_SHA"
+  echo "source_main_ui=$(sha256 "$ROOT/game/ui/main_ui.gd")"
+  echo "research_calendar_setup=$(sha256 "$ROOT/docs/calendar-and-setup.md")"
+  echo "oracle_json=$(sha256 "$ROOT/tests/tachiko_setup_mirror/oracle.json")"
+  echo "godot_witness_log=$(sha256 "$WORK/godot.log")"
+  for artifact in base.ro repeat.ro edited.ro roundtrip-1.json roundtrip-2.json edited.json base-import-ids.json repeat-import-ids.json base-persisted-ids.json repeat-persisted-ids.json edited-persisted-ids.json reopened-persisted-ids.json; do
+    echo "$artifact=$(sha256 "$WORK/$artifact")"
+  done
+  echo "base.roproj.tree_sha256=$(tree_sha256 "$WORK/base.roproj")"
+  echo "repeat.roproj.tree_sha256=$(tree_sha256 "$WORK/repeat.roproj")"
+  echo "edited.roproj.tree_sha256=$(tree_sha256 "$WORK/edited.roproj")"
+} >"$MANIFEST"
+echo "EVIDENCE_MANIFEST=$MANIFEST"
+cat "$MANIFEST"
 echo "M3_PASS: 18 typed setup options, deterministic storage roundtrip, isolated day_limit/5 edit, six identity maps"
 echo "EVIDENCE_DIR=$WORK"

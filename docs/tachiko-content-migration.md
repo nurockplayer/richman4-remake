@@ -91,15 +91,24 @@ uv run --no-project --offline python tests/tachiko_mirror/check_catalog.py \
   --source game/content/original_inventory.gd --godot-log "$evidence/godot.log"
 ```
 
-M1 adapter 另行實作並提供其實際命令，不在這份準備虛構 CLI。完成後，將真正
-Tachiko validated export 正規化為 checker 接受的相同 view，再執行：
+M1 consumer-local adapter 已實作於 `tools/tachiko_mirror/adapter.rs`，由 runner 動態
+綁定乾淨的 Tachiko source；不改 Tachiko Core/API/plugin，也不切換遊戲 runtime 資料來源。
+在 prep checkout root 執行以下真實 pilot（`TACHIKO_SOURCE` 必須是 clean checkout，
+HEAD 與 `origin/main` 均為 exact `6900e975112576585fd9360f12d9fcf8b36ba466`）：
 
 ```sh
-uv run --no-project --offline python tests/tachiko_mirror/check_catalog.py \
-  --projection "$evidence/roundtrip-1.json" \
-  --repeat "$evidence/roundtrip-2.json" \
-  --edited-projection "$evidence/edited.json"
+KEEP_EVIDENCE=1 \
+TACHIKO_SOURCE=/path/to/clean/tachiko-work \
+bash tools/tachiko_mirror/run_m1.sh
 ```
+
+Runner 實際執行 Godot public catalogue → typed Rust model/storage → `.roproj`，再經
+Tachiko CLI `validate` / `materialize` / `export`、typed `set`、semantic `diff`、
+materialize/reopen/export，最後產生 checker view。它同時驗證兩次獨立 fresh projection
+的完整 bytes 與 opaque identity mapping 相同、路障 point price **30 → 31** 只改該值，
+以及 duplicate/missing identity、wrong numeric type、fraction、negative supply、
+unknown field、existing destination 的 fail-closed 與 source/既有目的地 hash preservation。
+`KEEP_EVIDENCE=1` 只保留該次暫存 evidence；未設定時 runner 結束清除暫存輸出。
 
 Normalized view 的根只有 `card_capacity`, `tool_capacity_per_type`, `cards`, `tools`。
 每個 record 正好是既有 `cards()` / `tools()` 公開回傳的欄位；見 source driver。
@@ -135,10 +144,10 @@ Baseline 缺工具／缺 adapter 是 PRECONDITION_UNMET，不是 behavioral RED�
 轉錄與 Git blob 完全一致，43 rows / capacities static qualification 通過。
 這些測試包含反例以檢驗 checker，不是已發現或修復 26 個遊戲問題。
 
-尚未執行：Godot driver、真正 Tachiko CLI / `.roproj` 往返、consumer adapter、
-人類 authoring / save-reopen 證據、獨立 review、hosted repo gates。不能標成已搬遷或 PASS。
-準備環境沒有 Godot / Tachiko binary，container 無法直接存取 GitHub；來源經授權
-GitHub connector 讀取並在本機按 blob hash 核對。没有修改使用者的 Mac 或執行中的 session。
+M1 runner 已以 exact Tachiko source 實際完成 Godot driver、43 筆 typed Rust／`.roproj`
+往返、CLI validate/materialize/export、30→31 typed edit/diff/reopen、fresh-byte equality、
+invalid-input 與 preservation gates；完整證據仍須由 parent 進行獨立 review，並另行處理
+hosted repo gates。這不代表 runtime cutover、全資料遷移或遊戲核心／UI／存檔改動已完成。
 
 ## 接手與後續
 

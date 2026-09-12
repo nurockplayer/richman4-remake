@@ -42,6 +42,10 @@ cargo build --manifest-path "$WORK/adapter-src/Cargo.toml" --offline --quiet
 CLI="$TACHIKO_SOURCE/target/debug/tachiko"
 ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-setup-mirror"
 uv run --no-project --offline python "$ROOT/tests/tachiko_setup_mirror/check_setup.py" --adapter "$ADAPTER" --tachiko-cli "$CLI"
+sed -n 's/^RICHMAN4_SETUP_ORACLE=//p' "$WORK/godot.log" >"$WORK/candidate.json"
+awk 'BEGIN { done=0 } { if (!done && /"value": 300000/) { sub(/"value": 300000/, "\"value\": 3e5"); done=1 } print }' "$WORK/candidate.json" >"$WORK/scientific-candidate.json"
+"$ADAPTER" candidate "$WORK/scientific-candidate.json" "$WORK/scientific.ro"
+"$CLI" validate "$WORK/scientific.ro"
 
 "$ADAPTER" import-log "$WORK/godot.log" "$WORK/base.ro" "$WORK/base-import-ids.json"
 "$CLI" validate "$WORK/base.ro"
@@ -57,6 +61,16 @@ uv run --no-project --offline python "$ROOT/tests/tachiko_setup_mirror/check_set
 cmp "$WORK/roundtrip-1.json" "$WORK/roundtrip-2.json"
 "$ADAPTER" identity "$WORK/base.roproj" "$WORK/base-persisted-ids.json"
 "$ADAPTER" identity "$WORK/repeat.roproj" "$WORK/repeat-persisted-ids.json"
+
+# The same witnessed candidate, reordered as presentation data, must retain every
+# kind/index identity through real typed admission and storage reopen.
+"$ADAPTER" reorder "$WORK/candidate.json" "$WORK/reordered-candidate.json"
+"$ADAPTER" candidate "$WORK/reordered-candidate.json" "$WORK/reordered.ro"
+"$CLI" validate "$WORK/reordered.ro"
+"$CLI" roproj materialize "$WORK/reordered.ro" "$WORK/reordered.roproj"
+"$CLI" roproj validate "$WORK/reordered.roproj"
+"$ADAPTER" identity "$WORK/reordered.roproj" "$WORK/reordered-persisted-ids.json"
+cmp "$WORK/base-import-ids.json" "$WORK/reordered-persisted-ids.json"
 
 "$CLI" set "$WORK/base.roproj" setup_option_day_limit_5.value 31 --output "$WORK/edited.ro"
 "$CLI" validate "$WORK/edited.ro"

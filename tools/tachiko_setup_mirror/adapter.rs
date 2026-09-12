@@ -92,24 +92,69 @@ fn check_numbers(b: &[u8]) {
                 }
             }
             if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-                fail("exponent numeric spelling is not admitted")
+                i += 1;
+                if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+                    i += 1;
+                }
+                let s = i;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == s {
+                    fail("invalid exponent")
+                }
             }
             let token =
                 std::str::from_utf8(&b[start..i]).unwrap_or_else(|_| fail("invalid number"));
-            let unsigned = token.strip_prefix('-').unwrap_or(token);
-            let intpart = unsigned.split('.').next().unwrap();
-            let normalized = intpart.trim_start_matches('0');
-            let normalized = if normalized.is_empty() {
-                "0"
-            } else {
-                normalized
-            };
-            if normalized.len() > 16 || (normalized.len() == 16 && normalized > "9007199254740991")
-            {
-                fail("number outside safe integer range")
+            /* Exact decimal arithmetic below deliberately precedes any f64 conversion. */
+            let n = token;
+            if n.starts_with('-') {
+                continue;
             }
             if frac && nonzero {
+                fail("number is not an exact safe integer")
+            }
+            let unsigned = token.strip_prefix('-').unwrap_or(token);
+            let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+            if exponent.len() > 7 {
+                fail("exponent is outside bounded safe range")
+            }
+            let exponent: i32 = exponent
+                .parse()
+                .unwrap_or_else(|_| fail("invalid exponent"));
+            if exponent > 16 || exponent < -(mantissa.len() as i32 + 16) {
+                fail("exponent is outside bounded safe range")
+            }
+            let mut digits = String::new();
+            let mut decimals = 0i32;
+            for (part_no, part) in mantissa.split('.').enumerate() {
+                digits.push_str(part);
+                if part_no == 1 {
+                    decimals = part.len() as i32;
+                }
+            }
+            let digits = digits.trim_start_matches('0');
+            let shift = exponent - decimals;
+            let (whole, fraction) = if shift >= 0 {
+                (
+                    format!("{}{}", digits, "0".repeat(shift as usize)),
+                    String::new(),
+                )
+            } else if digits.len() as i32 > -shift {
+                let at = (digits.len() as i32 + shift) as usize;
+                (digits[..at].to_owned(), digits[at..].to_owned())
+            } else {
+                (
+                    "0".to_owned(),
+                    format!("{}{}", "0".repeat((-shift as usize) - digits.len()), digits),
+                )
+            };
+            if fraction.chars().any(|x| x != '0') {
                 fail("fractional number is not admitted")
+            }
+            let whole = whole.trim_start_matches('0');
+            if whole.len() > 16 || (whole.len() == 16 && whole > "9007199254740991") {
+                fail("number outside safe integer range")
             }
         } else {
             i += 1
@@ -360,6 +405,28 @@ fn identity_candidate(rows: &[Row], p: &Path) {
 }
 fn identity_project(p: &Path, out: &Path) {
     let d = load_roproj(p).unwrap_or_else(|e| fail(format!("load .roproj failed: {e}")));
+    let schema = d
+        .schemas
+        .values()
+        .find(|s| s.key.as_str() == "setup_options")
+        .unwrap_or_else(|| fail("setup_options schema missing from storage"));
+    let mut field_ids = Map::new();
+    for key in ["kind", "legacy_index", "value"] {
+        let field = schema
+            .fields
+            .values()
+            .find(|f| f.key.as_str() == key)
+            .unwrap_or_else(|| fail(format!("setup field missing from storage: {key}")));
+        let expected = if key == "kind" {
+            FieldType::Text
+        } else {
+            FieldType::Number
+        };
+        if field.field_type != expected || !field.required {
+            fail(format!("setup field has wrong stored type: {key}"));
+        }
+        field_ids.insert(key.to_owned(), JsonValue::String(field.id.to_string()));
+    }
     let mut rows = Vec::new();
     for e in d.entities.values() {
         if !e.key.as_str().starts_with("setup_option_") {
@@ -384,7 +451,14 @@ fn identity_project(p: &Path, out: &Path) {
             r["legacy_index"].as_i64().unwrap_or(-1),
         )
     });
-    write_new(out,serde_json::to_vec_pretty(&json!({"document_id":d.id,"schema_id":"schema-setup-options","field_ids":{"kind":fid("kind"),"legacy_index":fid("legacy_index"),"value":fid("value")},"rows":rows})).unwrap().as_slice())
+    write_new(
+        out,
+        serde_json::to_vec_pretty(
+            &json!({"document_id":d.id,"schema_id":schema.id,"field_ids":field_ids,"rows":rows}),
+        )
+        .unwrap()
+        .as_slice(),
+    )
 }
 fn normalize(p: &Path, out: &Path) {
     let raw = read(p);
@@ -444,6 +518,14 @@ fn check_diff(p: &Path) {
         fail("semantic diff must contain exactly day_limit/index 5 value 30 -> 31");
     }
 }
+fn reorder(p: &Path, out: &Path) {
+    let mut root = parse(&read(p));
+    let rows = root["setup_options"]
+        .as_array_mut()
+        .unwrap_or_else(|| fail("setup_options missing"));
+    rows.reverse();
+    write_new(out, serde_json::to_vec_pretty(&root).unwrap().as_slice());
+}
 fn main() {
     let mut a = env::args().skip(1);
     match a.next().as_deref() {
@@ -474,6 +556,11 @@ fn main() {
         Some("check-diff") => {
             let input = a.next().unwrap_or_else(|| fail("diff missing"));
             check_diff(Path::new(&input));
+        }
+        Some("reorder") => {
+            let input = a.next().unwrap_or_else(|| fail("candidate missing"));
+            let output = a.next().unwrap_or_else(|| fail("candidate output missing"));
+            reorder(Path::new(&input), Path::new(&output));
         }
         None => fail("usage: candidate|import-log|normalize|identity"),
         Some(x) => fail(format!("unknown command: {x}")),

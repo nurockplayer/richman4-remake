@@ -75,6 +75,9 @@ sed -n 's/^RICHMAN4_CATALOG_ORACLE=//p' "$WORK/godot.log" >"$WORK/candidate.json
 "$CLI" diff "$WORK/base.roproj" "$WORK/edited.roproj" >"$WORK/semantic-diff.txt"
 "$CLI" export "$WORK/edited.roproj" "$WORK/edited-runtime.json"
 "$ADAPTER" normalize "$WORK/edited-runtime.json" "$WORK/edited.json"
+"$ADAPTER" identity "$WORK/base.roproj" "$WORK/base-ids.json"
+"$ADAPTER" identity "$WORK/edited.roproj" "$WORK/edited-ids.json"
+cmp "$WORK/base-ids.json" "$WORK/edited-ids.json"
 
 uv run --no-project --offline python "$ROOT/tests/tachiko_mirror/check_catalog.py" \
   --projection "$WORK/roundtrip-1.json" --repeat "$WORK/roundtrip-2.json" \
@@ -88,6 +91,11 @@ destination_hash=$(find "$WORK/base.roproj" -type f -print | LC_ALL=C sort | xar
 echo "SOURCE_SHA256=$source_hash"
 echo "EXISTING_RO_SHA256=$existing_ro_hash"
 echo "DESTINATION_SHA256=$destination_hash"
+if "$CLI" roproj materialize "$WORK/base.ro" "$WORK/base.roproj" >"$WORK/existing-roproj-collision.log" 2>&1; then
+  echo "FAIL: existing .roproj destination unexpectedly overwritten" >&2
+  exit 1
+fi
+grep -E -q 'already exists|refusing to overwrite' "$WORK/existing-roproj-collision.log"
 for kind in duplicate missing-identity wrong-type fraction negative-supply unknown-field; do
   "$ADAPTER" mutant "$WORK/candidate.json" "$WORK/$kind.json" "$kind"
   if "$ADAPTER" candidate "$WORK/$kind.json" "$WORK/$kind.ro"; then

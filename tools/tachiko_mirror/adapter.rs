@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, BTreeSet}, env, fs::{self, OpenOptions}, io::W
 
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
-use tachiko_storage::to_canonical_string;
+use tachiko_storage::{load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{validate, Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId, Value};
 
 const PREFIX: &str = "RICHMAN4_CATALOG_ORACLE=";
@@ -105,10 +105,9 @@ fn consumer_check(c: &Catalog) {
 }
 fn num(v: i64) -> Number { Number::new(v as f64).unwrap_or_else(|e| fail(format!("number rejected: {e}"))) }
 fn fid(category: &str, key: &str) -> FieldId { format!("field-{category}-{key}").into() }
-fn eid(category: &str, n: i64) -> EntityId {
+fn eid(category: &str, legacy_id: &str) -> EntityId {
     let mut hash = 14_695_981_039_346_656_037_u64;
-    let ordinal = n.to_string();
-    for byte in b"richman4/tachiko/catalog/entity/v1:".iter().chain(category.as_bytes()).chain([0_u8].iter()).chain(ordinal.as_bytes()) {
+    for byte in b"richman4/tachiko/catalog/entity/v2:".iter().chain(category.as_bytes()).chain([0_u8].iter()).chain(legacy_id.as_bytes()) {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(1_099_511_628_211);
     }
@@ -128,7 +127,7 @@ fn make_schema(category: &str) -> (SchemaId, Schema) {
     (id.clone(), Schema { id, key: format!("catalog_{category}").into(), fields })
 }
 fn make_entity(category: &str, row: &Record) -> Entity {
-    let id = eid(category, row.source_id);
+    let id = eid(category, &row.id);
     let mut fields = BTreeMap::new();
     fields.insert(fid(category, "legacy_id"), Value::Text(row.id.clone()));
     fields.insert(fid(category, "display_name"), Value::Text(row.name.clone()));
@@ -170,10 +169,30 @@ fn publish(d: &Document, path: &Path) {
 fn manifest(c: &Catalog, path: &Path) {
     let mut records = Vec::new();
     for (category, rows) in [("card", &c.cards), ("tool", &c.tools)] {
-        for row in rows { records.push(ManifestRecord { category: category.into(), source_id: row.source_id, legacy_id: row.id.clone(), semantic_id: eid(category, row.source_id).to_string() }); }
+        for row in rows { records.push(ManifestRecord { category: category.into(), source_id: row.source_id, legacy_id: row.id.clone(), semantic_id: eid(category, &row.id).to_string() }); }
     }
     let m = Manifest { document_id: "richman4-tachiko-catalog-pilot".into(), source: "Godot public catalogue via source_oracle.gd".into(), records };
     write_new(path, serde_json::to_vec_pretty(&m).unwrap_or_else(|e| fail(e.to_string())).as_slice());
+}
+fn identity_from_roproj(input: &Path, output: &Path) {
+    let document = load_roproj(input).unwrap_or_else(|e| fail(format!("load .roproj failed: {e}")));
+    let mut records = Vec::new();
+    for entity in document.entities.values() {
+        let key = entity.key.as_str();
+        let category = if key.starts_with("card_") { "card" } else if key.starts_with("tool_") { "tool" } else { continue };
+        let legacy_id = match entity.fields.get(&fid(category, "legacy_id")) {
+            Some(Value::Text(value)) => value.clone(),
+            _ => fail(format!("{key} has no typed legacy_id")),
+        };
+        let source_id = match entity.fields.get(&fid(category, "source_id")) {
+            Some(Value::Number(value)) if value.get().fract() == 0.0 => value.get() as i64,
+            _ => fail(format!("{key} has no integer source_id")),
+        };
+        records.push(ManifestRecord { category: category.into(), source_id, legacy_id, semantic_id: entity.id.to_string() });
+    }
+    records.sort_by(|left, right| (&left.category, left.source_id).cmp(&(&right.category, right.source_id)));
+    let mapping = Manifest { document_id: document.id.to_string(), source: "Tachiko .roproj typed identity projection".into(), records };
+    write_new(output, serde_json::to_vec_pretty(&mapping).unwrap_or_else(|e| fail(e.to_string())).as_slice());
 }
 fn value(e: &RuntimeEntity, key: &str) -> JsonValue { e.fields.get(key).cloned().unwrap_or_else(|| fail(format!("runtime field missing: {key}"))) }
 fn integer(v: JsonValue, key: &str) -> i64 {
@@ -239,6 +258,7 @@ fn main() {
             let r: Runtime = serde_json::from_slice(&read(Path::new(&a.next().unwrap_or_else(|| fail("runtime missing"))))).unwrap_or_else(|e| fail(format!("runtime rejected: {e}")));
             write_new(Path::new(&a.next().unwrap_or_else(|| fail("projection missing"))), serde_json::to_vec_pretty(&projection(&r)).unwrap_or_else(|e| fail(e.to_string())).as_slice());
         }
+        Some("identity") => identity_from_roproj(Path::new(&a.next().unwrap_or_else(|| fail("roproj missing"))), Path::new(&a.next().unwrap_or_else(|| fail("identity output missing")))),
         Some("mutant") => mutant(Path::new(&a.next().unwrap_or_else(|| fail("input missing"))), Path::new(&a.next().unwrap_or_else(|| fail("output missing"))), &a.next().unwrap_or_else(|| fail("kind missing"))),
         Some(other) => fail(format!("unknown command: {other}")),
         None => fail("usage: import-log|candidate|normalize|mutant"),

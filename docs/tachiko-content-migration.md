@@ -62,9 +62,11 @@ validation、semantic diff、export；不創造另一個 `.ro` 格式、formula 
 | capacities | 兩個 Number 設定 | card 15；每類 tool 9 |
 
 以上只是 consumer fixture 的 mapping，不擴充 Tachiko Core 型別。
-使用既有 opaque semantic IDs；初次映射後持久保存，重新匯出／改名不重生 ID。
-Source ID 與可改的 human key 都不能替代 semantic ID。映射 provenance 放 consumer-side
-manifest，不自行把 Git SHA 當 Tachiko semantic revision。
+使用既有 opaque semantic IDs；本 pilot 的 entity ID 決定性取自 `category + stable
+legacy_id`，初次映射後持久保存，重新匯出／改名不重生 ID。`source_id` 只用於
+category-local order／field validation，不能成為 identity input；可改的 human key 也不能
+替代 semantic ID。映射 provenance 放 consumer-side manifest，不自行把 Git SHA 當
+Tachiko semantic revision。
 
 Rust 負責既有型別、reference、calculation、canonical validation；consumer adapter 負責
 本遊戲的非負整數／範圍、點數單位、category-local ID、行序和 loss gate。
@@ -107,7 +109,8 @@ Tachiko CLI `validate` / `materialize` / `export`、typed `set`、semantic `diff
 materialize/reopen/export，最後產生 checker view。它同時驗證兩次獨立 fresh projection
 的完整 bytes 與 opaque identity mapping 相同、路障 point price **30 → 31** 只改該值，
 以及 duplicate/missing identity、wrong numeric type、fraction、negative supply、
-unknown field、existing destination 的 fail-closed 與 source/既有目的地 hash preservation。
+unknown field、既有 `.roproj` destination 的 CLI materialize collision、existing `.ro` destination
+的 fail-closed 與 source/既有目的地 hash preservation。
 `KEEP_EVIDENCE=1` 只保留該次暫存 evidence；未設定時 runner 結束清除暫存輸出。
 
 Normalized view 的根只有 `card_capacity`, `tool_capacity_per_type`, `cards`, `tools`。

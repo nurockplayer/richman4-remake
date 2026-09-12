@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 LIMIT = 128 * 1024
+RUNTIME_SOURCE_LIMIT = 512 * 1024
+PINNED_RUNTIME_SOURCE_BYTES = 474028
 PREFIX = "RICHMAN4_CHARACTER_ORACLE="
 ORACLE_PATH = Path(__file__).with_name("oracle.json")
 EDITED_NAME = "約翰喬（M2驗證）"
@@ -40,10 +42,10 @@ def decode(data: bytes) -> Any:
     return json.loads(data.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=invalid_constant)
 
 
-def read(path: Path) -> bytes:
+def read(path: Path, limit: int = LIMIT) -> bytes:
     with path.open("rb") as stream:
-        data = stream.read(LIMIT + 1)
-    require(len(data) <= LIMIT, f"input too large: {path.name}")
+        data = stream.read(limit + 1)
+    require(len(data) <= limit, f"input too large: {path.name}")
     return data
 
 
@@ -132,6 +134,10 @@ def self_test(oracle: dict[str, Any]) -> bool:
             with self.assertRaises(ValueError):
                 repeated(b'{"characters":[]}\n', b'{"characters":[]}')
 
+        def test_runtime_source_limit_covers_pinned_source(self) -> None:
+            self.assertGreater(PINNED_RUNTIME_SOURCE_BYTES, LIMIT)
+            self.assertLessEqual(PINNED_RUNTIME_SOURCE_BYTES, RUNTIME_SOURCE_LIMIT)
+
     mutants = {
         "missing_row": lambda x: x["characters"].pop(),
         "duplicate_row": lambda x: x["characters"].append(copy.deepcopy(x["characters"][0])),
@@ -177,7 +183,7 @@ def main() -> int:
         if args.self_test and not self_test(oracle):
             return 1
         if args.runtime_source:
-            qualify_runtime_source(read(args.runtime_source), oracle)
+            qualify_runtime_source(read(args.runtime_source, RUNTIME_SOURCE_LIMIT), oracle)
             print("RUNTIME_SOURCE_STATIC_PASS")
         if args.research_source:
             qualify_research_source(read(args.research_source), oracle)

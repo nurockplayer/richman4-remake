@@ -1,0 +1,21 @@
+{
+  "source_commit": "d2d58689937599de07a7d1a83138a32260203a84",
+  "runtime_source_path": "game/core/game_state.gd",
+  "runtime_source_blob": "dd03614fd8bf5cef7a32bcbbb29c579d4af1a05e",
+  "research_source_path": "docs/calendar-and-setup.md",
+  "research_source_blob": "0f8aa4666aefec90aed8caefeca591e86b742b46",
+  "characters": [
+    {"legacy_id": 0, "display_name": "約翰喬"},
+    {"legacy_id": 1, "display_name": "沙隆巴斯"},
+    {"legacy_id": 2, "display_name": "忍太郎"},
+    {"legacy_id": 3, "display_name": "錢夫人"},
+    {"legacy_id": 4, "display_name": "阿土伯"},
+    {"legacy_id": 5, "display_name": "莎拉公主"},
+    {"legacy_id": 6, "display_name": "宮本寶藏"},
+    {"legacy_id": 7, "display_name": "糖糖"},
+    {"legacy_id": 8, "display_name": "烏咪"},
+    {"legacy_id": 9, "display_name": "孫小美"},
+    {"legacy_id": 10, "display_name": "小丹尼"},
+    {"legacy_id": 11, "display_name": "金貝貝"}
+  ]
+}

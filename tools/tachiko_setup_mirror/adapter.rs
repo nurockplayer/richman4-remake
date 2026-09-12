@@ -1,5 +1,5 @@
-use serde::{Deserialize, Deserializer, de};
-use serde_json::{Map, Value as JsonValue, json};
+use serde::{de, Deserialize, Deserializer};
+use serde_json::{json, Map, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -9,8 +9,8 @@ use std::{
 };
 use tachiko_storage::{load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{
-    Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId,
-    Value, validate,
+    validate, Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema,
+    SchemaId, Value,
 };
 
 const PREFIX: &str = "RICHMAN4_SETUP_ORACLE=";
@@ -35,131 +35,128 @@ fn write_new(p: &Path, b: &[u8]) {
         .unwrap_or_else(|e| fail(format!("write {}: {e}", p.display())));
 }
 
-/* Reject lossy numeric spellings before serde_json can turn them into binary64. */
-fn check_numbers(b: &[u8]) {
-    let mut i = 0;
-    let mut string = false;
-    let mut esc = false;
-    while i < b.len() {
-        let c = b[i];
-        if string {
-            if esc {
-                esc = false
-            } else if c == b'\\' {
-                esc = true
-            } else if c == b'"' {
-                string = false
-            };
-            i += 1;
-            continue;
-        }
-        if c == b'"' {
-            string = true;
-            i += 1;
-            continue;
-        }
-        if c == b'-' || c.is_ascii_digit() {
-            let start = i;
-            if c == b'-' {
-                i += 1
-            };
-            if i >= b.len() {
-                fail("invalid number")
-            };
-            if b[i] == b'0' {
-                i += 1
-            } else if b[i].is_ascii_digit() {
-                while i < b.len() && b[i].is_ascii_digit() {
-                    i += 1
-                }
-            } else {
-                fail("invalid number")
-            }
-            let mut frac = false;
-            let mut nonzero = false;
-            if i < b.len() && b[i] == b'.' {
-                frac = true;
-                i += 1;
-                let s = i;
-                while i < b.len() && b[i].is_ascii_digit() {
-                    if b[i] != b'0' {
-                        nonzero = true
-                    };
-                    i += 1
-                }
-                if i == s {
-                    fail("invalid number")
-                }
-            }
-            if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-                i += 1;
-                if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
-                    i += 1;
-                }
-                let s = i;
-                while i < b.len() && b[i].is_ascii_digit() {
-                    i += 1;
-                }
-                if i == s {
-                    fail("invalid exponent")
-                }
-            }
-            let token =
-                std::str::from_utf8(&b[start..i]).unwrap_or_else(|_| fail("invalid number"));
-            /* Exact decimal arithmetic below deliberately precedes any f64 conversion. */
-            let n = token;
-            if n.starts_with('-') {
-                continue;
-            }
-            if frac && nonzero {
-                fail("number is not an exact safe integer")
-            }
-            let unsigned = token.strip_prefix('-').unwrap_or(token);
-            let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
-            if exponent.len() > 7 {
-                fail("exponent is outside bounded safe range")
-            }
-            let exponent: i32 = exponent
-                .parse()
-                .unwrap_or_else(|_| fail("invalid exponent"));
-            if exponent > 16 || exponent < -(mantissa.len() as i32 + 16) {
-                fail("exponent is outside bounded safe range")
-            }
-            let mut digits = String::new();
-            let mut decimals = 0i32;
-            for (part_no, part) in mantissa.split('.').enumerate() {
-                digits.push_str(part);
-                if part_no == 1 {
-                    decimals = part.len() as i32;
-                }
-            }
-            let digits = digits.trim_start_matches('0');
-            let shift = exponent - decimals;
-            let (whole, fraction) = if shift >= 0 {
-                (
-                    format!("{}{}", digits, "0".repeat(shift as usize)),
-                    String::new(),
-                )
-            } else if digits.len() as i32 > -shift {
-                let at = (digits.len() as i32 + shift) as usize;
-                (digits[..at].to_owned(), digits[at..].to_owned())
-            } else {
-                (
-                    "0".to_owned(),
-                    format!("{}{}", "0".repeat((-shift as usize) - digits.len()), digits),
-                )
-            };
-            if fraction.chars().any(|x| x != '0') {
-                fail("fractional number is not admitted")
-            }
-            let whole = whole.trim_start_matches('0');
-            if whole.len() > 16 || (whole.len() == 16 && whole > "9007199254740991") {
-                fail("number outside safe integer range")
-            }
-        } else {
-            i += 1
+/* Canonicalize only exact safe integers before serde_json's arbitrary-precision
+ * visitor can encode an exponent as its private map sentinel. */
+fn canonical_number(token: &str) -> String {
+    let (negative, unsigned) = match token.strip_prefix('-') {
+        Some(value) => (true, value),
+        None => (false, token),
+    };
+    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+    if exponent.len() > 7 {
+        fail("exponent is outside bounded safe range")
+    }
+    let exponent: i32 = exponent
+        .parse()
+        .unwrap_or_else(|_| fail("invalid exponent"));
+    let mut digits = String::new();
+    let mut decimals = 0i32;
+    for (part_no, part) in mantissa.split('.').enumerate() {
+        digits.push_str(part);
+        if part_no == 1 {
+            decimals = part.len() as i32;
         }
     }
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return "0".into();
+    }
+    if exponent > 16 || exponent < -(mantissa.len() as i32 + 16) {
+        fail("exponent is outside bounded safe range")
+    }
+    let shift = exponent - decimals;
+    let whole = if shift >= 0 {
+        let width = digits.len() + shift as usize;
+        if width > 16 {
+            fail("number outside safe integer range")
+        }
+        format!("{}{}", digits, "0".repeat(shift as usize))
+    } else {
+        let split = digits.len() as i32 + shift;
+        if split <= 0 || digits[split as usize..].bytes().any(|byte| byte != b'0') {
+            fail("fractional number is not admitted")
+        }
+        digits[..split as usize].to_owned()
+    };
+    let whole = whole.trim_start_matches('0');
+    if whole.len() > 16 || (whole.len() == 16 && whole > "9007199254740991") {
+        fail("number outside safe integer range")
+    }
+    if negative {
+        format!("-{whole}")
+    } else {
+        whole.to_owned()
+    }
+}
+
+fn canonical_json_numbers(b: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'"' {
+            let start = i;
+            i += 1;
+            let mut escaped = false;
+            while i < b.len() {
+                if escaped {
+                    escaped = false;
+                } else if b[i] == b'\\' {
+                    escaped = true;
+                } else if b[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.extend_from_slice(&b[start..i]);
+            continue;
+        }
+        if b[i] != b'-' && !b[i].is_ascii_digit() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        if b[i] == b'-' {
+            i += 1;
+        }
+        if i >= b.len() || !b[i].is_ascii_digit() {
+            fail("invalid number")
+        }
+        if b[i] == b'0' {
+            i += 1;
+        } else {
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        if i < b.len() && b[i] == b'.' {
+            i += 1;
+            let fraction_start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == fraction_start {
+                fail("invalid number")
+            }
+        }
+        if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+            i += 1;
+            if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+                i += 1;
+            }
+            let exponent_start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == exponent_start {
+                fail("invalid exponent")
+            }
+        }
+        let token = std::str::from_utf8(&b[start..i]).unwrap_or_else(|_| fail("invalid number"));
+        out.extend_from_slice(canonical_number(token).as_bytes());
+    }
+    out
 }
 struct Strict(JsonValue);
 impl<'de> Deserialize<'de> for Strict {
@@ -228,8 +225,8 @@ fn parse(b: &[u8]) -> JsonValue {
     if b.len() > 128 * 1024 {
         fail("JSON input exceeds 128 KiB")
     };
-    check_numbers(b);
-    serde_json::from_slice::<Strict>(b)
+    let canonical = canonical_json_numbers(b);
+    serde_json::from_slice::<Strict>(&canonical)
         .unwrap_or_else(|e| fail(format!("strict JSON parse failed: {e}")))
         .0
 }

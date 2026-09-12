@@ -43,7 +43,12 @@ CLI="$TACHIKO_SOURCE/target/debug/tachiko"
 ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-setup-mirror"
 uv run --no-project --offline python "$ROOT/tests/tachiko_setup_mirror/check_setup.py" --adapter "$ADAPTER" --tachiko-cli "$CLI"
 sed -n 's/^RICHMAN4_SETUP_ORACLE=//p' "$WORK/godot.log" >"$WORK/candidate.json"
-awk 'BEGIN { done=0 } { if (!done && /"value": 300000/) { sub(/"value": 300000/, "\"value\": 3e5"); done=1 } print }' "$WORK/candidate.json" >"$WORK/scientific-candidate.json"
+awk 'BEGIN { done=0 } { if (!done && /"value":[[:space:]]*300000/) { sub(/"value":[[:space:]]*300000/, "\"value\":3e5"); done=1 } print }' "$WORK/candidate.json" >"$WORK/scientific-candidate.json"
+grep -Fq '"value":3e5' "$WORK/scientific-candidate.json"
+if cmp -s "$WORK/candidate.json" "$WORK/scientific-candidate.json"; then
+  echo "FAIL: scientific candidate was not changed" >&2
+  exit 1
+fi
 "$ADAPTER" candidate "$WORK/scientific-candidate.json" "$WORK/scientific.ro"
 "$CLI" validate "$WORK/scientific.ro"
 

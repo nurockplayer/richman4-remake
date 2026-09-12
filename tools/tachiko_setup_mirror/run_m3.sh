@@ -104,11 +104,12 @@ MANIFEST="$WORK/evidence-manifest.txt"
   echo "research_calendar_setup=$(sha256 "$ROOT/docs/calendar-and-setup.md")"
   echo "oracle_json=$(sha256 "$ROOT/tests/tachiko_setup_mirror/oracle.json")"
   echo "godot_witness_log=$(sha256 "$WORK/godot.log")"
-  for artifact in base.ro repeat.ro edited.ro roundtrip-1.json roundtrip-2.json edited.json base-import-ids.json repeat-import-ids.json base-persisted-ids.json repeat-persisted-ids.json edited-persisted-ids.json reopened-persisted-ids.json; do
+  for artifact in candidate.json scientific-candidate.json scientific.ro base.ro repeat.ro reordered-candidate.json reordered.ro edited.ro roundtrip-1.json roundtrip-2.json edited.json base-import-ids.json repeat-import-ids.json base-persisted-ids.json repeat-persisted-ids.json reordered-persisted-ids.json edited-persisted-ids.json reopened-persisted-ids.json; do
     echo "$artifact=$(sha256 "$WORK/$artifact")"
   done
   echo "base.roproj.tree_sha256=$(tree_sha256 "$WORK/base.roproj")"
   echo "repeat.roproj.tree_sha256=$(tree_sha256 "$WORK/repeat.roproj")"
+  echo "reordered.roproj.tree_sha256=$(tree_sha256 "$WORK/reordered.roproj")"
   echo "edited.roproj.tree_sha256=$(tree_sha256 "$WORK/edited.roproj")"
 } >"$MANIFEST"
 echo "EVIDENCE_MANIFEST=$MANIFEST"

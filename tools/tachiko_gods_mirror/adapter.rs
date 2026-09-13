@@ -530,6 +530,16 @@ fn identity_project(input: &Path, output: &Path) {
     identity_document(&document, output);
 }
 
+fn compare_ro_roproj(ro_path: &Path, project_path: &Path) {
+    let ro = from_bytes(&read(ro_path))
+        .unwrap_or_else(|error| fail(format!("load .ro failed: {error}")));
+    let project = load_roproj(project_path)
+        .unwrap_or_else(|error| fail(format!("load .roproj failed: {error}")));
+    if ro != project {
+        fail(".ro and .roproj semantic documents differ");
+    }
+}
+
 fn check_edit(before_path: &Path, after_path: &Path) {
     let before = load_roproj(before_path)
         .unwrap_or_else(|error| fail(format!("load base .roproj failed: {error}")));
@@ -642,6 +652,11 @@ fn main() {
                 .unwrap_or_else(|| fail("edited .roproj input missing"));
             check_edit(Path::new(&before), Path::new(&after));
         }
+        Some("compare-ro-roproj") => {
+            let ro = args.next().unwrap_or_else(|| fail(".ro input missing"));
+            let project = args.next().unwrap_or_else(|| fail(".roproj input missing"));
+            compare_ro_roproj(Path::new(&ro), Path::new(&project));
+        }
         Some("reorder") => {
             let input = args
                 .next()
@@ -652,8 +667,8 @@ fn main() {
             reorder(Path::new(&input), Path::new(&output));
         }
         Some(command) => fail(format!("unknown command: {command}")),
-        None => {
-            fail("usage: candidate|import-log|normalize|identity|identity-ro|check-edit|reorder")
-        }
+        None => fail(
+            "usage: candidate|import-log|normalize|identity|identity-ro|check-edit|compare-ro-roproj|reorder",
+        ),
     }
 }

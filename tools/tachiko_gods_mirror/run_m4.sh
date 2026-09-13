@@ -2,15 +2,57 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-if ! git -C "$ROOT" diff --quiet HEAD --; then
-  echo "PRECONDITION_UNMET: richman checkout has tracked drift" >&2
-  exit 2
-fi
-CANDIDATE_HEAD=$(git -C "$ROOT" rev-parse HEAD) || {
-  echo "PRECONDITION_UNMET: unable to resolve richman candidate HEAD" >&2
-  exit 2
-}
 TACHIKO_SOURCE=${TACHIKO_SOURCE:-}
+GODOT_BIN=${GODOT_BIN:-godot}
+
+# The first invocation is a thin launcher. It rejects tracked drift, archives
+# the exact candidate HEAD (thereby excluding untracked .serena and any other
+# local inputs), and executes this same runner from that isolated snapshot.
+if [[ -n "${M4_SNAPSHOT_ROOT:-}" ]]; then
+  ORIGINAL_ROOT=${M4_ORIGINAL_ROOT:-}
+  WORK=${M4_WORK:-}
+  SOURCE_ROOT=$M4_SNAPSHOT_ROOT
+  CANDIDATE_HEAD=${M4_CANDIDATE_HEAD:-}
+  [[ -n "$ORIGINAL_ROOT" && -n "$WORK" && -n "$CANDIDATE_HEAD" && -d "$SOURCE_ROOT" ]] || {
+    echo "PRECONDITION_UNMET: invalid M4 source snapshot handoff" >&2
+    exit 2
+  }
+  if ! git -C "$ORIGINAL_ROOT" diff --quiet HEAD --; then
+    echo "PRECONDITION_UNMET: richman checkout has tracked drift" >&2
+    exit 2
+  fi
+  [[ "$(git -C "$ORIGINAL_ROOT" rev-parse HEAD)" == "$CANDIDATE_HEAD" ]] || {
+    echo "PRECONDITION_UNMET: richman candidate HEAD changed during snapshot handoff" >&2
+    exit 2
+  }
+else
+  ORIGINAL_ROOT=$ROOT
+  if ! git -C "$ORIGINAL_ROOT" diff --quiet HEAD --; then
+    echo "PRECONDITION_UNMET: richman checkout has tracked drift" >&2
+    exit 2
+  fi
+  CANDIDATE_HEAD=$(git -C "$ORIGINAL_ROOT" rev-parse HEAD) || {
+    echo "PRECONDITION_UNMET: unable to resolve richman candidate HEAD" >&2
+    exit 2
+  }
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m4.XXXXXX")
+  SOURCE_ROOT="$WORK/richman4-snapshot"
+  mkdir -p "$SOURCE_ROOT"
+  git -C "$ORIGINAL_ROOT" archive --format=tar HEAD | tar -xf - -C "$SOURCE_ROOT"
+  [[ ! -e "$SOURCE_ROOT/.serena" ]] || {
+    echo "PRECONDITION_UNMET: source snapshot unexpectedly contains untracked .serena" >&2
+    exit 2
+  }
+  exec env \
+    TACHIKO_SOURCE="$TACHIKO_SOURCE" \
+    GODOT_BIN="$GODOT_BIN" \
+    M4_ORIGINAL_ROOT="$ORIGINAL_ROOT" \
+    M4_CANDIDATE_HEAD="$CANDIDATE_HEAD" \
+    M4_SNAPSHOT_ROOT="$SOURCE_ROOT" \
+    M4_WORK="$WORK" \
+    "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh" "$@"
+fi
+
 TACHIKO_SHA=6900e975112576585fd9360f12d9fcf8b36ba466
 TACHIKO_GIT_DIR=""
 if [[ -z "$TACHIKO_SOURCE" ]] || ! TACHIKO_GIT_DIR=$(git -C "$TACHIKO_SOURCE" rev-parse --git-dir 2>/dev/null); then
@@ -30,12 +72,10 @@ fi
   exit 2
 }
 
-GODOT_BIN=${GODOT_BIN:-godot}
 GODOT_PATH=$(command -v "$GODOT_BIN") || {
   echo "PRECONDITION_UNMET: GODOT_BIN is not executable" >&2
   exit 2
 }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m4.XXXXXX")
 TACHIKO_WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-linked.XXXXXX")
 git -C "$TACHIKO_SOURCE" worktree add --detach "$TACHIKO_WORKTREE" "$TACHIKO_SHA" >/dev/null
 cleanup() {
@@ -50,22 +90,22 @@ echo "TACHIKO_GIT_DIR=$TACHIKO_GIT_DIR"
 echo "TACHIKO_WORKTREE=$TACHIKO_WORKTREE"
 echo "WORK=$WORK"
 
-python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" --self-test
+python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" --self-test
 godot_rc=0
-"$GODOT_PATH" --headless --path "$ROOT" --script "$ROOT/tests/tachiko_gods_mirror/source_oracle.gd" >"$WORK/godot.log" 2>&1 || godot_rc=$?
+"$GODOT_PATH" --headless --path "$SOURCE_ROOT" --script "$SOURCE_ROOT/tests/tachiko_gods_mirror/source_oracle.gd" >"$WORK/godot.log" 2>&1 || godot_rc=$?
 [[ "$godot_rc" == 0 ]] || {
   echo "FAIL: Godot M4 witness exited $godot_rc" >&2
   cat "$WORK/godot.log" >&2
   exit 1
 }
-python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
-  --source "$ROOT/game/content/original_gods.gd" \
+python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
+  --source "$SOURCE_ROOT/game/content/original_gods.gd" \
   --godot-log "$WORK/godot.log"
 sed -n 's/^RICHMAN4_GODS_ORACLE=//p' "$WORK/godot.log" >"$WORK/candidate.json"
 [[ -s "$WORK/candidate.json" ]] || { echo "FAIL: empty Godot candidate" >&2; exit 1; }
 
 mkdir -p "$WORK/adapter-src/src"
-cp "$ROOT/tools/tachiko_gods_mirror/adapter.rs" "$WORK/adapter-src/src/main.rs"
+cp "$SOURCE_ROOT/tools/tachiko_gods_mirror/adapter.rs" "$WORK/adapter-src/src/main.rs"
 cat >"$WORK/adapter-src/Cargo.toml" <<EOF
 [package]
 name = "richman4-tachiko-gods-mirror"
@@ -89,13 +129,14 @@ tree_sha256() {
   done | shasum -a 256 | cut -d' ' -f1
 }
 
-python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
+python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --candidate-adapter "$ADAPTER" --tachiko-cli "$CLI"
 
 "$ADAPTER" import-log "$WORK/godot.log" "$WORK/base.ro"
 "$CLI" validate "$WORK/base.ro"
 "$CLI" roproj materialize "$WORK/base.ro" "$WORK/base.roproj"
 "$CLI" roproj validate "$WORK/base.roproj"
+"$ADAPTER" compare-ro-roproj "$WORK/base.ro" "$WORK/base.roproj"
 "$CLI" export "$WORK/base.roproj" "$WORK/base-runtime.json"
 "$ADAPTER" normalize "$WORK/base-runtime.json" "$WORK/base.json"
 "$ADAPTER" identity-ro "$WORK/base.ro" "$WORK/base-import-ids.json"
@@ -109,6 +150,7 @@ cmp "$WORK/base.ro" "$WORK/repeat.ro"
 "$ADAPTER" identity-ro "$WORK/repeat.ro" "$WORK/repeat-import-ids.json"
 "$CLI" roproj materialize "$WORK/repeat.ro" "$WORK/repeat.roproj"
 "$CLI" roproj validate "$WORK/repeat.roproj"
+"$ADAPTER" compare-ro-roproj "$WORK/repeat.ro" "$WORK/repeat.roproj"
 "$CLI" export "$WORK/repeat.roproj" "$WORK/repeat-runtime.json"
 "$ADAPTER" normalize "$WORK/repeat-runtime.json" "$WORK/repeat.json"
 "$ADAPTER" identity "$WORK/repeat.roproj" "$WORK/repeat-ids.json"
@@ -127,6 +169,7 @@ cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
 "$CLI" validate "$WORK/reordered.ro"
 "$CLI" roproj materialize "$WORK/reordered.ro" "$WORK/reordered.roproj"
 "$CLI" roproj validate "$WORK/reordered.roproj"
+"$ADAPTER" compare-ro-roproj "$WORK/reordered.ro" "$WORK/reordered.roproj"
 "$CLI" export "$WORK/reordered.roproj" "$WORK/reordered-runtime.json"
 "$ADAPTER" normalize "$WORK/reordered-runtime.json" "$WORK/reordered.json"
 "$ADAPTER" identity-ro "$WORK/reordered.ro" "$WORK/reordered-import-ids.json"
@@ -134,7 +177,7 @@ cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
 cmp "$WORK/base.json" "$WORK/reordered.json"
 cmp "$WORK/base-import-ids.json" "$WORK/reordered-import-ids.json"
 cmp "$WORK/base-ids.json" "$WORK/reordered-ids.json"
-python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
+python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --projection "$WORK/reordered.json"
 
 # The one permitted semantic edit changes only god 1's display text.
@@ -148,7 +191,7 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 "$ADAPTER" identity "$WORK/edited.roproj" "$WORK/edited-ids.json"
 "$ADAPTER" identity "$WORK/edited.roproj" "$WORK/reopened-ids.json"
 
-python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
+python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --projection "$WORK/base.json" \
   --edited-projection "$WORK/edited.json" \
   --identity-map "$WORK/base-ids.json" \
@@ -166,12 +209,12 @@ MANIFEST="$WORK/evidence-manifest.txt"
   echo "candidate_head=$CANDIDATE_HEAD"
   echo "tachiko_head=$TACHIKO_SHA"
   echo "godot_binary=$(sha256 "$GODOT_PATH")"
-  echo "adapter_source=$(sha256 "$ROOT/tools/tachiko_gods_mirror/adapter.rs")"
-  echo "runner_source=$(sha256 "$ROOT/tools/tachiko_gods_mirror/run_m4.sh")"
-  echo "checker_source=$(sha256 "$ROOT/tests/tachiko_gods_mirror/check_gods.py")"
-  echo "witness_source=$(sha256 "$ROOT/tests/tachiko_gods_mirror/source_oracle.gd")"
-  echo "source_original_gods=$(sha256 "$ROOT/game/content/original_gods.gd")"
-  echo "oracle_json=$(sha256 "$ROOT/tests/tachiko_gods_mirror/oracle.json")"
+  echo "adapter_source=$(sha256 "$SOURCE_ROOT/tools/tachiko_gods_mirror/adapter.rs")"
+  echo "runner_source=$(sha256 "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh")"
+  echo "checker_source=$(sha256 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py")"
+  echo "witness_source=$(sha256 "$SOURCE_ROOT/tests/tachiko_gods_mirror/source_oracle.gd")"
+  echo "source_original_gods=$(sha256 "$SOURCE_ROOT/game/content/original_gods.gd")"
+  echo "oracle_json=$(sha256 "$SOURCE_ROOT/tests/tachiko_gods_mirror/oracle.json")"
   echo "godot_witness_log=$(sha256 "$WORK/godot.log")"
   echo "tachiko_cli_binary=$(sha256 "$CLI")"
   echo "adapter_binary=$(sha256 "$ADAPTER")"

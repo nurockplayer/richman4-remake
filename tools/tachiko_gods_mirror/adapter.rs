@@ -322,6 +322,10 @@ fn exact_integral(value: &JsonNumber) -> Option<i64> {
         })
 }
 
+fn is_json_number_delimiter(byte: u8) -> bool {
+    byte.is_ascii_whitespace() || matches!(byte, b',' | b']' | b'}')
+}
+
 fn canonicalize_integral_numbers(bytes: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -372,6 +376,11 @@ fn canonicalize_integral_numbers(bytes: &[u8]) -> Vec<u8> {
             }
         }
         let token = &bytes[start..cursor];
+        if cursor < bytes.len() && !is_json_number_delimiter(bytes[cursor]) {
+            result.extend_from_slice(token);
+            index = cursor.max(index + 1);
+            continue;
+        }
         match exact_integral_token(token) {
             NumberToken::Fractional => fail("JSON number must be an exact finite integer"),
             NumberToken::Integral(Some(canonical)) => result.extend_from_slice(&canonical),
@@ -380,6 +389,37 @@ fn canonicalize_integral_numbers(bytes: &[u8]) -> Vec<u8> {
         index = cursor.max(index + 1);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize_integral_numbers;
+
+    #[test]
+    fn canonicalizes_only_numbers_with_valid_boundaries() {
+        let input = br#"{"valid_fraction": 1.0, "valid_exponent": 2e0, "valid_zero": 7.0}"#;
+        let expected = br#"{"valid_fraction": 1, "valid_exponent": 2, "valid_zero": 7}"#;
+        assert_eq!(canonicalize_integral_numbers(input), expected);
+    }
+
+    #[test]
+    fn preserves_malformed_numeric_continuations() {
+        for input in [
+            br#"{"legacy_id": 1.0.0}"#.as_slice(),
+            br#"{"legacy_id": 1e0e0}"#.as_slice(),
+            br#"{"legacy_id": 1.0x}"#.as_slice(),
+            br#"{"legacy_id": 1e+}"#.as_slice(),
+        ] {
+            assert_eq!(canonicalize_integral_numbers(input), input);
+        }
+    }
+
+    #[test]
+    fn does_not_rewrite_strings_or_nested_values() {
+        let input = br#"{"text":"1.0\\\" 2e0", "nested":[1.0, {"value": 2e0}]}"#;
+        let expected = br#"{"text":"1.0\\\" 2e0", "nested":[1, {"value": 2}]}"#;
+        assert_eq!(canonicalize_integral_numbers(input), expected);
+    }
 }
 
 enum NumberToken {

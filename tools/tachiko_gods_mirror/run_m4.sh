@@ -79,17 +79,22 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 "$CLI" roproj validate "$WORK/base.roproj"
 "$CLI" export "$WORK/base.roproj" "$WORK/base-runtime.json"
 "$ADAPTER" normalize "$WORK/base-runtime.json" "$WORK/base.json"
+"$ADAPTER" identity-ro "$WORK/base.ro" "$WORK/base-import-ids.json"
 "$ADAPTER" identity "$WORK/base.roproj" "$WORK/base-ids.json"
+cmp "$WORK/base-import-ids.json" "$WORK/base-ids.json"
 
 # Re-importing the same witnessed source is deterministic and keeps the same
 # semantic document/entity identities after a real storage reopen.
 "$ADAPTER" import-log "$WORK/godot.log" "$WORK/repeat.ro"
 cmp "$WORK/base.ro" "$WORK/repeat.ro"
+"$ADAPTER" identity-ro "$WORK/repeat.ro" "$WORK/repeat-import-ids.json"
 "$CLI" roproj materialize "$WORK/repeat.ro" "$WORK/repeat.roproj"
 "$CLI" roproj validate "$WORK/repeat.roproj"
 "$CLI" export "$WORK/repeat.roproj" "$WORK/repeat-runtime.json"
 "$ADAPTER" normalize "$WORK/repeat-runtime.json" "$WORK/repeat.json"
 "$ADAPTER" identity "$WORK/repeat.roproj" "$WORK/repeat-ids.json"
+cmp "$WORK/base-import-ids.json" "$WORK/repeat-import-ids.json"
+cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
 
 # Presentation reorder must be accepted while identity remains keyed by the
 # legacy ID, not by input row position.
@@ -100,7 +105,13 @@ cmp "$WORK/base.ro" "$WORK/repeat.ro"
 "$CLI" roproj validate "$WORK/reordered.roproj"
 "$CLI" export "$WORK/reordered.roproj" "$WORK/reordered-runtime.json"
 "$ADAPTER" normalize "$WORK/reordered-runtime.json" "$WORK/reordered.json"
+"$ADAPTER" identity-ro "$WORK/reordered.ro" "$WORK/reordered-import-ids.json"
 "$ADAPTER" identity "$WORK/reordered.roproj" "$WORK/reordered-ids.json"
+cmp "$WORK/base.json" "$WORK/reordered.json"
+cmp "$WORK/base-import-ids.json" "$WORK/reordered-import-ids.json"
+cmp "$WORK/base-ids.json" "$WORK/reordered-ids.json"
+python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
+  --projection "$WORK/reordered.json"
 
 # The one permitted semantic edit changes only god 1's display text.
 "$CLI" set "$WORK/base.roproj" god_01.display_name '小財神（M4驗證）' --output "$WORK/edited.ro"
@@ -116,8 +127,11 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --projection "$WORK/base.json" \
   --edited-projection "$WORK/edited.json" \
   --identity-map "$WORK/base-ids.json" \
+  --identity-map "$WORK/base-import-ids.json" \
   --identity-map "$WORK/repeat-ids.json" \
+  --identity-map "$WORK/repeat-import-ids.json" \
   --identity-map "$WORK/reordered-ids.json" \
+  --identity-map "$WORK/reordered-import-ids.json" \
   --identity-map "$WORK/edited-ids.json" \
   --identity-map "$WORK/reopened-ids.json"
 
@@ -135,7 +149,7 @@ MANIFEST="$WORK/evidence-manifest.txt"
   echo "source_original_gods=$(sha256 "$ROOT/game/content/original_gods.gd")"
   echo "oracle_json=$(sha256 "$ROOT/tests/tachiko_gods_mirror/oracle.json")"
   echo "godot_witness_log=$(sha256 "$WORK/godot.log")"
-  for artifact in candidate.json base.ro repeat.ro reordered-candidate.json reordered.ro edited.ro base.json repeat.json reordered.json edited.json base-ids.json repeat-ids.json reordered-ids.json edited-ids.json reopened-ids.json; do
+  for artifact in candidate.json base.ro repeat.ro reordered-candidate.json reordered.ro edited.ro base.json repeat.json reordered.json edited.json base-import-ids.json repeat-import-ids.json reordered-import-ids.json base-ids.json repeat-ids.json reordered-ids.json edited-ids.json reopened-ids.json; do
     echo "$artifact=$(sha256 "$WORK/$artifact")"
   done
   echo "base.roproj.tree_sha256=$(tree_sha256 "$WORK/base.roproj")"

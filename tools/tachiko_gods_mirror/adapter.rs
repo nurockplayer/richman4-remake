@@ -8,7 +8,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, de};
 use serde_json::{Map, Value as JsonValue, json};
-use tachiko_storage::{load_roproj, to_canonical_string};
+use tachiko_storage::{from_bytes, load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{
     Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId,
     Value, validate,
@@ -424,9 +424,7 @@ fn normalize(path: &Path, output: &Path) {
     );
 }
 
-fn identity_project(input: &Path, output: &Path) {
-    let document =
-        load_roproj(input).unwrap_or_else(|error| fail(format!("load .roproj failed: {error}")));
+fn identity_document(document: &Document, output: &Path) {
     let schema = document
         .schemas
         .values()
@@ -490,6 +488,18 @@ fn identity_project(input: &Path, output: &Path) {
     );
 }
 
+fn identity_ro(input: &Path, output: &Path) {
+    let document =
+        from_bytes(&read(input)).unwrap_or_else(|error| fail(format!("load .ro failed: {error}")));
+    identity_document(&document, output);
+}
+
+fn identity_project(input: &Path, output: &Path) {
+    let document =
+        load_roproj(input).unwrap_or_else(|error| fail(format!("load .roproj failed: {error}")));
+    identity_document(&document, output);
+}
+
 fn reorder(input: &Path, output: &Path) {
     let mut root = parse(&read(input));
     let rows = root
@@ -534,6 +544,13 @@ fn main() {
                 .unwrap_or_else(|| fail("identity output missing"));
             identity_project(Path::new(&input), Path::new(&output));
         }
+        Some("identity-ro") => {
+            let input = args.next().unwrap_or_else(|| fail(".ro input missing"));
+            let output = args
+                .next()
+                .unwrap_or_else(|| fail("identity output missing"));
+            identity_ro(Path::new(&input), Path::new(&output));
+        }
         Some("reorder") => {
             let input = args
                 .next()
@@ -544,6 +561,6 @@ fn main() {
             reorder(Path::new(&input), Path::new(&output));
         }
         Some(command) => fail(format!("unknown command: {command}")),
-        None => fail("usage: candidate|import-log|normalize|identity|reorder"),
+        None => fail("usage: candidate|import-log|normalize|identity|identity-ro|reorder"),
     }
 }

@@ -26,6 +26,7 @@ const SOURCE_TEXT_MAIN := Color("#1b2a2c")
 const SOURCE_TEXT_MUTED := Color("#263b3d")
 const SOURCE_TEXT_MONEY := Color("#10191b")
 const SOURCE_TAB_TEXT := Color("#152428")
+const ROUTE_CARDINAL_DOMINANCE_RATIO := 3.0
 
 signal start_requested
 signal load_requested
@@ -725,6 +726,13 @@ func _route_direction_label(next_index: int) -> String:
 		return "原地"
 	var horizontal := "右" if delta_x > 0 else "左" if delta_x < 0 else ""
 	var vertical := "下" if delta_y > 0 else "上" if delta_y < 0 else ""
+	if not horizontal.is_empty() and not vertical.is_empty():
+		var horizontal_distance: int = abs(delta_x)
+		var vertical_distance: int = abs(delta_y)
+		if horizontal_distance >= vertical_distance * ROUTE_CARDINAL_DOMINANCE_RATIO:
+			vertical = ""
+		elif vertical_distance >= horizontal_distance * ROUTE_CARDINAL_DOMINANCE_RATIO:
+			horizontal = ""
 	if horizontal.is_empty():
 		return "%s方" % vertical
 	if vertical.is_empty():

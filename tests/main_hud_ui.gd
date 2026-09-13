@@ -393,6 +393,18 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	for label_value in duplicate_route_labels:
 		var label := str(label_value)
 		_expect(label.begins_with("前往 ") and not label.contains("→") and not label.contains("%02d"), "same-name route distinction uses player-facing source cues")
+	var near_axis_snapshot := {
+		"current_player": 0,
+		"players": [{"position": 0}],
+		"board": [
+			{"x": 1027, "y": 1115, "name": "分岔"},
+			{"x": 1031, "y": 1209, "name": "點數 10"},
+			{"x": 1102, "y": 1117, "name": "點數 10"},
+		],
+	}
+	shell.sync_snapshot(near_axis_snapshot)
+	var near_axis_labels: Array = shell.callv("_route_destination_labels", [[1, 2]])
+	_expect(near_axis_labels == ["前往 點數 10（下方）", "前往 點數 10（右方）"], "source near-axis route vectors use their dominant cardinal direction")
 
 
 func _test_source_stock_modal_gate(ui: Control, shell: Control) -> void:

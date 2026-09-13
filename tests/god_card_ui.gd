@@ -75,6 +75,12 @@ func run() -> void:
 	ui._refresh_from_state()
 	ui.board_view.reset_view()
 	await process_frame
+	# The source camera shows a 440x440 region, so explicitly bring this
+	# fixture's expected god into view before exercising the visible-target UI.
+	var target_screen: Vector2 = ui.board_view.get_screen_position_for_index(2)
+	var viewport_size: Vector2 = ui.board_view.get_camera_state().get("viewport_size", Vector2.ZERO)
+	ui.board_view.pan_by(viewport_size * 0.5 - target_screen)
+	await process_frame
 	ui._on_cards_pressed()
 	var summon: Button = ui.cards_popup.find_child("UseCard_請神符", true, false)
 	var preview: Label = ui.cards_popup.find_child("SummonGodTarget", true, false)

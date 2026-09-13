@@ -117,8 +117,8 @@ serde_json = "1.0"
 tachiko-storage = { path = "$TACHIKO_WORKTREE/crates/storage" }
 tachiko-workspace-engine = { path = "$TACHIKO_WORKTREE/crates/workspace-engine" }
 EOF
-cargo build --manifest-path "$TACHIKO_WORKTREE/Cargo.toml" -p tachiko-cli --offline --quiet
-cargo build --manifest-path "$WORK/adapter-src/Cargo.toml" --offline --quiet
+(cd "$TACHIKO_WORKTREE" && cargo build --manifest-path Cargo.toml -p tachiko-cli --offline --quiet)
+(cd "$WORK/adapter-src" && cargo build --manifest-path Cargo.toml --offline --quiet)
 CLI="$TACHIKO_WORKTREE/target/debug/tachiko"
 ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-gods-mirror"
 

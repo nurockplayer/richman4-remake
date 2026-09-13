@@ -585,6 +585,14 @@ fn entity_id(fate_id: i64) -> EntityId {
     format!("sid-fate-event-{fate_id:02}").into()
 }
 
+fn stored_fate_id(value: &Number) -> Option<i64> {
+    let value = value.get();
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..COUNT as f64).contains(&value) {
+        return None;
+    }
+    Some(value as i64)
+}
+
 fn number(value: i64, field: &str) -> Number {
     if !(0..=MAX_SAFE_INTEGER).contains(&value) {
         fail(format!("{field} outside Tachiko safe-integer range"));
@@ -792,7 +800,8 @@ fn identity_document(document: &Document, output: &Path) {
             ));
         }
         let stored_code = match entity.fields.get(&field_id("fate_id")) {
-            Some(Value::Number(value)) => value.get() as i64,
+            Some(Value::Number(value)) => stored_fate_id(value)
+                .unwrap_or_else(|| fail(format!("{expected_key} has an invalid typed fate_id"))),
             _ => fail(format!("{expected_key} has no typed fate_id")),
         };
         if stored_code != code || entity.id != entity_id(code) {

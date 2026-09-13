@@ -23,6 +23,10 @@ RUSTUP_HOME_VALUE=${RUSTUP_HOME:-$HOME_VALUE/.rustup}
   echo "PRECONDITION_UNMET: HOME, CARGO_HOME, and RUSTUP_HOME must be absolute paths" >&2
   exit 2
 }
+# Keep an explicitly configured uv cache directory when the launcher
+# sanitizes the environment.  Omit an unset/empty value so uv selects its
+# platform default instead of receiving an invalid empty --cache-dir value.
+UV_CACHE_DIR_VALUE=${UV_CACHE_DIR:-}
 
 # The launcher archives no untracked inputs: it snapshots the exact candidate
 # HEAD in a detached worktree before the inner run. This keeps .serena and any
@@ -84,11 +88,23 @@ git -C "$ORIGINAL_ROOT" worktree add --detach "$SOURCE_ROOT" "$CANDIDATE_HEAD" >
   [[ ! -e "$SOURCE_ROOT/.serena" ]] || {
     echo "PRECONDITION_UNMET: source snapshot unexpectedly contains untracked .serena" >&2; exit 2
   }
-  exec env -i \
-    PATH="$PATH" HOME="$HOME_VALUE" CARGO_HOME="$CARGO_HOME_VALUE" RUSTUP_HOME="$RUSTUP_HOME_VALUE" \
-    TACHIKO_SOURCE="$TACHIKO_SOURCE" GODOT_BIN="$GODOT_BIN" KEEP_EVIDENCE="$KEEP_EVIDENCE_VALUE" \
-    M7_ORIGINAL_ROOT="$ORIGINAL_ROOT" M7_CANDIDATE_HEAD="$CANDIDATE_HEAD" \
-    M7_SNAPSHOT_ROOT="$SOURCE_ROOT" M7_WORK="$WORK" \
+  SANITIZED_ENV=(
+    "PATH=$PATH"
+    "HOME=$HOME_VALUE"
+    "CARGO_HOME=$CARGO_HOME_VALUE"
+    "RUSTUP_HOME=$RUSTUP_HOME_VALUE"
+    "TACHIKO_SOURCE=$TACHIKO_SOURCE"
+    "GODOT_BIN=$GODOT_BIN"
+    "KEEP_EVIDENCE=$KEEP_EVIDENCE_VALUE"
+    "M7_ORIGINAL_ROOT=$ORIGINAL_ROOT"
+    "M7_CANDIDATE_HEAD=$CANDIDATE_HEAD"
+    "M7_SNAPSHOT_ROOT=$SOURCE_ROOT"
+    "M7_WORK=$WORK"
+  )
+  if [[ -n "$UV_CACHE_DIR_VALUE" ]]; then
+    SANITIZED_ENV+=("UV_CACHE_DIR=$UV_CACHE_DIR_VALUE")
+  fi
+  exec env -i "${SANITIZED_ENV[@]}" \
     "$SOURCE_ROOT/tools/tachiko_fate_events_mirror/run_m7.sh" --m7-inner "$@"
 fi
 
@@ -362,18 +378,51 @@ from pathlib import Path
 runtime_path = Path(sys.argv[1])
 output_dir = Path(sys.argv[2])
 baseline = runtime_path.read_bytes()
-needle = b'"fate_id": 0.0'
-if baseline.count(needle) != 1:
+zero_needle = b'"fate_id": 0.0'
+one_needle = b'"fate_id": 1.0'
+
+def exact_count(payload, token):
+    count = 0
+    offset = 0
+    while True:
+        index = payload.find(token, offset)
+        if index < 0:
+            return count
+        end = index + len(token)
+        if end == len(payload) or payload[end:end + 1] in b" \t\r\n,]}":
+            count += 1
+        offset = index + 1
+
+if exact_count(baseline, zero_needle) != 1:
     raise SystemExit("expected one canonical fate_id 0.0 in real runtime export")
-for name, lexeme in (
-    ("underflow", b"1e-400"),
-    ("rounded", b"1.0000000000000001"),
-):
-    (output_dir / (name + ".json")).write_bytes(baseline.replace(needle, b'"fate_id": ' + lexeme, 1))
+if exact_count(baseline, one_needle) != 1:
+    raise SystemExit("expected one canonical fate_id 1.0 in real runtime export")
+
+underflow = baseline.replace(zero_needle, b'"fate_id": 1e-400', 1)
+if underflow == baseline or exact_count(underflow, zero_needle) != 0:
+    raise SystemExit("underflow transform did not replace exactly fate_id 0.0")
+if exact_count(underflow, b'"fate_id": 1e-400') != 1:
+    raise SystemExit("underflow transform produced an unexpected occurrence count")
+if underflow.replace(b'"fate_id": 1e-400', zero_needle, 1) != baseline:
+    raise SystemExit("underflow transform crossed its lexical boundary")
+(output_dir / "underflow.json").write_bytes(underflow)
+
+rounded = baseline.replace(one_needle, b'"fate_id": 1.0000000000000001', 1)
+if rounded == baseline or exact_count(rounded, one_needle) != 0:
+    raise SystemExit("rounded transform did not replace exactly fate_id 1.0")
+if exact_count(rounded, b'"fate_id": 1.0000000000000001') != 1:
+    raise SystemExit("rounded transform produced an unexpected occurrence count")
+if rounded.replace(b'"fate_id": 1.0000000000000001', one_needle, 1) != baseline:
+    raise SystemExit("rounded transform crossed its lexical boundary")
+(output_dir / "rounded.json").write_bytes(rounded)
 PY
 for precision_negative in "$RUNTIME_PRECISION_NEGATIVES"/*.json; do
   precision_name=${precision_negative##*/}
   precision_output="$WORK/runtime-precision-${precision_name%.json}.json"
+  [[ ! -e "$precision_output" && ! -L "$precision_output" ]] || {
+    echo "FAIL: runtime precision negative output unexpectedly pre-existed: $precision_name" >&2
+    exit 1
+  }
   if "$ADAPTER" normalize "$precision_negative" "$precision_output" >"$WORK/${precision_name}.log" 2>&1; then
     echo "FAIL: runtime precision negative unexpectedly normalized: $precision_name" >&2
     exit 1
@@ -387,6 +436,43 @@ echo "RUNTIME_PRECISION_NEGATIVES_PASS: underflow and rounded lexemes rejected w
 
 "$ADAPTER" identity "$WORK/base.roproj" "$WORK/base-persisted-ids.json"
 cmp "$WORK/base-import-ids.json" "$WORK/base-persisted-ids.json"
+
+# A fractional typed fate_id must not be accepted by the identity projection,
+# even though the real Tachiko numeric field operation can store and validate
+# it.  Start from the real persisted project and keep the identity output
+# boundary fresh so a rejected input cannot leave a regular or symlink output.
+FRACTIONAL_ID_RO="$WORK/fractional-fate-id.ro"
+FRACTIONAL_IDENTITY="$WORK/fractional-fate-id-identity.json"
+[[ ! -e "$FRACTIONAL_ID_RO" && ! -L "$FRACTIONAL_ID_RO" ]] || {
+  echo "FAIL: fractional fate_id .ro output unexpectedly pre-existed" >&2; exit 1;
+}
+if ! "$CLI" set "$WORK/base.roproj" fate_event_00.fate_id 0.5 --output "$FRACTIONAL_ID_RO" >"$WORK/fractional-fate-id-set.log" 2>&1; then
+  echo "FAIL: Tachiko CLI could not create fractional fate_id artifact" >&2
+  cat "$WORK/fractional-fate-id-set.log" >&2
+  [[ ! -e "$FRACTIONAL_ID_RO" && ! -L "$FRACTIONAL_ID_RO" ]] || {
+    echo "FAIL: rejected fractional fate_id set wrote partial .ro" >&2; exit 1;
+  }
+  exit 1
+fi
+[[ -f "$FRACTIONAL_ID_RO" && ! -L "$FRACTIONAL_ID_RO" ]] || {
+  echo "FAIL: fractional fate_id set did not produce a regular .ro" >&2; exit 1;
+}
+if ! "$CLI" validate "$FRACTIONAL_ID_RO" >"$WORK/fractional-fate-id-validate.log" 2>&1; then
+  echo "FAIL: Tachiko rejected its own fractional fate_id artifact" >&2
+  cat "$WORK/fractional-fate-id-validate.log" >&2
+  exit 1
+fi
+[[ ! -e "$FRACTIONAL_IDENTITY" && ! -L "$FRACTIONAL_IDENTITY" ]] || {
+  echo "FAIL: fractional identity output unexpectedly pre-existed" >&2; exit 1;
+}
+if "$ADAPTER" identity-ro "$FRACTIONAL_ID_RO" "$FRACTIONAL_IDENTITY" >"$WORK/fractional-fate-id-identity.log" 2>&1; then
+  echo "FAIL: fractional fate_id identity unexpectedly admitted" >&2
+  exit 1
+fi
+[[ ! -e "$FRACTIONAL_IDENTITY" && ! -L "$FRACTIONAL_IDENTITY" ]] || {
+  echo "FAIL: rejected fractional fate_id identity wrote partial output" >&2; exit 1;
+}
+echo "FRACTIONAL_IDENTITY_NEGATIVE_PASS: Tachiko-valid 0.5 rejected without identity output"
 
 # Repeat the exact source and reopen the persisted project through the real
 # storage loader; all semantic bytes and opaque identities must remain stable.
@@ -463,5 +549,5 @@ MANIFEST="$WORK/evidence-manifest.txt"
 } >"$MANIFEST"
 echo "EVIDENCE_MANIFEST=$MANIFEST"
 cat "$MANIFEST"
-echo "M7_PASS: 37 typed fate-event rows, deterministic .roproj roundtrip/reopen, stable fate-id identities, isolated fate-id-36 label edit, frozen negatives and collisions"
+echo "M7_PASS: 37 typed fate-event rows, deterministic .roproj roundtrip/reopen, stable fate-id identities, fractional identity negative, isolated fate-id-36 label edit, frozen negatives and collisions"
 echo "EVIDENCE_DIR=$WORK"

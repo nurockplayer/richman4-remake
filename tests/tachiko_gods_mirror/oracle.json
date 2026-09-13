@@ -1,0 +1,110 @@
+{
+  "source_blob": "77fff4152210fae9f33d991e6653372398996948",
+  "gods": [
+    {
+      "legacy_id": 1,
+      "display_name": "小財神",
+      "pair_legacy_id": 2,
+      "duration_days": 7,
+      "role_key": "wealth_small"
+    },
+    {
+      "legacy_id": 2,
+      "display_name": "大財神",
+      "pair_legacy_id": 1,
+      "duration_days": 7,
+      "role_key": "wealth_large"
+    },
+    {
+      "legacy_id": 3,
+      "display_name": "小福神",
+      "pair_legacy_id": 4,
+      "duration_days": 7,
+      "role_key": "fortune_small"
+    },
+    {
+      "legacy_id": 4,
+      "display_name": "大福神",
+      "pair_legacy_id": 3,
+      "duration_days": 7,
+      "role_key": "fortune_large"
+    },
+    {
+      "legacy_id": 5,
+      "display_name": "小窮神",
+      "pair_legacy_id": 6,
+      "duration_days": 7,
+      "role_key": "poor_small"
+    },
+    {
+      "legacy_id": 6,
+      "display_name": "大窮神",
+      "pair_legacy_id": 5,
+      "duration_days": 7,
+      "role_key": "poor_large"
+    },
+    {
+      "legacy_id": 7,
+      "display_name": "小衰神",
+      "pair_legacy_id": 8,
+      "duration_days": 7,
+      "role_key": "unlucky_small"
+    },
+    {
+      "legacy_id": 8,
+      "display_name": "大衰神",
+      "pair_legacy_id": 7,
+      "duration_days": 7,
+      "role_key": "unlucky_large"
+    },
+    {
+      "legacy_id": 9,
+      "display_name": "天使",
+      "pair_legacy_id": 10,
+      "duration_days": 7,
+      "role_key": "angel"
+    },
+    {
+      "legacy_id": 10,
+      "display_name": "惡魔",
+      "pair_legacy_id": 9,
+      "duration_days": 7,
+      "role_key": "demon"
+    },
+    {
+      "legacy_id": 11,
+      "display_name": "惡犬",
+      "pair_legacy_id": 12,
+      "duration_days": 0,
+      "role_key": "dog"
+    },
+    {
+      "legacy_id": 12,
+      "display_name": "土地公",
+      "pair_legacy_id": 11,
+      "duration_days": 7,
+      "role_key": "land_god"
+    },
+    {
+      "legacy_id": 13,
+      "display_name": "禮物",
+      "pair_legacy_id": 0,
+      "duration_days": 0,
+      "role_key": "gift"
+    },
+    {
+      "legacy_id": 14,
+      "display_name": "寶箱",
+      "pair_legacy_id": 0,
+      "duration_days": 0,
+      "role_key": "chest"
+    },
+    {
+      "legacy_id": 15,
+      "display_name": "死神",
+      "pair_legacy_id": 0,
+      "duration_days": 13,
+      "role_key": "death"
+    }
+  ]
+}

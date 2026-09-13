@@ -70,6 +70,13 @@ cargo build --manifest-path "$WORK/adapter-src/Cargo.toml" --offline --quiet
 CLI="$TACHIKO_WORKTREE/target/debug/tachiko"
 ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-gods-mirror"
 
+tree_sha256() {
+  local tree=$1
+  find "$tree" -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+    printf '%s  %s\n' "$(shasum -a 256 "$file" | cut -d' ' -f1)" "${file#"$tree"/}"
+  done | shasum -a 256 | cut -d' ' -f1
+}
+
 python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --candidate-adapter "$ADAPTER" --tachiko-cli "$CLI"
 
@@ -93,8 +100,13 @@ cmp "$WORK/base.ro" "$WORK/repeat.ro"
 "$CLI" export "$WORK/repeat.roproj" "$WORK/repeat-runtime.json"
 "$ADAPTER" normalize "$WORK/repeat-runtime.json" "$WORK/repeat.json"
 "$ADAPTER" identity "$WORK/repeat.roproj" "$WORK/repeat-ids.json"
+cmp "$WORK/base.json" "$WORK/repeat.json"
 cmp "$WORK/base-import-ids.json" "$WORK/repeat-import-ids.json"
 cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
+[[ "$(tree_sha256 "$WORK/base.roproj")" == "$(tree_sha256 "$WORK/repeat.roproj")" ]] || {
+  echo "FAIL: repeated .roproj tree drifted" >&2
+  exit 1
+}
 
 # Presentation reorder must be accepted while identity remains keyed by the
 # legacy ID, not by input row position.
@@ -135,12 +147,6 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --identity-map "$WORK/edited-ids.json" \
   --identity-map "$WORK/reopened-ids.json"
 
-tree_sha256() {
-  local tree=$1
-  find "$tree" -type f -print | LC_ALL=C sort | while IFS= read -r file; do
-    printf '%s  %s\n' "$(shasum -a 256 "$file" | cut -d' ' -f1)" "${file#"$tree"/}"
-  done | shasum -a 256 | cut -d' ' -f1
-}
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 MANIFEST="$WORK/evidence-manifest.txt"
 {

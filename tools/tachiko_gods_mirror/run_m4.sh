@@ -176,10 +176,23 @@ serde_json = "1.0"
 tachiko-storage = { path = "$TACHIKO_WORKTREE/crates/storage" }
 tachiko-workspace-engine = { path = "$TACHIKO_WORKTREE/crates/workspace-engine" }
 EOF
+cargo_target_dir() {
+  local manifest=$1
+  local metadata
+  metadata=$(cd "$(dirname "$manifest")" && cargo metadata \
+    --manifest-path "$manifest" --format-version=1 --no-deps --offline)
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' <<<"$metadata"
+}
+
 (cd "$TACHIKO_WORKTREE" && cargo build --manifest-path Cargo.toml -p tachiko-cli --offline --quiet)
+TACHIKO_TARGET_DIR=$(cargo_target_dir "$TACHIKO_WORKTREE/Cargo.toml")
+CLI="$TACHIKO_TARGET_DIR/debug/tachiko"
+
 (cd "$WORK/adapter-src" && cargo build --manifest-path Cargo.toml --offline --quiet)
-CLI="$TACHIKO_WORKTREE/target/debug/tachiko"
-ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-gods-mirror"
+ADAPTER_TARGET_DIR=$(cargo_target_dir "$WORK/adapter-src/Cargo.toml")
+ADAPTER="$ADAPTER_TARGET_DIR/debug/richman4-tachiko-gods-mirror"
+[[ -x "$CLI" ]] || { echo "FAIL: cargo metadata target directory did not produce $CLI" >&2; exit 1; }
+[[ -x "$ADAPTER" ]] || { echo "FAIL: cargo metadata target directory did not produce $ADAPTER" >&2; exit 1; }
 
 tree_sha256() {
   local tree=$1
@@ -247,8 +260,9 @@ cmp "$WORK/base.ro" "$WORK/repeat.ro"
 cmp "$WORK/base.json" "$WORK/repeat.json"
 cmp "$WORK/base-import-ids.json" "$WORK/repeat-import-ids.json"
 cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
-[[ "$(tree_sha256 "$WORK/base.roproj")" == "$(tree_sha256 "$WORK/repeat.roproj")" ]] || {
-  echo "FAIL: repeated .roproj tree drifted" >&2
+REPEAT_LAYOUT_HASH=$(layout_sha256 "$WORK/repeat.roproj")
+[[ "$BASE_LAYOUT_HASH" == "$REPEAT_LAYOUT_HASH" ]] || {
+  echo "FAIL: repeated .roproj layout drifted" >&2
   exit 1
 }
 
@@ -267,6 +281,11 @@ cmp "$WORK/base-ids.json" "$WORK/repeat-ids.json"
 cmp "$WORK/base.json" "$WORK/reordered.json"
 cmp "$WORK/base-import-ids.json" "$WORK/reordered-import-ids.json"
 cmp "$WORK/base-ids.json" "$WORK/reordered-ids.json"
+REORDERED_LAYOUT_HASH=$(layout_sha256 "$WORK/reordered.roproj")
+[[ "$BASE_LAYOUT_HASH" == "$REORDERED_LAYOUT_HASH" ]] || {
+  echo "FAIL: reordered .roproj layout drifted" >&2
+  exit 1
+}
 python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --projection "$WORK/reordered.json"
 

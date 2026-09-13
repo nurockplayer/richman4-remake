@@ -6,12 +6,12 @@ use std::{
     path::Path,
 };
 
-use serde::{Deserialize, Deserializer, de};
-use serde_json::{Map, Number as JsonNumber, Value as JsonValue, json};
+use serde::{de, Deserialize, Deserializer};
+use serde_json::{json, Map, Number as JsonNumber, Value as JsonValue};
 use tachiko_storage::{from_bytes, load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{
-    Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId,
-    Value, validate,
+    validate, Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema,
+    SchemaId, Value,
 };
 
 const PREFIX: &str = "RICHMAN4_GODS_ORACLE=";
@@ -61,7 +61,7 @@ struct RuntimeFields {
     legacy_id: JsonNumber,
     display_name: String,
     #[serde(default)]
-    pair_legacy_id: Option<RuntimePairValue>,
+    pair_legacy_id: RuntimePairField,
     duration_days: JsonNumber,
     role_key: String,
 }
@@ -77,6 +77,27 @@ enum RuntimePairValue {
 #[serde(deny_unknown_fields)]
 struct RuntimeReference {
     reference: String,
+}
+
+#[derive(Debug)]
+enum RuntimePairField {
+    Absent,
+    Value(RuntimePairValue),
+}
+
+impl Default for RuntimePairField {
+    fn default() -> Self {
+        Self::Absent
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimePairField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        RuntimePairValue::deserialize(deserializer).map(Self::Value)
+    }
 }
 
 /* Deserialize JSON through a visitor so duplicate object keys are rejected
@@ -414,8 +435,10 @@ fn runtime_text(value: &str, field: &str) -> String {
     value.to_owned()
 }
 
-fn runtime_pair(value: Option<&RuntimePairValue>, field: &str) -> i64 {
-    let Some(value) = value else { return 0 };
+fn runtime_pair(value: &RuntimePairField, field: &str) -> i64 {
+    let RuntimePairField::Value(value) = value else {
+        return 0;
+    };
     let RuntimePairValue::Reference(reference) = value else {
         fail(format!("runtime {field} must be a Tachiko reference"));
     };
@@ -431,6 +454,12 @@ fn runtime_pair(value: Option<&RuntimePairValue>, field: &str) -> i64 {
         });
     if !(1..=COUNT).contains(&id) {
         fail(format!("runtime {field} reference outside 1..15"));
+    }
+    let expected = format!("god_{id:02}");
+    if reference.reference != expected {
+        fail(format!(
+            "runtime {field} reference must be canonical {expected}"
+        ));
     }
     id
 }
@@ -468,14 +497,14 @@ fn normalize(path: &Path, output: &Path) {
         }
         if id <= 12 {
             if !matches!(
-                entity.fields.pair_legacy_id.as_ref(),
-                Some(RuntimePairValue::Reference(_))
+                &entity.fields.pair_legacy_id,
+                RuntimePairField::Value(RuntimePairValue::Reference(_))
             ) {
                 fail(format!(
                     "runtime entity {key} pair_legacy_id must be present"
                 ));
             }
-        } else if entity.fields.pair_legacy_id.is_some() {
+        } else if !matches!(&entity.fields.pair_legacy_id, RuntimePairField::Absent) {
             fail(format!(
                 "runtime entity {key} pair_legacy_id must be absent"
             ));
@@ -499,7 +528,7 @@ fn normalize(path: &Path, output: &Path) {
         rows.push(json!({
             "legacy_id": legacy_id,
             "display_name": runtime_text(&fields.display_name, "display_name"),
-            "pair_legacy_id": runtime_pair(fields.pair_legacy_id.as_ref(), "pair_legacy_id"),
+            "pair_legacy_id": runtime_pair(&fields.pair_legacy_id, "pair_legacy_id"),
             "duration_days": runtime_number(&fields.duration_days, "duration_days"),
             "role_key": runtime_text(&fields.role_key, "role_key"),
         }));

@@ -170,15 +170,6 @@ fn exact_integral(value: &JsonNumber) -> Option<i64> {
     value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .or_else(|| {
-            value.as_f64().and_then(|value| {
-                if value.is_finite() && value.fract() == 0.0 {
-                    i64::try_from(value as i128).ok()
-                } else {
-                    None
-                }
-            })
-        })
 }
 
 fn deserialize_integral<'de, D>(deserializer: D) -> Result<i64, D::Error>

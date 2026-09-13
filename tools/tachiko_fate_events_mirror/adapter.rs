@@ -292,7 +292,7 @@ fn runtime_exact_integral(lexeme: &str) -> Option<i64> {
 /* Keep only the raw numbers needed after the strict typed parse. */
 enum RawJson {
     Object(BTreeMap<String, RawJson>),
-    Array,
+    Array(Vec<RawJson>),
     Number(String),
     Other,
 }
@@ -300,11 +300,24 @@ enum RawJson {
 struct RawParser<'a> {
     bytes: &'a [u8],
     position: usize,
+    reject_non_integral_numbers: bool,
 }
 
 impl<'a> RawParser<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, position: 0 }
+        Self {
+            bytes,
+            position: 0,
+            reject_non_integral_numbers: true,
+        }
+    }
+
+    fn for_candidate(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            position: 0,
+            reject_non_integral_numbers: false,
+        }
     }
 
     fn whitespace(&mut self) {
@@ -353,7 +366,7 @@ impl<'a> RawParser<'a> {
                 }
                 let lexeme = String::from_utf8(self.bytes[start..self.position].to_vec())
                     .unwrap_or_else(|error| fail(format!("runtime number rejected: {error}")));
-                if runtime_exact_integral(&lexeme).is_none() {
+                if self.reject_non_integral_numbers && runtime_exact_integral(&lexeme).is_none() {
                     fail("runtime JSON contains a non-integral or ambiguous number");
                 }
                 RawJson::Number(lexeme)
@@ -404,24 +417,70 @@ impl<'a> RawParser<'a> {
 
     fn array(&mut self) -> RawJson {
         self.position += 1;
+        let mut values = Vec::new();
         loop {
             self.whitespace();
             if self.bytes.get(self.position) == Some(&b']') {
                 self.position += 1;
-                return RawJson::Array;
+                return RawJson::Array(values);
             }
-            self.value();
+            values.push(self.value());
             self.whitespace();
             match self.bytes.get(self.position) {
                 Some(b',') => self.position += 1,
                 Some(b']') => {
                     self.position += 1;
-                    return RawJson::Array;
+                    return RawJson::Array(values);
                 }
                 _ => fail("runtime JSON array separator missing"),
             }
         }
     }
+}
+
+fn candidate_exact_integral(lexeme: &str) -> Option<i64> {
+    let bytes = lexeme.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let digits = if bytes[0] == b'-' {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    lexeme.parse::<i64>().ok()
+}
+
+fn candidate_raw_ids(bytes: &[u8]) -> Vec<i64> {
+    let mut parser = RawParser::for_candidate(bytes);
+    let root = parser.value();
+    parser.whitespace();
+    if parser.position != bytes.len() {
+        fail("candidate JSON has trailing data");
+    }
+    let rows = match root {
+        RawJson::Object(mut object) => match object.remove("fate_names") {
+            Some(RawJson::Array(rows)) => rows,
+            _ => fail("fate_names array missing"),
+        },
+        _ => fail("candidate JSON root must be an object"),
+    };
+    rows.into_iter()
+        .map(|row| {
+            let mut fields = match row {
+                RawJson::Object(fields) => fields,
+                _ => fail("fate event row must be an object"),
+            };
+            match fields.remove("fate_id") {
+                Some(RawJson::Number(lexeme)) => candidate_exact_integral(&lexeme)
+                    .unwrap_or_else(|| fail("fate_id must use canonical integer syntax")),
+                _ => fail("fate_id number missing"),
+            }
+        })
+        .collect()
 }
 
 fn runtime_raw_numbers(bytes: &[u8]) -> BTreeMap<String, String> {
@@ -466,7 +525,22 @@ where
 }
 
 fn candidate(bytes: &[u8]) -> Candidate {
-    let candidate = serde_json::from_value(parse(bytes))
+    let mut parsed = parse(bytes);
+    let raw_ids = candidate_raw_ids(bytes);
+    let rows = parsed
+        .get_mut("fate_names")
+        .and_then(JsonValue::as_array_mut)
+        .unwrap_or_else(|| fail("fate_names array missing"));
+    if rows.len() != raw_ids.len() {
+        fail("fate_names row count mismatch");
+    }
+    for (row, fate_id) in rows.iter_mut().zip(raw_ids) {
+        let fields = row
+            .as_object_mut()
+            .unwrap_or_else(|| fail("fate event row must be an object"));
+        fields.insert("fate_id".to_owned(), JsonValue::Number(fate_id.into()));
+    }
+    let candidate = serde_json::from_value(parsed)
         .unwrap_or_else(|error| fail(format!("fate-event schema rejected: {error}")));
     validate_candidate(&candidate);
     candidate

@@ -111,7 +111,10 @@ GODOT_PATH=$(command -v "$GODOT_BIN") || {
   echo "PRECONDITION_UNMET: GODOT_BIN is not executable" >&2; exit 2
 }
 
-TACHIKO_WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m7-tachiko.XXXXXX")
+TACHIKO_WORKTREE=$(mktemp -d "$WORK/richman4-tachiko-m7-tachiko.XXXXXX")
+[[ "$TACHIKO_WORKTREE" == "$WORK/"* && -d "$TACHIKO_WORKTREE" ]] || {
+  echo "FAIL: Tachiko worktree escaped M7 WORK" >&2; exit 1
+}
 git -C "$TACHIKO_SOURCE" worktree add --detach "$TACHIKO_WORKTREE" "$TACHIKO_SHA" >/dev/null
 
 echo "CANDIDATE_HEAD=$CANDIDATE_HEAD"
@@ -193,6 +196,44 @@ echo "CANDIDATE_NEGATIVES_PASS: frozen checker corpus rejected without partial o
 "$CLI" roproj materialize "$WORK/base.ro" "$WORK/base.roproj"
 "$CLI" roproj validate "$WORK/base.roproj"
 "$ADAPTER" compare-ro-roproj "$WORK/base.ro" "$WORK/base.roproj"
+
+# A lexical negative zero is the integer zero, and must be admitted without
+# changing the resulting canonical .ro.  Transform only the exact fate_id 0
+# lexeme emitted by the real Godot witness, then exercise the typed adapter and
+# real Tachiko validator.  Keep the fresh output boundary explicit so a failed
+# admission cannot leave a partial artifact behind.
+NEGATIVE_ZERO_CANDIDATE="$WORK/negative-zero-candidate.json"
+NEGATIVE_ZERO_RO="$WORK/negative-zero.ro"
+uv run --no-project --offline python - "$WORK/candidate.json" "$NEGATIVE_ZERO_CANDIDATE" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_bytes()
+needle = b'"fate_id":0'
+if source.count(needle) != 1:
+    raise SystemExit("expected one canonical fate_id 0 in real Godot candidate")
+transformed = source.replace(needle, b'"fate_id":-0', 1)
+if transformed == source or transformed.count(b'"fate_id":-0') != 1:
+    raise SystemExit("negative-zero candidate transform crossed its lexical boundary")
+Path(sys.argv[2]).write_bytes(transformed)
+PY
+[[ ! -e "$NEGATIVE_ZERO_RO" && ! -L "$NEGATIVE_ZERO_RO" ]] || {
+  echo "FAIL: negative-zero output unexpectedly pre-existed" >&2; exit 1;
+}
+if ! "$ADAPTER" candidate "$NEGATIVE_ZERO_CANDIDATE" "$NEGATIVE_ZERO_RO" >"$WORK/negative-zero.log" 2>&1; then
+  echo "FAIL: lexical negative-zero candidate was rejected" >&2
+  cat "$WORK/negative-zero.log" >&2
+  [[ ! -e "$NEGATIVE_ZERO_RO" && ! -L "$NEGATIVE_ZERO_RO" ]] || {
+    echo "FAIL: rejected negative-zero candidate wrote partial output" >&2; exit 1
+  }
+  exit 1
+fi
+[[ -f "$NEGATIVE_ZERO_RO" && ! -L "$NEGATIVE_ZERO_RO" ]] || {
+  echo "FAIL: negative-zero candidate did not produce a regular .ro" >&2; exit 1
+}
+"$CLI" validate "$NEGATIVE_ZERO_RO"
+cmp "$WORK/base.ro" "$NEGATIVE_ZERO_RO"
+echo "NEGATIVE_ZERO_PASS: lexical -0 admitted, Tachiko-validated, and byte-equivalent to base.ro"
 
 layout_sha256() {
   local tree=$1

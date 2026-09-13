@@ -400,6 +400,34 @@ fn runtime_pair(value: Option<&JsonValue>, field: &str) -> i64 {
 fn normalize(path: &Path, output: &Path) {
     let runtime: Runtime = serde_json::from_slice(&read(path))
         .unwrap_or_else(|error| fail(format!("runtime JSON rejected: {error}")));
+
+    let expected_entities: BTreeSet<String> =
+        (1..=COUNT).map(|id| format!("god_{id:02}")).collect();
+    let actual_entities: BTreeSet<String> = runtime.entities.keys().cloned().collect();
+    if actual_entities != expected_entities {
+        fail(format!(
+            "runtime entities must be exactly god_01 through god_15; got {actual_entities:?}"
+        ));
+    }
+    for id in 1..=COUNT {
+        let key = format!("god_{id:02}");
+        let fields = &runtime.entities[&key].fields;
+        let mut expected_fields: BTreeSet<String> =
+            ["legacy_id", "display_name", "duration_days", "role_key"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        if id <= 12 {
+            expected_fields.insert("pair_legacy_id".to_owned());
+        }
+        let actual_fields: BTreeSet<String> = fields.keys().cloned().collect();
+        if actual_fields != expected_fields {
+            fail(format!(
+                "runtime entity {key} fields must be exactly {expected_fields:?}; got {actual_fields:?}"
+            ));
+        }
+    }
+
     let mut rows = Vec::new();
     for id in 1..=COUNT {
         let key = format!("god_{id:02}");

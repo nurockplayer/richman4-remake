@@ -648,9 +648,10 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()
-	for next_index_value in routes:
-		var next_index := int(next_index_value)
-		var route := _action_button(_route_destination_label(next_index), "route")
+	var route_labels := _route_destination_labels(routes)
+	for route_index in range(routes.size()):
+		var next_index := int(routes[route_index])
+		var route := _action_button(route_labels[route_index], "route")
 		route.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
@@ -668,6 +669,74 @@ func _route_destination_label(next_index: int) -> String:
 		if not name.is_empty():
 			return "前往 %s" % name
 	return "前往下一格"
+
+
+func _route_destination_labels(routes: Array) -> Array[String]:
+	var bases: Array[String] = []
+	var base_counts: Dictionary = {}
+	var cues: Array[String] = []
+	var cue_counts: Dictionary = {}
+	for next_index_value in routes:
+		var next_index := int(next_index_value)
+		var base := _route_destination_label(next_index)
+		var cue := _route_direction_label(next_index)
+		if cue.is_empty():
+			cue = "不同路線"
+		bases.append(base)
+		base_counts[base] = int(base_counts.get(base, 0)) + 1
+		cues.append(cue)
+		var cue_key := "%s|%s" % [base, cue]
+		cue_counts[cue_key] = int(cue_counts.get(cue_key, 0)) + 1
+
+	var labels: Array[String] = []
+	var cue_seen: Dictionary = {}
+	for route_index in range(routes.size()):
+		var base: String = bases[route_index]
+		if int(base_counts.get(base, 0)) <= 1:
+			labels.append(base)
+			continue
+		var cue: String = cues[route_index]
+		var cue_key := "%s|%s" % [base, cue]
+		var ordinal := int(cue_seen.get(cue_key, 0)) + 1
+		cue_seen[cue_key] = ordinal
+		var suffix := cue
+		if int(cue_counts.get(cue_key, 0)) > 1:
+			suffix = "%s · 路線%s" % [cue, _route_ordinal_label(ordinal)]
+		labels.append("%s（%s）" % [base, suffix])
+	return labels
+
+
+func _route_direction_label(next_index: int) -> String:
+	var board: Variant = snapshot.get("board", [])
+	if not board is Array or next_index < 0 or next_index >= board.size() or not board[next_index] is Dictionary:
+		return ""
+	var players: Variant = snapshot.get("players", [])
+	var current_player := int(snapshot.get("current_player", -1))
+	if not players is Array or current_player < 0 or current_player >= players.size() or not players[current_player] is Dictionary:
+		return ""
+	var origin_index := int((players[current_player] as Dictionary).get("position", -1))
+	if origin_index < 0 or origin_index >= board.size() or not board[origin_index] is Dictionary:
+		return ""
+	var origin: Dictionary = board[origin_index]
+	var destination: Dictionary = board[next_index]
+	var delta_x := int(destination.get("x", 0)) - int(origin.get("x", 0))
+	var delta_y := int(destination.get("y", 0)) - int(origin.get("y", 0))
+	if delta_x == 0 and delta_y == 0:
+		return "原地"
+	var horizontal := "右" if delta_x > 0 else "左" if delta_x < 0 else ""
+	var vertical := "下" if delta_y > 0 else "上" if delta_y < 0 else ""
+	if horizontal.is_empty():
+		return "%s方" % vertical
+	if vertical.is_empty():
+		return "%s方" % horizontal
+	return "%s%s方" % [horizontal, vertical]
+
+
+func _route_ordinal_label(ordinal: int) -> String:
+	var ordinals := ["一", "二", "三", "四"]
+	if ordinal > 0 and ordinal <= ordinals.size():
+		return ordinals[ordinal - 1]
+	return "第%d條" % ordinal
 
 
 func open_player_inspector(player_index := -1) -> void:

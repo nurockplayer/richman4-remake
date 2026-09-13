@@ -386,6 +386,13 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 		var route: Button = shell.route_buttons.get_child(0) as Button
 		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
 		_expect(route != null and route.text.begins_with("前往 ") and not route.text.contains("→"), "visible source route choice uses a player-facing destination label")
+	var duplicate_route_labels: Array = shell.callv("_route_destination_labels", [[2, 3]])
+	_expect(duplicate_route_labels.size() == 2 and duplicate_route_labels[0] != duplicate_route_labels[1], "concurrent same-name source route choices remain distinguishable")
+	var ordinary_route_labels: Array = shell.callv("_route_destination_labels", [[2]])
+	_expect(ordinary_route_labels == ["前往 測試路"], "ordinary source route labels keep their concise destination copy")
+	for label_value in duplicate_route_labels:
+		var label := str(label_value)
+		_expect(label.begins_with("前往 ") and not label.contains("→") and not label.contains("%02d"), "same-name route distinction uses player-facing source cues")
 
 
 func _test_source_stock_modal_gate(ui: Control, shell: Control) -> void:

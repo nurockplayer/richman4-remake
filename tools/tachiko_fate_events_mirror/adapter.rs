@@ -546,6 +546,16 @@ fn candidate(bytes: &[u8]) -> Candidate {
     candidate
 }
 
+/* Python's frozen checker uses str.strip(), whose whitespace set includes
+ * the four C0 information separators that Rust's char::is_whitespace omits.
+ * Keep this source-local predicate shared by candidate and runtime text
+ * admission so both paths reject the same blank display names. */
+fn is_blank_text(value: &str) -> bool {
+    value
+        .chars()
+        .all(|character| character.is_whitespace() || matches!(character, '\u{001c}'..='\u{001f}'))
+}
+
 fn validate_candidate(candidate: &Candidate) {
     if candidate.fate_names.len() != COUNT as usize {
         fail(format!("expected exactly {COUNT} fate event rows"));
@@ -555,7 +565,7 @@ fn validate_candidate(candidate: &Candidate) {
         if !(0..COUNT).contains(&event.fate_id) || !codes.insert(event.fate_id) {
             fail("fate_id must be unique and exactly 0..36");
         }
-        if event.display_name.trim().is_empty() {
+        if is_blank_text(&event.display_name) {
             fail("display_name must be non-empty");
         }
         if event.display_name.chars().count() > MAX_TEXT_LENGTH {
@@ -678,7 +688,7 @@ fn runtime_number(lexeme: &str) -> i64 {
 }
 
 fn runtime_text(value: &str) -> String {
-    if value.trim().is_empty() {
+    if is_blank_text(value) {
         fail("runtime display_name must be non-empty text");
     }
     if value.chars().count() > MAX_TEXT_LENGTH {

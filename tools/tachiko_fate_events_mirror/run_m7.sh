@@ -154,6 +154,52 @@ CLI="$TACHIKO_WORKTREE/target/debug/tachiko"
 ADAPTER="$WORK/adapter-src/target/debug/richman4-tachiko-fate-events-mirror"
 [[ -x "$CLI" && -x "$ADAPTER" ]] || { echo "FAIL: real CLI or M7 adapter binary missing" >&2; exit 1; }
 
+# Keep the candidate boundary aligned with the frozen checker's str.strip()
+# semantics for the C0 separators that Rust's trim() does not classify as
+# whitespace.  Transform only the real Godot row for fate_id 0, require the
+# JSON-escaped form in each generated input, and verify rejection happens
+# before create_new leaves any regular or symlink output behind.
+C0_NEGATIVE_DIR="$WORK/c0-display-name-negatives"
+mkdir -p "$C0_NEGATIVE_DIR"
+uv run --no-project --offline python - "$WORK/candidate.json" "$C0_NEGATIVE_DIR" <<'PY'
+import copy
+import json
+import sys
+from pathlib import Path
+
+source_path = Path(sys.argv[1])
+output_dir = Path(sys.argv[2])
+source = json.loads(source_path.read_bytes())
+rows = source.get("fate_names")
+if not isinstance(rows, list):
+    raise SystemExit("real Godot candidate fate_names array missing")
+if sum(row.get("fate_id") == 0 for row in rows if isinstance(row, dict)) != 1:
+    raise SystemExit("real Godot candidate must contain exactly one fate_id 0 row")
+
+for suffix, character in (("001c", "\x1c"), ("001d", "\x1d"), ("001e", "\x1e"), ("001f", "\x1f")):
+    transformed = copy.deepcopy(source)
+    target = next(row for row in transformed["fate_names"] if row["fate_id"] == 0)
+    target["display_name"] = character
+    payload = json.dumps(transformed, ensure_ascii=True, separators=(",", ":")).encode()
+    escaped = f'"display_name":"\\u{suffix}"'.encode()
+    if payload.count(escaped) != 1:
+        raise SystemExit(f"candidate transform did not produce one JSON-escaped U+{suffix.upper()}")
+    (output_dir / f"fate-id-0-u{suffix}.json").write_bytes(payload)
+PY
+for negative in "$C0_NEGATIVE_DIR"/*.json; do
+  negative_name=${negative##*/}
+  negative_output="$WORK/negative-${negative_name%.json}.ro"
+  if "$ADAPTER" candidate "$negative" "$negative_output" >"$WORK/${negative_name}.log" 2>&1; then
+    echo "FAIL: C0 display_name negative unexpectedly admitted: $negative_name" >&2
+    exit 1
+  fi
+  [[ ! -e "$negative_output" && ! -L "$negative_output" ]] || {
+    echo "FAIL: C0 display_name negative wrote partial output: $negative_name" >&2
+    exit 1
+  }
+done
+echo "C0_DISPLAY_NAME_NEGATIVES_PASS: U+001C U+001D U+001E U+001F rejected without output"
+
 # Exercise every frozen checker negative through the typed adapter as well.
 # Each deliberate rejection must happen before create_new, leaving no partial
 # .ro output behind. The checker remains the contract owner; this temporary

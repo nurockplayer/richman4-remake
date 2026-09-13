@@ -57,7 +57,8 @@ struct RuntimeEntity {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuntimeFields {
-    fate_id: JsonNumber,
+    #[serde(rename = "fate_id")]
+    _fate_id: JsonNumber,
     display_name: String,
 }
 
@@ -172,16 +173,288 @@ fn exact_integral(value: &JsonNumber) -> Option<i64> {
         .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
 }
 
-fn runtime_exact_integral(value: &JsonNumber) -> Option<i64> {
-    exact_integral(value).or_else(|| {
-        value.as_f64().and_then(|value| {
-            if value.is_finite() && value.fract() == 0.0 {
-                i64::try_from(value as i128).ok()
-            } else {
-                None
+/* The temporary M7 manifest does not enable serde_json arbitrary precision,
+ * so runtime numbers must be checked from their source lexemes.  This avoids
+ * accepting a decimal/exponent value merely because f64 rounded it to an int.
+ */
+fn runtime_exact_integral(lexeme: &str) -> Option<i64> {
+    let bytes = lexeme.as_bytes();
+    let mut position = 0;
+    let negative = bytes.get(position) == Some(&b'-');
+    if negative {
+        position += 1;
+    }
+
+    let integer_start = position;
+    while bytes.get(position).is_some_and(|byte| byte.is_ascii_digit()) {
+        position += 1;
+    }
+    if position == integer_start {
+        return None;
+    }
+    let integer_digits = &bytes[integer_start..position];
+
+    let fractional_digits = if bytes.get(position) == Some(&b'.') {
+        position += 1;
+        let start = position;
+        while bytes.get(position).is_some_and(|byte| byte.is_ascii_digit()) {
+            position += 1;
+        }
+        if position == start {
+            return None;
+        }
+        &bytes[start..position]
+    } else {
+        &[]
+    };
+
+    let exponent = if bytes
+        .get(position)
+        .is_some_and(|byte| *byte == b'e' || *byte == b'E')
+    {
+        position += 1;
+        let exponent_negative = match bytes.get(position) {
+            Some(b'-') => {
+                position += 1;
+                true
             }
+            Some(b'+') => {
+                position += 1;
+                false
+            }
+            _ => false,
+        };
+        let start = position;
+        let mut value = 0i64;
+        while let Some(byte) = bytes.get(position) {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            value = value.checked_mul(10)?.checked_add(i64::from(byte - b'0'))?;
+            position += 1;
+        }
+        if position == start {
+            return None;
+        }
+        if exponent_negative {
+            value.checked_neg()?
+        } else {
+            value
+        }
+    } else {
+        0
+    };
+    if position != bytes.len() {
+        return None;
+    }
+
+    let coefficient_len = integer_digits.len() + fractional_digits.len();
+    let decimal_position = integer_digits.len() as i128 + i128::from(exponent);
+    let coefficient = integer_digits
+        .iter()
+        .chain(fractional_digits.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    if coefficient.iter().all(|digit| *digit == b'0') {
+        return Some(0);
+    }
+    if decimal_position <= 0 {
+        return None;
+    }
+
+    let significant_end = usize::try_from(decimal_position.min(coefficient_len as i128)).ok()?;
+    if coefficient[significant_end..]
+        .iter()
+        .any(|digit| *digit != b'0')
+    {
+        return None;
+    }
+
+    let mut magnitude = 0i128;
+    for digit in &coefficient[..significant_end] {
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(i128::from(digit - b'0'))?;
+    }
+    let trailing_zeroes = decimal_position - coefficient_len as i128;
+    if trailing_zeroes > 0 {
+        if trailing_zeroes > 38 {
+            return None;
+        }
+        for _ in 0..usize::try_from(trailing_zeroes).ok()? {
+            magnitude = magnitude.checked_mul(10)?;
+        }
+    }
+    let signed = if negative { -magnitude } else { magnitude };
+    i64::try_from(signed).ok()
+}
+
+/* Keep only the raw numbers needed after the strict typed parse. */
+enum RawJson {
+    Object(BTreeMap<String, RawJson>),
+    Array,
+    Number(String),
+    Other,
+}
+
+struct RawParser<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> RawParser<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn whitespace(&mut self) {
+        while self
+            .bytes
+            .get(self.position)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            self.position += 1;
+        }
+    }
+
+    fn string(&mut self) -> String {
+        let start = self.position;
+        self.position += 1;
+        while let Some(byte) = self.bytes.get(self.position) {
+            match byte {
+                b'\\' => self.position += 2,
+                b'"' => {
+                    self.position += 1;
+                    return serde_json::from_slice(&self.bytes[start..self.position])
+                        .unwrap_or_else(|error| fail(format!("runtime JSON string rejected: {error}")));
+                }
+                _ => self.position += 1,
+            }
+        }
+        fail("runtime JSON string is unterminated")
+    }
+
+    fn value(&mut self) -> RawJson {
+        self.whitespace();
+        match self.bytes.get(self.position) {
+            Some(b'{') => self.object(),
+            Some(b'[') => self.array(),
+            Some(b'"') => {
+                self.string();
+                RawJson::Other
+            }
+            Some(byte) if *byte == b'-' || byte.is_ascii_digit() => {
+                let start = self.position;
+                while self.bytes.get(self.position).is_some_and(|byte| {
+                    byte.is_ascii_digit()
+                        || matches!(*byte, b'-' | b'+' | b'.' | b'e' | b'E')
+                }) {
+                    self.position += 1;
+                }
+                let lexeme = String::from_utf8(self.bytes[start..self.position].to_vec())
+                    .unwrap_or_else(|error| fail(format!("runtime number rejected: {error}")));
+                if runtime_exact_integral(&lexeme).is_none() {
+                    fail("runtime JSON contains a non-integral or ambiguous number");
+                }
+                RawJson::Number(lexeme)
+            }
+            Some(_) => {
+                while self.bytes.get(self.position).is_some_and(|byte| {
+                    !byte.is_ascii_whitespace() && !matches!(*byte, b',' | b']' | b'}')
+                }) {
+                    self.position += 1;
+                }
+                RawJson::Other
+            }
+            None => fail("runtime JSON value missing"),
+        }
+    }
+
+    fn object(&mut self) -> RawJson {
+        self.position += 1;
+        let mut values = BTreeMap::new();
+        loop {
+            self.whitespace();
+            if self.bytes.get(self.position) == Some(&b'}') {
+                self.position += 1;
+                return RawJson::Object(values);
+            }
+            if self.bytes.get(self.position) != Some(&b'"') {
+                fail("runtime JSON object key missing");
+            }
+            let key = self.string();
+            self.whitespace();
+            if self.bytes.get(self.position) != Some(&b':') {
+                fail("runtime JSON object colon missing");
+            }
+            self.position += 1;
+            let value = self.value();
+            values.insert(key, value);
+            self.whitespace();
+            match self.bytes.get(self.position) {
+                Some(b',') => self.position += 1,
+                Some(b'}') => {
+                    self.position += 1;
+                    return RawJson::Object(values);
+                }
+                _ => fail("runtime JSON object separator missing"),
+            }
+        }
+    }
+
+    fn array(&mut self) -> RawJson {
+        self.position += 1;
+        loop {
+            self.whitespace();
+            if self.bytes.get(self.position) == Some(&b']') {
+                self.position += 1;
+                return RawJson::Array;
+            }
+            self.value();
+            self.whitespace();
+            match self.bytes.get(self.position) {
+                Some(b',') => self.position += 1,
+                Some(b']') => {
+                    self.position += 1;
+                    return RawJson::Array;
+                }
+                _ => fail("runtime JSON array separator missing"),
+            }
+        }
+    }
+}
+
+fn runtime_raw_numbers(bytes: &[u8]) -> BTreeMap<String, String> {
+    let mut parser = RawParser::new(bytes);
+    let root = parser.value();
+    parser.whitespace();
+    if parser.position != bytes.len() {
+        fail("runtime JSON has trailing data");
+    }
+    let entities = match root {
+        RawJson::Object(mut object) => match object.remove("entities") {
+            Some(RawJson::Object(entities)) => entities,
+            _ => fail("runtime entities object missing"),
+        },
+        _ => fail("runtime JSON root must be an object"),
+    };
+    entities
+        .into_iter()
+        .map(|(key, entity)| {
+            let fields = match entity {
+                RawJson::Object(mut entity) => match entity.remove("fields") {
+                    Some(RawJson::Object(fields)) => fields,
+                    _ => fail(format!("runtime entity {key} fields object missing")),
+                },
+                _ => fail(format!("runtime entity {key} must be an object")),
+            };
+            let fate_id = match fields.get("fate_id") {
+                Some(RawJson::Number(value)) => value.clone(),
+                _ => fail(format!("runtime entity {key} fate_id number missing")),
+            };
+            (key, fate_id)
         })
-    })
+        .collect()
 }
 
 fn deserialize_integral<'de, D>(deserializer: D) -> Result<i64, D::Error>
@@ -321,8 +594,8 @@ fn import_log(path: &Path) -> Candidate {
     candidate(records[0])
 }
 
-fn runtime_number(value: &JsonNumber) -> i64 {
-    let number = runtime_exact_integral(value)
+fn runtime_number(lexeme: &str) -> i64 {
+    let number = runtime_exact_integral(lexeme)
         .unwrap_or_else(|| fail("runtime fate_id must be an integer"));
     if !(0..COUNT).contains(&number) {
         fail("runtime fate_id outside 0..36");
@@ -343,7 +616,10 @@ fn runtime_text(value: &str) -> String {
 }
 
 fn normalize(path: &Path, output: &Path) {
-    let runtime: Runtime = serde_json::from_value(parse(&read(path)))
+    let bytes = read(path);
+    let parsed = parse(&bytes);
+    let raw_numbers = runtime_raw_numbers(&bytes);
+    let runtime: Runtime = serde_json::from_value(parsed)
         .unwrap_or_else(|error| fail(format!("runtime JSON rejected: {error}")));
     if runtime.format_version != RUNTIME_FORMAT_VERSION
         || runtime.document_id != RUNTIME_DOCUMENT_ID
@@ -364,7 +640,10 @@ fn normalize(path: &Path, output: &Path) {
         if entity.schema != RUNTIME_SCHEMA_KEY {
             fail(format!("runtime entity {key} schema mismatch"));
         }
-        let actual_code = runtime_number(&entity.fields.fate_id);
+        let raw_fate_id = raw_numbers
+            .get(&key)
+            .unwrap_or_else(|| fail(format!("runtime entity {key} fate_id number missing")));
+        let actual_code = runtime_number(raw_fate_id);
         if actual_code != code {
             fail(format!(
                 "runtime entity key/value mismatch: {key} has {actual_code}"

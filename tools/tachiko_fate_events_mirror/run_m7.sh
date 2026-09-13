@@ -225,6 +225,41 @@ fi
 
 "$CLI" export "$WORK/base.roproj" "$WORK/base-runtime.json"
 "$ADAPTER" normalize "$WORK/base-runtime.json" "$WORK/base.json"
+
+# Runtime normalization must reject non-integral lexemes that a lossy float
+# conversion could round or underflow, without leaving any output artifact.
+RUNTIME_PRECISION_NEGATIVES="$WORK/runtime-precision-negatives"
+mkdir -p "$RUNTIME_PRECISION_NEGATIVES"
+uv run --no-project --offline python - "$WORK/base-runtime.json" "$RUNTIME_PRECISION_NEGATIVES" <<'PY'
+import sys
+from pathlib import Path
+
+runtime_path = Path(sys.argv[1])
+output_dir = Path(sys.argv[2])
+baseline = runtime_path.read_bytes()
+needle = b'"fate_id": 0.0'
+if baseline.count(needle) != 1:
+    raise SystemExit("expected one canonical fate_id 0.0 in real runtime export")
+for name, lexeme in (
+    ("underflow", b"1e-400"),
+    ("rounded", b"1.0000000000000001"),
+):
+    (output_dir / (name + ".json")).write_bytes(baseline.replace(needle, b'"fate_id": ' + lexeme, 1))
+PY
+for precision_negative in "$RUNTIME_PRECISION_NEGATIVES"/*.json; do
+  precision_name=${precision_negative##*/}
+  precision_output="$WORK/runtime-precision-${precision_name%.json}.json"
+  if "$ADAPTER" normalize "$precision_negative" "$precision_output" >"$WORK/${precision_name}.log" 2>&1; then
+    echo "FAIL: runtime precision negative unexpectedly normalized: $precision_name" >&2
+    exit 1
+  fi
+  [[ ! -e "$precision_output" && ! -L "$precision_output" ]] || {
+    echo "FAIL: runtime precision negative wrote partial output: $precision_name" >&2
+    exit 1
+  }
+done
+echo "RUNTIME_PRECISION_NEGATIVES_PASS: underflow and rounded lexemes rejected without output"
+
 "$ADAPTER" identity "$WORK/base.roproj" "$WORK/base-persisted-ids.json"
 cmp "$WORK/base-import-ids.json" "$WORK/base-persisted-ids.json"
 

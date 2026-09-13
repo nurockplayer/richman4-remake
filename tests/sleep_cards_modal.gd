@@ -9,7 +9,7 @@ func run() -> void:
 	var game := setup(ui, 69801)
 	give(game, 0, "夢遊")
 	give(game, 1, "嫁禍")
-	use_card(ui, "夢遊", 1)
+	await use_card(ui, "夢遊", 1)
 	await create_timer(0.2).timeout
 	check(ui._human_trap_response_pending() and ui.trap_popup.visible, "dream reaction survives inventory dismissal until human response")
 	var decline: Node = ui.trap_popup.find_child("DeclineTrap", true, false)

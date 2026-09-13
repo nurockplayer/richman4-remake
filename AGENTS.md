@@ -14,6 +14,17 @@ Read the **Issue #1 body**, the **Issue #52 body**, and the current active Issue
 - Use Sol review by risk/batch rather than by tiny task: reserve it for milestone boundaries, high-risk/core changes, ambiguous findings or an independent final gate. Do not repeatedly re-review unchanged evidence.
 - Long local work must remain observable. At least once every 60 minutes, or sooner at a meaningful milestone, leave an executable GitHub checkpoint. Detailed implementation/test evidence belongs in the active Issue/PR; **#52 is only the concise current handoff** (HEAD, active work, verification summary, gaps, next action) and its body is replaced in place rather than appended as history.
 - Do not keep one Astra parent session alive indefinitely across milestones. Finish the current bounded write/verification first; at a natural checkpoint, replace #52 with a compact handoff and start the next milestone in a fresh Astra session. Do not rotate sessions mid-write merely to reduce context. A fresh parent session must reread #1, #52, this file and the active Issue/PR, not reconstruct history from old conversation context.
+
+### SCD milestone relay
+
+SCD 可在已授權範圍內跨正常階段與 milestone relay；此規則不新增產品、runtime、Hot Reload、source-of-truth 或 cutover 授權，也不授權 M5。每個 lane 仍只能有窄化且不重疊的 writer；不得 force-push 或繞過 acceptance、hosted verification、exact-head 或獨立 review gate。測試採分層且以足夠的最低成本層級為準；每 60 分鐘內及每個實質 milestone 都要留下可執行的 GitHub checkpoint，#52 只保留目前狀態與下一個可執行動作。
+
+正常 `BLOCKED` 代表預期可在目前委派權限內以技術工作解決的 blocker；`ESCALATED` 代表需要較強模型或獨立調查，仍不等於需要 owner 輸入。兩者都應繼續既有窄 scope、focused/affected testing、有效 P1/P2 review 修正、exact-head hosted verification、適用的獨立 review gate（依既有風險／milestone／final 政策需要時才用 Sol）與 merge 流程；可另開獨立、可逆且不衝突的 base-regression lane，完成後回到暫停中的 milestone，不得藉此豁免 gate。
+
+完成 merge 後，當前 parent 必須先以 exact merge/evidence 更新 #52，再在自然 checkpoint 結束；下一個 parent 必須是 fresh session，重新讀取 #1、#52、`AGENTS.md` 與 live active Issue/PR，進入 `RECALIBRATING`，檢查 current `main`、writers、未解決的 P1/P2 debt 與 mission constraints。只有在下一步是目前 owner-authorized lane 已明示的唯一最小、相干、可逆且低風險 successor 時，才可自行選取並繼續；否則停在 `OWNER_REQUIRED`。
+
+只有下列情況才是 `OWNER_REQUIRED`：需要在多個合理且實質不同的產品方向間選擇；會改變產品/runtime authority、source-of-truth、Hot Reload/cutover、save/schema compatibility 或其他不可逆邊界；缺少 credentials、法律／公開發布許可、私有外部資料、硬體／人工操作等真實外部依賴；與 active writer 重疊且無法安全排序；唯一前進路徑是削弱或繞過 acceptance/hosted gate；下一 milestone 不是既有授權 lane 已明示；反覆的 bounded investigation 沒有產生新的 discriminating evidence，而採用 fallback 會實質改變產品行為；治理規則例外；或已無剩餘授權工作。一般 bug、可辨識的 flaky failure、review finding 與可逆實作選擇不會僅因其本身成為 `OWNER_REQUIRED`。
+
 - Target **90–95% player-perceived fidelity**, not perfect reconstruction; do not perform exploratory archaeology merely to discover more work.
 - Unknowns are not blockers by default. Bound investigation, record a plausible fallback, continue, and defer non-blocking gaps rather than delay delivery.
 - In polish/RC, investigate only reproducible player-visible discrepancies or failed agreed acceptance tests; do not expand release scope through discoveries.

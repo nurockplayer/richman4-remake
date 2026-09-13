@@ -541,6 +541,9 @@ fn main() {
             let input = args.next().unwrap_or_else(|| fail("Godot log missing"));
             let output = args.next().unwrap_or_else(|| fail(".ro output missing"));
             publish(&import_log(Path::new(&input)), Path::new(&output));
+            if let Some(identity_output) = args.next() {
+                identity_ro(Path::new(&output), Path::new(&identity_output));
+            }
         }
         Some("normalize") => {
             let input = args.next().unwrap_or_else(|| fail("runtime input missing"));

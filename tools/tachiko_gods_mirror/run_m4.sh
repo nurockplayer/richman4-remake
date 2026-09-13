@@ -8,13 +8,28 @@ GODOT_BIN=${GODOT_BIN:-godot}
 # The first invocation is a thin launcher. It rejects tracked drift, archives
 # the exact candidate HEAD (thereby excluding untracked .serena and any other
 # local inputs), and executes this same runner from that isolated snapshot.
-if [[ -n "${M4_SNAPSHOT_ROOT:-}" ]]; then
+# Only this branch may mint the private handoff values; ordinary invocations
+# with a pre-set handoff environment fail closed below.
+if [[ "${1:-}" == "--m4-inner" ]]; then
+  shift
   ORIGINAL_ROOT=${M4_ORIGINAL_ROOT:-}
   WORK=${M4_WORK:-}
-  SOURCE_ROOT=$M4_SNAPSHOT_ROOT
+  SOURCE_ROOT=${M4_SNAPSHOT_ROOT:-}
   CANDIDATE_HEAD=${M4_CANDIDATE_HEAD:-}
-  [[ -n "$ORIGINAL_ROOT" && -n "$WORK" && -n "$CANDIDATE_HEAD" && -d "$SOURCE_ROOT" ]] || {
+  [[ -n "$ORIGINAL_ROOT" && -n "$WORK" && -n "$CANDIDATE_HEAD" && -d "$WORK" && -d "$SOURCE_ROOT" ]] || {
     echo "PRECONDITION_UNMET: invalid M4 source snapshot handoff" >&2
+    exit 2
+  }
+  [[ "$SOURCE_ROOT" == "$WORK/richman4-snapshot" ]] || {
+    echo "PRECONDITION_UNMET: M4 source snapshot path is not launcher-generated" >&2
+    exit 2
+  }
+  [[ "$CANDIDATE_HEAD" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "PRECONDITION_UNMET: invalid M4 candidate HEAD handoff" >&2
+    exit 2
+  }
+  [[ -f "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh" && ! -e "$SOURCE_ROOT/.serena" ]] || {
+    echo "PRECONDITION_UNMET: incomplete or contaminated M4 source snapshot" >&2
     exit 2
   }
   if ! git -C "$ORIGINAL_ROOT" diff --quiet HEAD --; then
@@ -25,6 +40,9 @@ if [[ -n "${M4_SNAPSHOT_ROOT:-}" ]]; then
     echo "PRECONDITION_UNMET: richman candidate HEAD changed during snapshot handoff" >&2
     exit 2
   }
+elif [[ -n "${M4_ORIGINAL_ROOT:-}" || -n "${M4_WORK:-}" || -n "${M4_CANDIDATE_HEAD:-}" || -n "${M4_SNAPSHOT_ROOT:-}" ]]; then
+  echo "PRECONDITION_UNMET: M4 handoff variables require the private inner sentinel" >&2
+  exit 2
 else
   ORIGINAL_ROOT=$ROOT
   if ! git -C "$ORIGINAL_ROOT" diff --quiet HEAD --; then
@@ -43,14 +61,15 @@ else
     echo "PRECONDITION_UNMET: source snapshot unexpectedly contains untracked .serena" >&2
     exit 2
   }
-  exec env \
+  exec env -i \
+    PATH="$PATH" \
     TACHIKO_SOURCE="$TACHIKO_SOURCE" \
     GODOT_BIN="$GODOT_BIN" \
     M4_ORIGINAL_ROOT="$ORIGINAL_ROOT" \
     M4_CANDIDATE_HEAD="$CANDIDATE_HEAD" \
     M4_SNAPSHOT_ROOT="$SOURCE_ROOT" \
     M4_WORK="$WORK" \
-    "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh" "$@"
+    "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh" --m4-inner "$@"
 fi
 
 TACHIKO_SHA=6900e975112576585fd9360f12d9fcf8b36ba466
@@ -129,6 +148,28 @@ tree_sha256() {
   done | shasum -a 256 | cut -d' ' -f1
 }
 
+layout_sha256() {
+  local tree=$1
+  find "$tree" -print | LC_ALL=C sort | while IFS= read -r path; do
+    local relative
+    if [[ "$path" == "$tree" ]]; then
+      relative=.
+    else
+      relative=${path#"$tree"/}
+    fi
+    if [[ -L "$path" ]]; then
+      printf 'L %s %s\n' "$relative" "$(readlink "$path")"
+    elif [[ -d "$path" ]]; then
+      printf 'D %s\n' "$relative"
+    elif [[ -f "$path" ]]; then
+      printf 'F %s %s\n' "$relative" "$(shasum -a 256 "$path" | cut -d' ' -f1)"
+    else
+      echo "FAIL: unsupported project tree entry: $path" >&2
+      exit 1
+    fi
+  done | shasum -a 256 | cut -d' ' -f1
+}
+
 python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
   --candidate-adapter "$ADAPTER" --tachiko-cli "$CLI"
 
@@ -137,6 +178,15 @@ python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 "$CLI" roproj materialize "$WORK/base.ro" "$WORK/base.roproj"
 "$CLI" roproj validate "$WORK/base.roproj"
 "$ADAPTER" compare-ro-roproj "$WORK/base.ro" "$WORK/base.roproj"
+BASE_LAYOUT_HASH=$(layout_sha256 "$WORK/base.roproj")
+if "$CLI" roproj materialize "$WORK/base.ro" "$WORK/base.roproj" >"$WORK/base-roproj-collision.log" 2>&1; then
+  echo "FAIL: existing base .roproj destination unexpectedly accepted" >&2
+  exit 1
+fi
+[[ "$BASE_LAYOUT_HASH" == "$(layout_sha256 "$WORK/base.roproj")" ]] || {
+  echo "FAIL: existing base .roproj collision changed complete tree layout" >&2
+  exit 1
+}
 "$CLI" export "$WORK/base.roproj" "$WORK/base-runtime.json"
 "$ADAPTER" normalize "$WORK/base-runtime.json" "$WORK/base.json"
 "$ADAPTER" identity-ro "$WORK/base.ro" "$WORK/base-import-ids.json"
@@ -185,6 +235,7 @@ python3 "$SOURCE_ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 "$CLI" validate "$WORK/edited.ro"
 "$CLI" roproj materialize "$WORK/edited.ro" "$WORK/edited.roproj"
 "$CLI" roproj validate "$WORK/edited.roproj"
+"$ADAPTER" compare-ro-roproj "$WORK/edited.ro" "$WORK/edited.roproj"
 "$ADAPTER" check-edit "$WORK/base.roproj" "$WORK/edited.roproj"
 "$CLI" export "$WORK/edited.roproj" "$WORK/edited-runtime.json"
 "$ADAPTER" normalize "$WORK/edited-runtime.json" "$WORK/edited.json"
@@ -225,6 +276,10 @@ MANIFEST="$WORK/evidence-manifest.txt"
   echo "repeat.roproj.tree_sha256=$(tree_sha256 "$WORK/repeat.roproj")"
   echo "reordered.roproj.tree_sha256=$(tree_sha256 "$WORK/reordered.roproj")"
   echo "edited.roproj.tree_sha256=$(tree_sha256 "$WORK/edited.roproj")"
+  echo "base.roproj.layout_sha256=$(layout_sha256 "$WORK/base.roproj")"
+  echo "repeat.roproj.layout_sha256=$(layout_sha256 "$WORK/repeat.roproj")"
+  echo "reordered.roproj.layout_sha256=$(layout_sha256 "$WORK/reordered.roproj")"
+  echo "edited.roproj.layout_sha256=$(layout_sha256 "$WORK/edited.roproj")"
 } >"$MANIFEST"
 echo "EVIDENCE_MANIFEST=$MANIFEST"
 cat "$MANIFEST"

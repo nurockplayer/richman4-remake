@@ -172,6 +172,18 @@ fn exact_integral(value: &JsonNumber) -> Option<i64> {
         .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
 }
 
+fn runtime_exact_integral(value: &JsonNumber) -> Option<i64> {
+    exact_integral(value).or_else(|| {
+        value.as_f64().and_then(|value| {
+            if value.is_finite() && value.fract() == 0.0 {
+                i64::try_from(value as i128).ok()
+            } else {
+                None
+            }
+        })
+    })
+}
+
 fn deserialize_integral<'de, D>(deserializer: D) -> Result<i64, D::Error>
 where
     D: Deserializer<'de>,
@@ -310,8 +322,8 @@ fn import_log(path: &Path) -> Candidate {
 }
 
 fn runtime_number(value: &JsonNumber) -> i64 {
-    let number =
-        exact_integral(value).unwrap_or_else(|| fail("runtime fate_id must be an integer"));
+    let number = runtime_exact_integral(value)
+        .unwrap_or_else(|| fail("runtime fate_id must be an integer"));
     if !(0..COUNT).contains(&number) {
         fail("runtime fate_id outside 0..36");
     }

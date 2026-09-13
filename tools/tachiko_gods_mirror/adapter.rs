@@ -7,7 +7,7 @@ use std::{
 };
 
 use serde::{Deserialize, Deserializer, de};
-use serde_json::{Map, Value as JsonValue, json};
+use serde_json::{Map, Number as JsonNumber, Value as JsonValue, json};
 use tachiko_storage::{from_bytes, load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{
     Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId,
@@ -18,6 +18,10 @@ const PREFIX: &str = "RICHMAN4_GODS_ORACLE=";
 const COUNT: i64 = 15;
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 const SCHEMA_ID: &str = "schema-gods";
+const RUNTIME_FORMAT_VERSION: u32 = 2;
+const RUNTIME_DOCUMENT_ID: &str = "richman4-tachiko-gods-mirror";
+const RUNTIME_TITLE: &str = "Richman4 Tachiko god mirror";
+const RUNTIME_SCHEMA_KEY: &str = "gods";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,13 +40,43 @@ struct God {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Runtime {
+    format_version: u32,
+    document_id: String,
+    title: String,
     entities: BTreeMap<String, RuntimeEntity>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RuntimeEntity {
-    fields: BTreeMap<String, JsonValue>,
+    schema: String,
+    fields: RuntimeFields,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeFields {
+    legacy_id: JsonNumber,
+    display_name: String,
+    #[serde(default)]
+    pair_legacy_id: Option<RuntimePairValue>,
+    duration_days: JsonNumber,
+    role_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RuntimePairValue {
+    Reference(RuntimeReference),
+    Null(()),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeReference {
+    reference: String,
 }
 
 /* Deserialize JSON through a visitor so duplicate object keys are rejected
@@ -271,7 +305,7 @@ fn schema() -> Schema {
     .collect();
     Schema {
         id,
-        key: "gods".into(),
+        key: RUNTIME_SCHEMA_KEY.into(),
         fields,
     }
 }
@@ -318,8 +352,8 @@ fn document(candidate: &Candidate) -> Document {
         );
     }
     Document {
-        id: "richman4-tachiko-gods-mirror".into(),
-        title: "Richman4 Tachiko god mirror".into(),
+        id: RUNTIME_DOCUMENT_ID.into(),
+        title: RUNTIME_TITLE.into(),
         schemas,
         entities,
     }
@@ -349,7 +383,7 @@ fn import_log(path: &Path) -> Candidate {
     candidate(records[0])
 }
 
-fn runtime_number(value: &JsonValue, field: &str) -> i64 {
+fn runtime_number(value: &JsonNumber, field: &str) -> i64 {
     let number = value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
@@ -373,24 +407,28 @@ fn runtime_number(value: &JsonValue, field: &str) -> i64 {
     number
 }
 
-fn runtime_text(value: &JsonValue, field: &str) -> String {
-    value
-        .as_str()
-        .filter(|text| !text.trim().is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| fail(format!("runtime {field} must be non-empty text")))
+fn runtime_text(value: &str, field: &str) -> String {
+    if value.trim().is_empty() {
+        fail(format!("runtime {field} must be non-empty text"));
+    }
+    value.to_owned()
 }
 
-fn runtime_pair(value: Option<&JsonValue>, field: &str) -> i64 {
+fn runtime_pair(value: Option<&RuntimePairValue>, field: &str) -> i64 {
     let Some(value) = value else { return 0 };
-    let reference = value
-        .get("reference")
-        .and_then(JsonValue::as_str)
-        .unwrap_or_else(|| fail(format!("runtime {field} must be a Tachiko reference")));
+    let RuntimePairValue::Reference(reference) = value else {
+        fail(format!("runtime {field} must be a Tachiko reference"));
+    };
     let id = reference
+        .reference
         .strip_prefix("god_")
         .and_then(|suffix| suffix.parse::<i64>().ok())
-        .unwrap_or_else(|| fail(format!("runtime {field} has unknown reference {reference}")));
+        .unwrap_or_else(|| {
+            fail(format!(
+                "runtime {field} has unknown reference {}",
+                reference.reference
+            ))
+        });
     if !(1..=COUNT).contains(&id) {
         fail(format!("runtime {field} reference outside 1..15"));
     }
@@ -401,6 +439,17 @@ fn normalize(path: &Path, output: &Path) {
     let runtime: Runtime = serde_json::from_slice(&read(path))
         .unwrap_or_else(|error| fail(format!("runtime JSON rejected: {error}")));
 
+    if runtime.format_version != RUNTIME_FORMAT_VERSION {
+        fail(format!(
+            "runtime format_version must be {RUNTIME_FORMAT_VERSION}"
+        ));
+    }
+    if runtime.document_id != RUNTIME_DOCUMENT_ID {
+        fail(format!("runtime document_id must be {RUNTIME_DOCUMENT_ID}"));
+    }
+    if runtime.title != RUNTIME_TITLE {
+        fail(format!("runtime title must be {RUNTIME_TITLE}"));
+    }
     let expected_entities: BTreeSet<String> =
         (1..=COUNT).map(|id| format!("god_{id:02}")).collect();
     let actual_entities: BTreeSet<String> = runtime.entities.keys().cloned().collect();
@@ -411,19 +460,24 @@ fn normalize(path: &Path, output: &Path) {
     }
     for id in 1..=COUNT {
         let key = format!("god_{id:02}");
-        let fields = &runtime.entities[&key].fields;
-        let mut expected_fields: BTreeSet<String> =
-            ["legacy_id", "display_name", "duration_days", "role_key"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect();
-        if id <= 12 {
-            expected_fields.insert("pair_legacy_id".to_owned());
-        }
-        let actual_fields: BTreeSet<String> = fields.keys().cloned().collect();
-        if actual_fields != expected_fields {
+        let entity = &runtime.entities[&key];
+        if entity.schema != RUNTIME_SCHEMA_KEY {
             fail(format!(
-                "runtime entity {key} fields must be exactly {expected_fields:?}; got {actual_fields:?}"
+                "runtime entity {key} schema must be {RUNTIME_SCHEMA_KEY}"
+            ));
+        }
+        if id <= 12 {
+            if !matches!(
+                entity.fields.pair_legacy_id.as_ref(),
+                Some(RuntimePairValue::Reference(_))
+            ) {
+                fail(format!(
+                    "runtime entity {key} pair_legacy_id must be present"
+                ));
+            }
+        } else if entity.fields.pair_legacy_id.is_some() {
+            fail(format!(
+                "runtime entity {key} pair_legacy_id must be absent"
             ));
         }
     }
@@ -436,12 +490,7 @@ fn normalize(path: &Path, output: &Path) {
             .get(&key)
             .unwrap_or_else(|| fail(format!("runtime entity missing: {key}")));
         let fields = &entity.fields;
-        let legacy_id = runtime_number(
-            fields
-                .get("legacy_id")
-                .unwrap_or_else(|| fail("runtime legacy_id missing")),
-            "legacy_id",
-        );
+        let legacy_id = runtime_number(&fields.legacy_id, "legacy_id");
         if legacy_id != id {
             fail(format!(
                 "runtime entity key/value mismatch: {key} has legacy_id {legacy_id}"
@@ -449,10 +498,10 @@ fn normalize(path: &Path, output: &Path) {
         }
         rows.push(json!({
             "legacy_id": legacy_id,
-            "display_name": runtime_text(fields.get("display_name").unwrap_or_else(|| fail("runtime display_name missing")), "display_name"),
-            "pair_legacy_id": runtime_pair(fields.get("pair_legacy_id"), "pair_legacy_id"),
-            "duration_days": runtime_number(fields.get("duration_days").unwrap_or_else(|| fail("runtime duration_days missing")), "duration_days"),
-            "role_key": runtime_text(fields.get("role_key").unwrap_or_else(|| fail("runtime role_key missing")), "role_key"),
+            "display_name": runtime_text(&fields.display_name, "display_name"),
+            "pair_legacy_id": runtime_pair(fields.pair_legacy_id.as_ref(), "pair_legacy_id"),
+            "duration_days": runtime_number(&fields.duration_days, "duration_days"),
+            "role_key": runtime_text(&fields.role_key, "role_key"),
         }));
     }
     write_new(

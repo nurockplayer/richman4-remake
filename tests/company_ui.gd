@@ -29,7 +29,9 @@ func labels(node: Node) -> String:
 
 
 func company_game(ui: Control, definition: Dictionary) -> bool:
-	return ui._new_game(42, 2, definition, {})
+	var options: Dictionary = ui._default_setup_options(2, definition)
+	options["start_date"] = {"year": 1998, "month": 1, "day": 1}
+	return ui._new_game(42, 2, definition, options)
 
 
 func prepare_company_visit(game: Object, player_id: int = 0) -> void:

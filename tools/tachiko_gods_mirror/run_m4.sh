@@ -2,6 +2,14 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+if ! git -C "$ROOT" diff --quiet HEAD --; then
+  echo "PRECONDITION_UNMET: richman checkout has tracked drift" >&2
+  exit 2
+fi
+CANDIDATE_HEAD=$(git -C "$ROOT" rev-parse HEAD) || {
+  echo "PRECONDITION_UNMET: unable to resolve richman candidate HEAD" >&2
+  exit 2
+}
 TACHIKO_SOURCE=${TACHIKO_SOURCE:-}
 TACHIKO_SHA=6900e975112576585fd9360f12d9fcf8b36ba466
 TACHIKO_GIT_DIR=""
@@ -23,6 +31,10 @@ fi
 }
 
 GODOT_BIN=${GODOT_BIN:-godot}
+GODOT_PATH=$(command -v "$GODOT_BIN") || {
+  echo "PRECONDITION_UNMET: GODOT_BIN is not executable" >&2
+  exit 2
+}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m4.XXXXXX")
 TACHIKO_WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-linked.XXXXXX")
 git -C "$TACHIKO_SOURCE" worktree add --detach "$TACHIKO_WORKTREE" "$TACHIKO_SHA" >/dev/null
@@ -40,7 +52,7 @@ echo "WORK=$WORK"
 
 python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" --self-test
 godot_rc=0
-"$GODOT_BIN" --headless --path "$ROOT" --script "$ROOT/tests/tachiko_gods_mirror/source_oracle.gd" >"$WORK/godot.log" 2>&1 || godot_rc=$?
+"$GODOT_PATH" --headless --path "$ROOT" --script "$ROOT/tests/tachiko_gods_mirror/source_oracle.gd" >"$WORK/godot.log" 2>&1 || godot_rc=$?
 [[ "$godot_rc" == 0 ]] || {
   echo "FAIL: Godot M4 witness exited $godot_rc" >&2
   cat "$WORK/godot.log" >&2
@@ -130,6 +142,7 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 "$CLI" validate "$WORK/edited.ro"
 "$CLI" roproj materialize "$WORK/edited.ro" "$WORK/edited.roproj"
 "$CLI" roproj validate "$WORK/edited.roproj"
+"$ADAPTER" check-edit "$WORK/base.roproj" "$WORK/edited.roproj"
 "$CLI" export "$WORK/edited.roproj" "$WORK/edited-runtime.json"
 "$ADAPTER" normalize "$WORK/edited-runtime.json" "$WORK/edited.json"
 "$ADAPTER" identity "$WORK/edited.roproj" "$WORK/edited-ids.json"
@@ -150,11 +163,18 @@ python3 "$ROOT/tests/tachiko_gods_mirror/check_gods.py" \
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 MANIFEST="$WORK/evidence-manifest.txt"
 {
-  echo "richman_head=$(git -C "$ROOT" rev-parse HEAD)"
+  echo "candidate_head=$CANDIDATE_HEAD"
   echo "tachiko_head=$TACHIKO_SHA"
+  echo "godot_binary=$(sha256 "$GODOT_PATH")"
+  echo "adapter_source=$(sha256 "$ROOT/tools/tachiko_gods_mirror/adapter.rs")"
+  echo "runner_source=$(sha256 "$ROOT/tools/tachiko_gods_mirror/run_m4.sh")"
+  echo "checker_source=$(sha256 "$ROOT/tests/tachiko_gods_mirror/check_gods.py")"
+  echo "witness_source=$(sha256 "$ROOT/tests/tachiko_gods_mirror/source_oracle.gd")"
   echo "source_original_gods=$(sha256 "$ROOT/game/content/original_gods.gd")"
   echo "oracle_json=$(sha256 "$ROOT/tests/tachiko_gods_mirror/oracle.json")"
   echo "godot_witness_log=$(sha256 "$WORK/godot.log")"
+  echo "tachiko_cli_binary=$(sha256 "$CLI")"
+  echo "adapter_binary=$(sha256 "$ADAPTER")"
   for artifact in candidate.json base.ro repeat.ro reordered-candidate.json reordered.ro edited.ro base.json repeat.json reordered.json edited.json base-import-ids.json repeat-import-ids.json reordered-import-ids.json base-ids.json repeat-ids.json reordered-ids.json edited-ids.json reopened-ids.json; do
     echo "$artifact=$(sha256 "$WORK/$artifact")"
   done

@@ -408,8 +408,19 @@ fn normalize(path: &Path, output: &Path) {
             .get(&key)
             .unwrap_or_else(|| fail(format!("runtime entity missing: {key}")));
         let fields = &entity.fields;
+        let legacy_id = runtime_number(
+            fields
+                .get("legacy_id")
+                .unwrap_or_else(|| fail("runtime legacy_id missing")),
+            "legacy_id",
+        );
+        if legacy_id != id {
+            fail(format!(
+                "runtime entity key/value mismatch: {key} has legacy_id {legacy_id}"
+            ));
+        }
         rows.push(json!({
-            "legacy_id": runtime_number(fields.get("legacy_id").unwrap_or_else(|| fail("runtime legacy_id missing")), "legacy_id"),
+            "legacy_id": legacy_id,
             "display_name": runtime_text(fields.get("display_name").unwrap_or_else(|| fail("runtime display_name missing")), "display_name"),
             "pair_legacy_id": runtime_pair(fields.get("pair_legacy_id"), "pair_legacy_id"),
             "duration_days": runtime_number(fields.get("duration_days").unwrap_or_else(|| fail("runtime duration_days missing")), "duration_days"),
@@ -462,6 +473,25 @@ fn identity_document(document: &Document, output: &Path) {
         if !entity.key.as_str().starts_with("god_") {
             continue;
         }
+        let expected_key =
+            match entity
+                .fields
+                .get(&field_id("legacy_id"))
+                .and_then(|value| match value {
+                    Value::Number(number) => Some(number.get() as i64),
+                    _ => None,
+                }) {
+                Some(legacy_id) if (1..=COUNT).contains(&legacy_id) => {
+                    format!("god_{legacy_id:02}")
+                }
+                _ => fail(format!("{} has invalid typed legacy_id", entity.key)),
+            };
+        if entity.key.as_str() != expected_key {
+            fail(format!(
+                "god entity key/value mismatch: {} is not {expected_key}",
+                entity.key
+            ));
+        }
         let legacy_id = match entity.fields.get(&field_id("legacy_id")) {
             Some(Value::Number(value)) => value.get() as i64,
             _ => fail(format!("{} has no typed legacy_id", entity.key)),
@@ -498,6 +528,58 @@ fn identity_project(input: &Path, output: &Path) {
     let document =
         load_roproj(input).unwrap_or_else(|error| fail(format!("load .roproj failed: {error}")));
     identity_document(&document, output);
+}
+
+fn check_edit(before_path: &Path, after_path: &Path) {
+    let before = load_roproj(before_path)
+        .unwrap_or_else(|error| fail(format!("load base .roproj failed: {error}")));
+    let after = load_roproj(after_path)
+        .unwrap_or_else(|error| fail(format!("load edited .roproj failed: {error}")));
+    if before.id != after.id || before.title != after.title || before.schemas != after.schemas {
+        fail("edited document changed document metadata or schema");
+    }
+    if before.entities.len() != COUNT as usize
+        || before.entities.len() != after.entities.len()
+        || before.entities.keys().ne(after.entities.keys())
+    {
+        fail("edited document changed entity membership");
+    }
+
+    let target_entity = entity_id(1);
+    let target_field = field_id("display_name");
+    let mut target_changed = false;
+    for (id, before_entity) in &before.entities {
+        let after_entity = after
+            .entities
+            .get(id)
+            .unwrap_or_else(|| fail(format!("edited entity missing: {id}")));
+        if before_entity.id != after_entity.id
+            || before_entity.key != after_entity.key
+            || before_entity.schema != after_entity.schema
+            || before_entity.fields.keys().ne(after_entity.fields.keys())
+        {
+            fail(format!("edited entity metadata changed: {id}"));
+        }
+        for (field, before_value) in &before_entity.fields {
+            let after_value = after_entity
+                .fields
+                .get(field)
+                .unwrap_or_else(|| fail(format!("edited field missing: {id}/{field}")));
+            if id == &target_entity && field == &target_field {
+                if before_value != &Value::Text("小財神".into())
+                    || after_value != &Value::Text("小財神（M4驗證）".into())
+                {
+                    fail("edited target field has an unexpected value");
+                }
+                target_changed = true;
+            } else if before_value != after_value {
+                fail(format!("unexpected edited field value: {id}/{field}"));
+            }
+        }
+    }
+    if !target_changed {
+        fail("expected god_01.display_name edit was not observed");
+    }
 }
 
 fn reorder(input: &Path, output: &Path) {
@@ -551,6 +633,15 @@ fn main() {
                 .unwrap_or_else(|| fail("identity output missing"));
             identity_ro(Path::new(&input), Path::new(&output));
         }
+        Some("check-edit") => {
+            let before = args
+                .next()
+                .unwrap_or_else(|| fail("base .roproj input missing"));
+            let after = args
+                .next()
+                .unwrap_or_else(|| fail("edited .roproj input missing"));
+            check_edit(Path::new(&before), Path::new(&after));
+        }
         Some("reorder") => {
             let input = args
                 .next()
@@ -561,6 +652,8 @@ fn main() {
             reorder(Path::new(&input), Path::new(&output));
         }
         Some(command) => fail(format!("unknown command: {command}")),
-        None => fail("usage: candidate|import-log|normalize|identity|identity-ro|reorder"),
+        None => {
+            fail("usage: candidate|import-log|normalize|identity|identity-ro|check-edit|reorder")
+        }
     }
 }

@@ -4,6 +4,27 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TACHIKO_SOURCE=${TACHIKO_SOURCE:-}
 GODOT_BIN=${GODOT_BIN:-godot}
+KEEP_EVIDENCE_VALUE=${KEEP_EVIDENCE:-}
+case "$KEEP_EVIDENCE_VALUE" in
+  ''|1) ;;
+  *)
+    echo "PRECONDITION_UNMET: KEEP_EVIDENCE must be empty or literal 1" >&2
+    exit 2
+    ;;
+esac
+HOME_VALUE=${HOME:-}
+if [[ -z "$HOME_VALUE" ]]; then
+  HOME_VALUE=$(cd ~ 2>/dev/null && pwd) || {
+    echo "PRECONDITION_UNMET: HOME is unset and the user home cannot be resolved" >&2
+    exit 2
+  }
+fi
+CARGO_HOME_VALUE=${CARGO_HOME:-$HOME_VALUE/.cargo}
+RUSTUP_HOME_VALUE=${RUSTUP_HOME:-$HOME_VALUE/.rustup}
+[[ "$HOME_VALUE" == /* && "$CARGO_HOME_VALUE" == /* && "$RUSTUP_HOME_VALUE" == /* ]] || {
+  echo "PRECONDITION_UNMET: HOME, CARGO_HOME, and RUSTUP_HOME must be absolute paths" >&2
+  exit 2
+}
 
 # The first invocation is a thin launcher. It rejects tracked drift, archives
 # the exact candidate HEAD (thereby excluding untracked .serena and any other
@@ -48,6 +69,15 @@ if [[ "${1:-}" == "--m4-inner" ]]; then
     echo "PRECONDITION_UNMET: richman candidate HEAD changed during snapshot handoff" >&2
     exit 2
   }
+  TACHIKO_WORKTREE=''
+  cleanup() {
+    git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
+    if [[ -n "$TACHIKO_WORKTREE" ]]; then
+      git -C "$TACHIKO_SOURCE" worktree remove --force "$TACHIKO_WORKTREE" >/dev/null 2>&1 || true
+    fi
+    [[ "$KEEP_EVIDENCE_VALUE" == 1 ]] || rm -rf "$WORK"
+  }
+  trap cleanup EXIT
 elif [[ -n "${M4_ORIGINAL_ROOT:-}" || -n "${M4_WORK:-}" || -n "${M4_CANDIDATE_HEAD:-}" || -n "${M4_SNAPSHOT_ROOT:-}" ]]; then
   echo "PRECONDITION_UNMET: M4 handoff variables require the private inner sentinel" >&2
   exit 2
@@ -63,19 +93,23 @@ else
   }
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m4.XXXXXX")
   SOURCE_ROOT="$WORK/richman4-snapshot"
+  launcher_cleanup() {
+    git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
+  }
+  trap launcher_cleanup EXIT
   git -C "$ORIGINAL_ROOT" worktree add --detach "$SOURCE_ROOT" "$CANDIDATE_HEAD" >/dev/null
   [[ ! -e "$SOURCE_ROOT/.serena" ]] || {
     echo "PRECONDITION_UNMET: source snapshot unexpectedly contains untracked .serena" >&2
     exit 2
   }
-  launcher_cleanup() {
-    git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
-  }
-  trap launcher_cleanup EXIT
   exec env -i \
     PATH="$PATH" \
+    HOME="$HOME_VALUE" \
+    CARGO_HOME="$CARGO_HOME_VALUE" \
+    RUSTUP_HOME="$RUSTUP_HOME_VALUE" \
     TACHIKO_SOURCE="$TACHIKO_SOURCE" \
     GODOT_BIN="$GODOT_BIN" \
+    KEEP_EVIDENCE="$KEEP_EVIDENCE_VALUE" \
     M4_ORIGINAL_ROOT="$ORIGINAL_ROOT" \
     M4_CANDIDATE_HEAD="$CANDIDATE_HEAD" \
     M4_SNAPSHOT_ROOT="$SOURCE_ROOT" \
@@ -108,12 +142,6 @@ GODOT_PATH=$(command -v "$GODOT_BIN") || {
 }
 TACHIKO_WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-linked.XXXXXX")
 git -C "$TACHIKO_SOURCE" worktree add --detach "$TACHIKO_WORKTREE" "$TACHIKO_SHA" >/dev/null
-cleanup() {
-  git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
-  git -C "$TACHIKO_SOURCE" worktree remove --force "$TACHIKO_WORKTREE" >/dev/null 2>&1 || true
-  [[ -n "${KEEP_EVIDENCE:-}" ]] || rm -rf "$WORK"
-}
-trap cleanup EXIT
 
 echo "TACHIKO_SHA=$TACHIKO_SHA"
 echo "TACHIKO_SOURCE=$TACHIKO_SOURCE"

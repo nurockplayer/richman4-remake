@@ -6,12 +6,12 @@ use std::{
     path::Path,
 };
 
-use serde::{de, Deserialize, Deserializer};
-use serde_json::{json, Map, Number as JsonNumber, Value as JsonValue};
+use serde::{Deserialize, Deserializer, de};
+use serde_json::{Map, Number as JsonNumber, Value as JsonValue, json};
 use tachiko_storage::{from_bytes, load_roproj, to_canonical_string};
 use tachiko_workspace_engine::{
-    validate, Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema,
-    SchemaId, Value,
+    Document, Entity, EntityId, FieldDefinition, FieldId, FieldType, Number, Schema, SchemaId,
+    Value, validate,
 };
 
 const PREFIX: &str = "RICHMAN4_GODS_ORACLE=";
@@ -465,7 +465,7 @@ fn runtime_pair(value: &RuntimePairField, field: &str) -> i64 {
 }
 
 fn normalize(path: &Path, output: &Path) {
-    let runtime: Runtime = serde_json::from_slice(&read(path))
+    let runtime: Runtime = serde_json::from_value(parse(&read(path)))
         .unwrap_or_else(|error| fail(format!("runtime JSON rejected: {error}")));
 
     if runtime.format_version != RUNTIME_FORMAT_VERSION {

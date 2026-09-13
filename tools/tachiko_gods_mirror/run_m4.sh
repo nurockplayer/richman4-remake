@@ -176,23 +176,51 @@ serde_json = "1.0"
 tachiko-storage = { path = "$TACHIKO_WORKTREE/crates/storage" }
 tachiko-workspace-engine = { path = "$TACHIKO_WORKTREE/crates/workspace-engine" }
 EOF
-cargo_target_dir() {
-  local manifest=$1
-  local metadata
-  metadata=$(cd "$(dirname "$manifest")" && cargo metadata \
-    --manifest-path "$manifest" --format-version=1 --no-deps --offline)
-  python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' <<<"$metadata"
+cargo_build_executable() {
+  local worktree=$1
+  local manifest=$2
+  local package=$3
+  local binary=$4
+  local log=$5
+  if ! (cd "$worktree" && cargo build --manifest-path "$manifest" -p "$package" \
+      --offline --message-format=json-render-diagnostics >"$log" 2>&1); then
+    cat "$log" >&2
+    return 1
+  fi
+  python3 - "$log" "$package" "$binary" <<'PY'
+import json
+import os
+import sys
+
+log_path, package, binary = sys.argv[1:]
+with open(log_path, encoding="utf-8") as log:
+    for line in log:
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        target = message.get("target", {})
+        executable = message.get("executable")
+        if (message.get("reason") == "compiler-artifact"
+                and target.get("name") == binary
+                and executable and os.access(executable, os.X_OK)):
+            print(executable)
+            raise SystemExit(0)
+print(f"FAIL: cargo did not report an executable for package {package}", file=sys.stderr)
+raise SystemExit(1)
+PY
 }
 
-(cd "$TACHIKO_WORKTREE" && cargo build --manifest-path Cargo.toml -p tachiko-cli --offline --quiet)
-TACHIKO_TARGET_DIR=$(cargo_target_dir "$TACHIKO_WORKTREE/Cargo.toml")
-CLI="$TACHIKO_TARGET_DIR/debug/tachiko"
-
-(cd "$WORK/adapter-src" && cargo build --manifest-path Cargo.toml --offline --quiet)
-ADAPTER_TARGET_DIR=$(cargo_target_dir "$WORK/adapter-src/Cargo.toml")
-ADAPTER="$ADAPTER_TARGET_DIR/debug/richman4-tachiko-gods-mirror"
-[[ -x "$CLI" ]] || { echo "FAIL: cargo metadata target directory did not produce $CLI" >&2; exit 1; }
-[[ -x "$ADAPTER" ]] || { echo "FAIL: cargo metadata target directory did not produce $ADAPTER" >&2; exit 1; }
+CLI=$(cargo_build_executable "$TACHIKO_WORKTREE" "$TACHIKO_WORKTREE/Cargo.toml" \
+  tachiko-cli tachiko "$WORK/tachiko-build.json") || {
+  echo "FAIL: unable to locate tachiko CLI from cargo build messages" >&2
+  exit 1
+}
+ADAPTER=$(cargo_build_executable "$WORK/adapter-src" "$WORK/adapter-src/Cargo.toml" \
+  richman4-tachiko-gods-mirror richman4-tachiko-gods-mirror "$WORK/adapter-build.json") || {
+  echo "FAIL: unable to locate adapter from cargo build messages" >&2
+  exit 1
+}
 
 tree_sha256() {
   local tree=$1

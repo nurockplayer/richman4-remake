@@ -7,7 +7,7 @@ GODOT_BIN=${GODOT_BIN:-godot}
 
 # The first invocation is a thin launcher. It rejects tracked drift, archives
 # the exact candidate HEAD (thereby excluding untracked .serena and any other
-# local inputs), and executes this same runner from that isolated snapshot.
+# local inputs), and executes this same runner from that isolated worktree.
 # Only this branch may mint the private handoff values; ordinary invocations
 # with a pre-set handoff environment fail closed below.
 if [[ "${1:-}" == "--m4-inner" ]]; then
@@ -30,6 +30,14 @@ if [[ "${1:-}" == "--m4-inner" ]]; then
   }
   [[ -f "$SOURCE_ROOT/tools/tachiko_gods_mirror/run_m4.sh" && ! -e "$SOURCE_ROOT/.serena" ]] || {
     echo "PRECONDITION_UNMET: incomplete or contaminated M4 source snapshot" >&2
+    exit 2
+  }
+  [[ "$(git -C "$SOURCE_ROOT" rev-parse HEAD 2>/dev/null || true)" == "$CANDIDATE_HEAD" ]] || {
+    echo "PRECONDITION_UNMET: M4 source worktree HEAD does not match candidate" >&2
+    exit 2
+  }
+  [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain 2>/dev/null || true)" ]] || {
+    echo "PRECONDITION_UNMET: M4 source worktree is dirty" >&2
     exit 2
   }
   if ! git -C "$ORIGINAL_ROOT" diff --quiet HEAD --; then
@@ -55,12 +63,15 @@ else
   }
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-m4.XXXXXX")
   SOURCE_ROOT="$WORK/richman4-snapshot"
-  mkdir -p "$SOURCE_ROOT"
-  git -C "$ORIGINAL_ROOT" archive --format=tar HEAD | tar -xf - -C "$SOURCE_ROOT"
+  git -C "$ORIGINAL_ROOT" worktree add --detach "$SOURCE_ROOT" "$CANDIDATE_HEAD" >/dev/null
   [[ ! -e "$SOURCE_ROOT/.serena" ]] || {
     echo "PRECONDITION_UNMET: source snapshot unexpectedly contains untracked .serena" >&2
     exit 2
   }
+  launcher_cleanup() {
+    git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
+  }
+  trap launcher_cleanup EXIT
   exec env -i \
     PATH="$PATH" \
     TACHIKO_SOURCE="$TACHIKO_SOURCE" \
@@ -98,6 +109,7 @@ GODOT_PATH=$(command -v "$GODOT_BIN") || {
 TACHIKO_WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/richman4-tachiko-linked.XXXXXX")
 git -C "$TACHIKO_SOURCE" worktree add --detach "$TACHIKO_WORKTREE" "$TACHIKO_SHA" >/dev/null
 cleanup() {
+  git -C "$ORIGINAL_ROOT" worktree remove --force "$SOURCE_ROOT" >/dev/null 2>&1 || true
   git -C "$TACHIKO_SOURCE" worktree remove --force "$TACHIKO_WORKTREE" >/dev/null 2>&1 || true
   [[ -n "${KEEP_EVIDENCE:-}" ]] || rm -rf "$WORK"
 }

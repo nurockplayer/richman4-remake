@@ -1,0 +1,22 @@
+{
+  "source_blob": "a27ac49aba28548c5d40800b6332af00da1dec7f",
+  "event_names": [
+    { "event_code": 0, "display_name": "道路" },
+    { "event_code": 1, "display_name": "道路" },
+    { "event_code": 2, "display_name": "新聞" },
+    { "event_code": 3, "display_name": "命運" },
+    { "event_code": 4, "display_name": "監獄入口" },
+    { "event_code": 5, "display_name": "醫院入口" },
+    { "event_code": 6, "display_name": "企鵝小遊戲" },
+    { "event_code": 7, "display_name": "氣球小遊戲" },
+    { "event_code": 8, "display_name": "接物小遊戲" },
+    { "event_code": 9, "display_name": "彩券" },
+    { "event_code": 10, "display_name": "點數 50" },
+    { "event_code": 11, "display_name": "點數 30" },
+    { "event_code": 12, "display_name": "點數 10" },
+    { "event_code": 13, "display_name": "卡片" },
+    { "event_code": 14, "display_name": "銀行" },
+    { "event_code": 15, "display_name": "商店" },
+    { "event_code": 16, "display_name": "魔法屋" }
+  ]
+}

@@ -385,6 +385,7 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	if shell.route_buttons.get_child_count() > 0:
 		var route: Button = shell.route_buttons.get_child(0) as Button
 		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
+		_expect(route != null and route.text.begins_with("前往 ") and not route.text.contains("→"), "visible source route choice uses a player-facing destination label")
 
 
 func _test_source_stock_modal_gate(ui: Control, shell: Control) -> void:

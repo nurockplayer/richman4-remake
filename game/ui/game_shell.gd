@@ -650,7 +650,7 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 		child.queue_free()
 	for next_index_value in routes:
 		var next_index := int(next_index_value)
-		var route := _action_button("→ %02d" % (next_index + 1), "route")
+		var route := _action_button(_route_destination_label(next_index), "route")
 		route.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
@@ -659,6 +659,15 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	action_strip.visible = roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible
 	if full_map_visible:
 		action_strip.hide()
+
+
+func _route_destination_label(next_index: int) -> String:
+	var board: Variant = snapshot.get("board", [])
+	if board is Array and next_index >= 0 and next_index < board.size() and board[next_index] is Dictionary:
+		var name := str((board[next_index] as Dictionary).get("name", "")).strip_edges()
+		if not name.is_empty():
+			return "前往 %s" % name
+	return "前往下一格"
 
 
 func open_player_inspector(player_index := -1) -> void:

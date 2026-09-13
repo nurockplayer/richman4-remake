@@ -401,7 +401,12 @@ func _on_source_option_requested() -> void:
 func _on_source_help_requested() -> void:
 	if source_help_controller == null or not _source_help_operation_allowed():
 		return
-	var edition := str(source_shell.get("_source_edition"))
+	var edition := ""
+	var source: Variant = _active_map_definition.get("source", {})
+	if source is Dictionary:
+		edition = str(source.get("edition", "")).strip_edges()
+	if edition not in ["Game", "MultiverseJourney"]:
+		edition = str(source_shell.get("_source_edition"))
 	if source_help_controller.open(game_state, edition, source_shell.get("_visuals")):
 		_ai_pending = false
 		_refresh_from_state()

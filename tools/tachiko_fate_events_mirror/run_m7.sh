@@ -281,6 +281,44 @@ fi
 cmp "$WORK/base.ro" "$NEGATIVE_ZERO_RO"
 echo "NEGATIVE_ZERO_PASS: lexical -0 admitted, Tachiko-validated, and byte-equivalent to base.ro"
 
+# Candidate fate IDs are integer-only at the typed adapter boundary.  Transform
+# only the unique fate_id 0 lexeme emitted by the real Godot witness, and keep
+# each rejected admission's output path fresh so no regular or symlink .ro can
+# survive a failed validation.
+CANDIDATE_DECIMAL_NEGATIVES="$WORK/candidate-decimal-negatives"
+mkdir -p "$CANDIDATE_DECIMAL_NEGATIVES"
+uv run --no-project --offline python - "$WORK/candidate.json" "$CANDIDATE_DECIMAL_NEGATIVES" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_bytes()
+output_dir = Path(sys.argv[2])
+needle = b'"fate_id":0'
+if source.count(needle) != 1:
+    raise SystemExit("expected one canonical fate_id 0 in real Godot candidate")
+for name, lexeme in (("decimal", b"0.0"), ("exponent", b"0e0")):
+    replacement = b'"fate_id":' + lexeme
+    transformed = source.replace(needle, replacement, 1)
+    if transformed == source or transformed.count(replacement) != 1:
+        raise SystemExit(f"{name} candidate transform crossed its lexical boundary")
+    if transformed.replace(replacement, needle, 1) != source:
+        raise SystemExit(f"{name} candidate transform is not exactly reversible")
+    (output_dir / f"fate-id-0-{name}.json").write_bytes(transformed)
+PY
+for negative in "$CANDIDATE_DECIMAL_NEGATIVES"/*.json; do
+  negative_name=${negative##*/}
+  negative_output="$WORK/negative-${negative_name%.json}.ro"
+  if "$ADAPTER" candidate "$negative" "$negative_output" >"$WORK/${negative_name}.log" 2>&1; then
+    echo "FAIL: candidate decimal negative unexpectedly admitted: $negative_name" >&2
+    exit 1
+  fi
+  [[ ! -e "$negative_output" && ! -L "$negative_output" ]] || {
+    echo "FAIL: candidate decimal negative wrote partial output: $negative_name" >&2
+    exit 1
+  }
+done
+echo "CANDIDATE_DECIMAL_NEGATIVES_PASS: 0.0 and 0e0 rejected without output"
+
 layout_sha256() {
   local tree=$1
   find "$tree" -print | LC_ALL=C sort | while IFS= read -r path; do

@@ -32,9 +32,12 @@ struct Candidate {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct God {
+    #[serde(deserialize_with = "deserialize_integral")]
     legacy_id: i64,
     display_name: String,
+    #[serde(deserialize_with = "deserialize_integral")]
     pair_legacy_id: i64,
+    #[serde(deserialize_with = "deserialize_integral")]
     duration_days: i64,
     role_key: String,
 }
@@ -226,7 +229,8 @@ fn parse(bytes: &[u8]) -> JsonValue {
     if bytes.len() > 128 * 1024 {
         fail("JSON input exceeds 128 KiB")
     }
-    serde_json::from_slice::<Strict>(bytes)
+    let bytes = canonicalize_integral_numbers(bytes);
+    serde_json::from_slice::<Strict>(&bytes)
         .unwrap_or_else(|error| fail(format!("strict JSON parse failed: {error}")))
         .0
 }
@@ -293,6 +297,210 @@ fn number(value: i64, field: &str) -> Number {
         fail(format!("{field} outside Tachiko safe-integer range"));
     }
     Number::new(value as f64).unwrap_or_else(|error| fail(format!("{field}: {error}")))
+}
+
+fn deserialize_integral<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = JsonNumber::deserialize(deserializer)?;
+    exact_integral(&value).ok_or_else(|| de::Error::custom("expected an exact finite integer"))
+}
+
+fn exact_integral(value: &JsonNumber) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| {
+            value.as_f64().and_then(|value| {
+                if value.is_finite() && value.fract() == 0.0 {
+                    i64::try_from(value as i128).ok()
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn canonicalize_integral_numbers(bytes: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'\\' => index = index.saturating_add(2),
+                    b'"' => {
+                        index += 1;
+                        break;
+                    }
+                    _ => index += 1,
+                }
+            }
+            result.extend_from_slice(&bytes[start..index.min(bytes.len())]);
+            continue;
+        }
+        if bytes[index] != b'-' && !bytes[index].is_ascii_digit() {
+            result.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        let mut cursor = index;
+        if bytes[cursor] == b'-' {
+            cursor += 1;
+        }
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if cursor < bytes.len() && bytes[cursor] == b'.' {
+            cursor += 1;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                cursor += 1;
+            }
+        }
+        if cursor < bytes.len() && matches!(bytes[cursor], b'e' | b'E') {
+            cursor += 1;
+            if cursor < bytes.len() && matches!(bytes[cursor], b'+' | b'-') {
+                cursor += 1;
+            }
+            while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                cursor += 1;
+            }
+        }
+        let token = &bytes[start..cursor];
+        match exact_integral_token(token) {
+            NumberToken::Fractional => fail("JSON number must be an exact finite integer"),
+            NumberToken::Integral(Some(canonical)) => result.extend_from_slice(&canonical),
+            NumberToken::Integral(None) | NumberToken::Invalid => result.extend_from_slice(token),
+        }
+        index = cursor.max(index + 1);
+    }
+    result
+}
+
+enum NumberToken {
+    Invalid,
+    Fractional,
+    Integral(Option<Vec<u8>>),
+}
+
+fn exact_integral_token(token: &[u8]) -> NumberToken {
+    let mut index = 0;
+    let negative = token.first() == Some(&b'-');
+    if negative {
+        index += 1;
+    }
+    let integer_start = index;
+    if index >= token.len() || !token[index].is_ascii_digit() {
+        return NumberToken::Invalid;
+    }
+    if token[index] == b'0' {
+        index += 1;
+        if index < token.len() && token[index].is_ascii_digit() {
+            return NumberToken::Invalid;
+        }
+    } else {
+        while index < token.len() && token[index].is_ascii_digit() {
+            index += 1;
+        }
+    }
+    let integer_end = index;
+    let mut fraction_start = index;
+    let mut fraction_end = index;
+    let mut had_fraction = false;
+    if index < token.len() && token[index] == b'.' {
+        had_fraction = true;
+        index += 1;
+        fraction_start = index;
+        while index < token.len() && token[index].is_ascii_digit() {
+            index += 1;
+        }
+        if fraction_start == index {
+            return NumberToken::Invalid;
+        }
+        fraction_end = index;
+    }
+    let mut exponent = 0_i64;
+    let mut had_exponent = false;
+    if index < token.len() && matches!(token[index], b'e' | b'E') {
+        had_exponent = true;
+        index += 1;
+        let exponent_negative = if index < token.len() && matches!(token[index], b'+' | b'-') {
+            let negative = token[index] == b'-';
+            index += 1;
+            negative
+        } else {
+            false
+        };
+        let exponent_start = index;
+        while index < token.len() && token[index].is_ascii_digit() {
+            index += 1;
+        }
+        if exponent_start == index {
+            return NumberToken::Invalid;
+        }
+        let mut magnitude = 0_i64;
+        for digit in &token[exponent_start..index] {
+            magnitude = magnitude
+                .saturating_mul(10)
+                .saturating_add(i64::from(digit - b'0'));
+        }
+        exponent = if exponent_negative {
+            magnitude.saturating_neg()
+        } else {
+            magnitude
+        };
+    }
+    if index != token.len() {
+        return NumberToken::Invalid;
+    }
+    if !had_fraction && !had_exponent {
+        return NumberToken::Integral(None);
+    }
+
+    let mut digits =
+        Vec::with_capacity(integer_end - integer_start + fraction_end - fraction_start);
+    digits.extend_from_slice(&token[integer_start..integer_end]);
+    digits.extend_from_slice(&token[fraction_start..fraction_end]);
+    let first_nonzero = digits
+        .iter()
+        .position(|digit| *digit != b'0')
+        .unwrap_or(digits.len());
+    if first_nonzero == digits.len() {
+        return NumberToken::Integral(Some(vec![b'0']));
+    }
+    let significant = &digits[first_nonzero..];
+    let scale = exponent.saturating_sub((fraction_end - fraction_start) as i64);
+    let canonical_digits = if scale >= 0 {
+        let length = significant.len() as i64 + scale;
+        if length > 19 {
+            return NumberToken::Integral(None);
+        }
+        let mut canonical = significant.to_vec();
+        canonical.extend(std::iter::repeat(b'0').take(scale as usize));
+        canonical
+    } else {
+        let places = scale.saturating_neg() as usize;
+        if places >= significant.len()
+            || significant[significant.len() - places..]
+                .iter()
+                .any(|digit| *digit != b'0')
+        {
+            return NumberToken::Fractional;
+        }
+        let end = significant.len() - places;
+        significant[..end].to_vec()
+    };
+    let mut canonical = Vec::with_capacity(canonical_digits.len() + usize::from(negative));
+    if negative {
+        canonical.push(b'-');
+    }
+    canonical.extend_from_slice(&canonical_digits);
+    NumberToken::Integral(Some(canonical))
 }
 
 fn schema() -> Schema {
@@ -405,22 +613,7 @@ fn import_log(path: &Path) -> Candidate {
 }
 
 fn runtime_number(value: &JsonNumber, field: &str) -> i64 {
-    let number = value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
-        .or_else(|| {
-            value.as_f64().and_then(|number| {
-                if number.is_finite()
-                    && number.fract() == 0.0
-                    && number >= 0.0
-                    && number <= MAX_SAFE_INTEGER as f64
-                {
-                    Some(number as i64)
-                } else {
-                    None
-                }
-            })
-        })
+    let number = exact_integral(value)
         .unwrap_or_else(|| fail(format!("runtime {field} must be a safe integer")));
     if !(0..=MAX_SAFE_INTEGER).contains(&number) {
         fail(format!("runtime {field} outside safe integer range"));

@@ -22,6 +22,7 @@ const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
+const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -67,6 +68,7 @@ var state: Dictionary = {}
 var board_view: Control
 var source_shell: Control
 var source_stock_panel: Control
+var source_help_controller: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -326,8 +328,26 @@ func _build_source_shell() -> void:
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
 	_build_source_stock_panel()
+	_build_source_help_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
+
+func _build_source_help_controller() -> void:
+	if source_shell == null:
+		return
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceHelpController.new()
+	controller.z_index = 60
+	controller.finished.connect(func() -> void:
+		_ai_pending = false
+		_refresh_from_state())
+	canvas.add_child(controller)
+	source_help_controller = controller
+	var game_screen: Variant = source_shell.get("game_screen")
+	if game_screen is Control:
+		(game_screen as Control).visibility_changed.connect(_update_source_help_gate)
 
 func _build_source_stock_panel() -> void:
 	if source_shell == null:
@@ -362,12 +382,16 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
+	if _source_help_modal_open():
+		return
 	_on_new_game_pressed()
 
 func _on_source_load_requested() -> void:
 	_load_game()
 
 func _on_source_save_requested() -> void:
+	if _source_help_modal_open():
+		return
 	_save_game()
 
 func _on_source_option_requested() -> void:
@@ -375,14 +399,37 @@ func _on_source_option_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_help_requested() -> void:
-	_append_local_log("說明功能將在後續原版指令頁接入。")
-	_refresh_log_only()
+	if source_help_controller == null or not _source_help_operation_allowed():
+		return
+	var edition := ""
+	var source: Variant = _active_map_definition.get("source", {})
+	if source is Dictionary:
+		edition = str(source.get("edition", "")).strip_edges()
+	if edition not in ["Game", "MultiverseJourney"]:
+		edition = str(source_shell.get("_source_edition"))
+	if source_help_controller.open(game_state, edition, source_shell.get("_visuals")):
+		_ai_pending = false
+		_refresh_from_state()
+
+func _source_help_modal_open() -> bool:
+	return source_help_controller != null and source_help_controller.is_open()
+
+func _update_source_help_gate() -> void:
+	if source_shell != null:
+		source_shell.call("set_toolbar_enabled", "help", _source_help_operation_allowed())
+
+func _source_help_operation_allowed() -> bool:
+	return game_state != null and source_shell != null and not _source_modal_open() and not _presentation_busy
 
 func _on_source_ai_requested() -> void:
+	if _source_help_modal_open():
+		return
 	_append_local_log("託管功能將在後續原版指令頁接入。")
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
+	if _source_help_modal_open():
+		return
 	if source_shell == null:
 		return
 	if source_shell.has_method("toggle_full_map_view"):
@@ -391,6 +438,8 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
+	if _source_help_modal_open():
+		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
 
@@ -405,6 +454,8 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
+	if _source_help_modal_open():
+		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
 		return
@@ -1696,6 +1747,8 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
+	if _source_help_modal_open():
+		return
 	if new_game_popup == null:
 		_restart_game()
 		return
@@ -1858,6 +1911,8 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
+	if _source_help_modal_open():
+		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
 		_refresh_log_only()
@@ -1908,10 +1963,10 @@ func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open
+	return title_open or stocks_open or inspect_open or _source_help_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2271,6 +2326,8 @@ func _settle_inventory_popup(popup: PopupPanel, desired_size: Vector2i) -> void:
 		popup.move_to_center()
 
 func _on_stocks_pressed() -> void:
+	if _source_help_modal_open():
+		return
 	if not _is_human_turn():
 		return
 	_update_stocks_popup()
@@ -2278,6 +2335,8 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
+	if _source_help_modal_open():
+		return
 	if not _is_human_turn():
 		return
 	_update_bank_popup()
@@ -2408,6 +2467,8 @@ func _is_human_turn() -> bool:
 	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_help_modal_open():
+		return {"ok": false, "message": "請先關閉遊戲說明。"}
 	if _legacy_save_modal_open():
 		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
 	if _presentation_busy:
@@ -2451,6 +2512,8 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	if source_help_controller != null:
+		source_help_controller.cancel()
 	_presentation_generation += 1
 	_presentation_busy = false
 	_presentation_result = {}
@@ -2535,12 +2598,14 @@ func _update_all() -> void:
 func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell == null:
 		return
+	if source_help_controller != null:
+		source_help_controller.sync(game_state)
 	if source_shell.has_method("sync_snapshot"):
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):
-		source_shell.call("set_toolbar_enabled", "help", false)
+		_update_source_help_gate()
 		source_shell.call("set_toolbar_enabled", "options", false)
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())

@@ -38,6 +38,10 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/main_hud_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/original_help.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_active_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_popup_mode_ui.gd

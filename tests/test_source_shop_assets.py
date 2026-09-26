@@ -249,6 +249,79 @@ class SourceShopAssetTests(unittest.TestCase):
             self.assertEqual((output / "images" / "base" / "prior.png").read_bytes(), b"prior-base")
             self.assertFalse((output / "images" / "Game" / "ui" / "Panel" / "10" / "0.png").exists())
 
+    def test_public_prepare_publishes_inherited_overlay_links_and_rolls_back_late_fault(self):
+        from unittest.mock import patch
+        import prepare_source_shop as producer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            zip_path, identity, base_manifest = self._inputs(root)
+            source_images = root / "images"
+            (source_images / "base").mkdir(parents=True)
+            (source_images / "base" / "map.png").write_bytes(b"base-image")
+            inherited = {}
+            for edition in EDITIONS:
+                source = source_images / edition / "ui" / "Panel" / "11" / "0.png"
+                source.parent.mkdir(parents=True)
+                source.write_bytes((edition + "-panel11").encode())
+                inherited[edition] = source
+            scene = {
+                "schema": "richman4.scene-images/v1", "maps": [], "characters": {}, "ui": {},
+                "base": "images/base/map.png",
+                "held": [f"images/{edition}/ui/Panel/11/0.png" for edition in EDITIONS],
+            }
+            base_manifest.write_text(json.dumps(scene), encoding="utf-8")
+
+            def stage(_zip, staged, _identity, _base):
+                chunks = {}
+                for edition in EDITIONS:
+                    relative = f"images/{edition}/ui/Panel/10/0.png"
+                    target = staged / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((edition + "-panel10").encode())
+                    chunks[edition] = {"path": relative, "chunks": {"0": {"path": relative}}}
+                (staged / "images" / "base").symlink_to(source_images / "base", target_is_directory=True)
+                for edition, source in inherited.items():
+                    target = staged / "images" / edition / "ui" / "Panel" / "11" / "0.png"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.symlink_to(source)
+                staged_scene = dict(scene)
+                staged_scene["shop"] = [value["path"] for value in chunks.values()]
+                manifest = {"resources": {edition: {"chunks": {"0": {"path": value["path"]}}} for edition, value in chunks.items()}}
+                for name, value in (("scene-manifest.json", staged_scene), ("manifest.json", manifest), ("provenance.json", {"preserved": True})):
+                    (staged / name).write_text(json.dumps(value), encoding="utf-8")
+                return manifest
+
+            output = root / "fresh-output"
+            original_replace = producer.os.replace
+            fault_seen_links = False
+            def fail_after_inherited_publication(source, destination):
+                nonlocal fault_seen_links
+                if Path(source).name == "scene-manifest.json":
+                    fault_seen_links = all((output / f"images/{edition}/ui/Panel/11/0.png").is_symlink() for edition in EDITIONS)
+                    raise OSError("synthetic late metadata fault")
+                return original_replace(source, destination)
+
+            with patch.object(producer, "_prepare_into", side_effect=stage), patch.object(producer.os, "replace", side_effect=fail_after_inherited_publication):
+                with self.assertRaisesRegex(OSError, "synthetic late metadata fault"):
+                    producer.prepare(zip_path, output, identity, base_manifest)
+            self.assertTrue(fault_seen_links)
+            self.assertFalse(output.exists() and any(output.rglob("*.png")))
+            self.assertEqual({edition: inherited[edition].read_bytes() for edition in EDITIONS}, {
+                edition: (edition + "-panel11").encode() for edition in EDITIONS
+            })
+
+            with patch.object(producer, "_prepare_into", side_effect=stage):
+                result = producer.prepare(zip_path, output, identity, base_manifest)
+            resolved_scene = json.loads((output / "scene-manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(resolved_scene["held"], scene["held"])
+            self.assertEqual(result["resources"].keys(), set(EDITIONS))
+            for edition, source in inherited.items():
+                published = output / f"images/{edition}/ui/Panel/11/0.png"
+                self.assertTrue(published.is_symlink())
+                self.assertEqual(published.resolve(), source)
+                self.assertEqual(published.read_bytes(), source.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

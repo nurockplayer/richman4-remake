@@ -370,22 +370,39 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         if missing: raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
         staged_pngs = [staged / record["path"] for resource in manifest["resources"].values() for record in resource["chunks"].values()]
         destinations = [source.relative_to(staged) for source in staged_pngs]
+        owned_image_paths = {path.relative_to(staged).as_posix() for path in staged_pngs}
+        inherited: list[tuple[Path, Path]] = []
+        for item in dict.fromkeys(referenced):
+            if item.startswith("images/base/") or item in owned_image_paths:
+                continue
+            source = staged / item
+            if not source.is_file():
+                raise AssetError(f"staged inherited scene image is unavailable: {item}")
+            inherited.append((source.resolve(), Path(item)))
+        destinations.extend(path for _source, path in inherited)
         destinations.extend(Path(name) for name in ("images/base", "manifest.json", "scene-manifest.json", "provenance.json"))
         allow_leaf = {"images/base", "manifest.json", "scene-manifest.json", "provenance.json"}
+        inherited_count = len(inherited)
+        base_index = len(staged_pngs) + inherited_count
         try:
-            owned = _preflight_write_set(output, [(path, path.as_posix() in allow_leaf) for path in destinations])
+            owned = _preflight_write_set(output, [(path, path.as_posix() in allow_leaf or path in {target for _source, target in inherited}) for path in destinations])
             base_scene = _load_json(base_manifest)
-            _preflight_replacement_inputs([zip_path, identity_path, base_manifest, *_scene_image_inputs(base_scene, base_manifest)], [owned[len(staged_pngs)], *owned[len(staged_pngs)+1:]])
+            _preflight_replacement_inputs([zip_path, identity_path, base_manifest, *_scene_image_inputs(base_scene, base_manifest)], [owned[base_index], *owned[base_index+1:]])
         except InventoryAssetError as error:
             raise AssetError(str(error)) from error
-        for target in owned[len(staged_pngs)+1:]:
+        for target in owned[base_index+1:]:
             if target.exists() and not target.is_symlink() and not target.is_file():
                 raise AssetError(f"metadata publication destination is not a regular file or symlink: {target}")
         collisions = [target for target in owned[:len(staged_pngs)] if target.exists() or target.is_symlink()]
         if collisions: raise AssetError(f"output collision: {collisions[0]}")
+        inherited_targets = owned[len(staged_pngs):base_index]
+        for (source, _relative), target in zip(inherited, inherited_targets):
+            if target.exists() or target.is_symlink():
+                if not target.is_symlink() or not target.is_file() or target.resolve() != source:
+                    raise AssetError(f"inherited image publication collision: {target}")
         output.mkdir(parents=True, exist_ok=True)
-        base_target = owned[len(staged_pngs)]
-        metadata_targets = owned[len(staged_pngs)+1:]
+        base_target = owned[base_index]
+        metadata_targets = owned[base_index+1:]
         metadata_sources = [staged / name for name in ("manifest.json", "scene-manifest.json", "provenance.json")]
         backups: list[tuple[Path, Path]] = []
         published: list[Path] = []
@@ -398,6 +415,12 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
             for source, target in zip(staged_pngs, owned[:len(staged_pngs)]):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(source, target)
+                published.append(target)
+            for (source, _relative), target in zip(inherited, inherited_targets):
+                if target.is_symlink():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(source)
                 published.append(target)
             base_target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staged / "images" / "base", base_target)

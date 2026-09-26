@@ -75,6 +75,7 @@ func run() -> void:
 	check(detained_game.call("_admit_player_status", 0, "hospital", 2).get("ok", false), "detained UI fixture enters hospital")
 	check(Inventory.grant_tool(detained_game.state.inventory_supply, detained_game.state.players[0].tools, "時光機", 1).get("ok", false), "detained UI fixture receives time machine")
 	check(Inventory.grant_tool(detained_game.state.inventory_supply, detained_game.state.players[0].tools, "機車", 1).get("ok", false), "detained UI fixture receives motorcycle tool")
+	check(Inventory.grant_tool(detained_game.state.inventory_supply, detained_game.state.players[0].tools, "傳送機", 1).get("ok", false), "detained UI fixture receives transporter")
 	detained_game.state.phase = "await_roll"
 	detained_game.call("_set_action_options", 0)
 	detained_ui._refresh_from_state()
@@ -84,6 +85,26 @@ func run() -> void:
 	var detained_motorcycle: Button = detained_ui.cards_popup.find_child("UseTool_機車", true, false)
 	check(detained_time != null and detained_time.disabled, "detained time tool follows unavailable anchor status")
 	check(detained_motorcycle != null and detained_motorcycle.disabled, "detained motorcycle remains disabled despite coarse use_tool option")
+	detained_game.state.phase = "await_action"
+	detained_game.call("_set_action_options", 0)
+	detained_game.state.action_options = ["use_tool"]
+	detained_ui._refresh_from_state()
+	detained_ui._on_cards_pressed()
+	await process_frame
+	detained_motorcycle = detained_ui.cards_popup.find_child("UseTool_傳送機", true, false)
+	check(detained_motorcycle != null and detained_motorcycle.disabled, "await_action coarse use_tool does not admit transporter")
+	detained_ui.cards_popup.hide()
+	detained_game.state.phase = "await_roll"
+	detained_game.call("_set_action_options", 0)
+	detained_ui._on_source_tools_requested()
+	await process_frame
+	var detained_panel: Control = detained_ui.source_inventory_panel
+	check(detained_panel != null and detained_panel.is_open(), "detained held inventory remains open after unavailable transport selection")
+	if detained_panel != null and detained_panel.is_open():
+		detained_panel.selected.emit(11)
+		await process_frame
+		check(not detained_ui.cards_popup.visible and detained_ui._source_inventory_modal_open(), "detained transporter remains unavailable from held inventory")
+		detained_ui._close_source_inventory()
 	detained_ui.cards_popup.hide()
 	check(bool(detained_game.call("_capture_time_anchor", 0)), "detained UI fixture captures a legal time anchor")
 	detained_game.call("_set_action_options", 0)
@@ -117,6 +138,56 @@ func run() -> void:
 	game.call("_set_action_options", 0)
 	ui.cards_popup.hide()
 	ui._refresh_from_state()
+	ui._on_source_tools_requested()
+	await process_frame
+	var source_panel: Control = ui.source_inventory_panel
+	check(source_panel != null and source_panel.is_open(), "source Tools entry opens held inventory")
+	if source_panel != null:
+		var source_before: String = game.to_json()
+		source_panel.selected.emit(11)
+		await process_frame
+		use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+		check(ui.cards_popup.visible and use != null and use.disabled, "source transporter opens disabled with empty default property category")
+		check(game.to_json() == source_before, "empty source selector opens without mutation")
+		ui.cards_popup.hide()
+		await process_frame
+		check(game.to_json() == source_before and ui._source_inventory_modal_open(), "source picker cancellation preserves state and inventory")
+		source_panel = ui.source_inventory_panel
+		source_panel.selected.emit(11)
+		await process_frame
+		check(select_id(ui.cards_popup.find_child("TransportKind", true, false), 2), "source transporter switches to player targets")
+		use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+		check(use != null and not use.disabled, "source transporter enables Use for legal player target")
+		if use != null and not use.disabled:
+			var source_count := int(game.state.players[0].tools.get("傳送機", 0))
+			check(select_id(ui.cards_popup.find_child("TransportTarget", true, false), 1), "source transport selects explicit player target")
+			check(select_id(ui.cards_popup.find_child("TransportDestination", true, false), 9), "source transport selects explicit legal destination")
+			var source_target_position := int(game.state.players[1].position)
+			var source_destination: int = ui.cards_popup.find_child("TransportDestination", true, false).get_selected_id()
+			var source_owner: Object = ui.game_state
+			var cancel_before: String = source_owner.to_json()
+			var cancel_count := int(source_owner.state.players[0].tools.get("傳送機", 0))
+			ui.cards_popup.find_child("UseTool_傳送機", true, false).call_deferred("emit_signal", "pressed")
+			ui.cards_popup.hide()
+			await process_frame
+			check(source_panel.is_open() and ui.game_state == source_owner and source_owner.to_json() == cancel_before and int(source_owner.state.players[0].tools.get("傳送機", 0)) == cancel_count, "queued source transport cancellation preserves owner, JSON, and quantity")
+			check(not ui.cards_popup.visible and ui._source_inventory_modal_open(), "queued source cancellation restores held-list modal")
+			source_panel.selected.emit(11)
+			await process_frame
+			check(select_id(ui.cards_popup.find_child("TransportKind", true, false), 2), "source transport reopens player category after cancellation")
+			check(select_id(ui.cards_popup.find_child("TransportTarget", true, false), 1), "source transport reselects player target")
+			check(select_id(ui.cards_popup.find_child("TransportDestination", true, false), 9), "source transport reselects destination")
+			use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+			check(Game.validate_save(game.to_dict()).get("ok", false), "source transport save validates before confirmation")
+			use.pressed.emit()
+			await process_frame
+			check(int(game.state.players[1].position) == source_destination and int(game.state.players[1].position) != source_target_position, "source transport moves explicit target to selected destination")
+			check(int(game.state.players[0].tools.get("傳送機", 0)) == source_count - 1, "source transport confirms and consumes exactly one tool")
+			check(Game.validate_save(game.to_dict()).get("ok", false), "source transport result remains save-valid")
+			ui._close_source_inventory()
+			check(Inventory.grant_tool(game.state.inventory_supply, game.state.players[0].tools, "傳送機", 1).get("ok", false), "restore the staged transport test tool for existing UI checks")
+		game.state.players[0].position = 2
+		game.state.players[0].previous_position = -1
 	ui._on_cards_pressed()
 	await process_frame
 	use = ui.cards_popup.find_child("UseTool_傳送機", true, false)

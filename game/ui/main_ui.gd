@@ -22,6 +22,7 @@ const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
+const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
@@ -196,6 +197,17 @@ var _company_service_target: OptionButton
 var _company_service_type: OptionButton
 var _company_service_button: Button
 var _presentation_busy := false
+var source_inventory_panel: Control
+var _inventory_owner: Variant = null
+var _inventory_generation := -1
+var _inventory_mode := ""
+var _inventory_applying := false
+var _inventory_target_active := false
+var _inventory_attempt := 0
+var _inventory_prior_auto_quit := true
+var _inventory_quit_policy_held := false
+var _inventory_window: Window
+var _inventory_close_callback := Callable()
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
@@ -328,6 +340,7 @@ func _build_source_shell() -> void:
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
 	_build_source_stock_panel()
+	_build_source_inventory_panel()
 	_build_source_help_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
@@ -382,15 +395,16 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	_on_new_game_pressed()
 
 func _on_source_load_requested() -> void:
+	if _source_inventory_modal_open(): return
 	_load_game()
 
 func _on_source_save_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	_save_game()
 
@@ -422,13 +436,13 @@ func _source_help_operation_allowed() -> bool:
 	return game_state != null and source_shell != null and not _source_modal_open() and not _presentation_busy
 
 func _on_source_ai_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	_append_local_log("託管功能將在後續原版指令頁接入。")
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -438,23 +452,23 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
 
 func _on_source_tools_requested() -> void:
-	_on_cards_pressed()
+	_open_source_inventory("tools")
 
 func _on_source_cards_requested() -> void:
-	_on_cards_pressed()
+	_open_source_inventory("cards")
 
 func _on_source_sale_requested() -> void:
 	_append_local_log("出售功能請從來源股市畫面操作；目前此指令保留待接入。")
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -483,14 +497,17 @@ func _on_source_end_turn_requested() -> void:
 	_on_end_turn_pressed()
 
 func _on_source_route_requested(next_index: int) -> void:
+	if _source_inventory_modal_open(): return
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
+	if _source_inventory_modal_open(): return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
+	if _source_inventory_modal_open(): return
 	if board_view == null:
 		return
 	if board_view.has_method("select_tile"):
@@ -965,6 +982,7 @@ func _build_popups() -> void:
 	bank_box.add_child(bank_close)
 
 	cards_popup = _make_popup(Vector2i(640, 500))
+	cards_popup.popup_hide.connect(_inventory_target_hidden)
 	cards_popup.min_size = Vector2i(640, 500)
 	var cards_box := _popup_box(cards_popup)
 	cards_box.add_child(_make_label("背包", 19, TEXT_MAIN))
@@ -1747,7 +1765,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -1847,6 +1865,7 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	_refresh_from_state()
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
+	_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
 	end_overlay.hide()
 	_ai_pending = false
 	return true
@@ -1911,7 +1930,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -1963,10 +1982,10 @@ func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open or _source_help_modal_open()
+	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2025,6 +2044,7 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	_refresh_from_state()
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
+	_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
 	end_overlay.hide()
 	_ai_pending = false
 
@@ -2106,7 +2126,7 @@ func _is_legacy_market_snapshot(snapshot: Dictionary) -> bool:
 	return true
 
 func _on_roll_pressed() -> void:
-	if roll_button.disabled:
+	if _source_inventory_modal_open() or roll_button.disabled:
 		return
 	var rest_status := _player_rest_status(_current_player())
 	var resting := not rest_status.is_empty() and int(rest_status.count) != 128
@@ -2326,7 +2346,7 @@ func _settle_inventory_popup(popup: PopupPanel, desired_size: Vector2i) -> void:
 		popup.move_to_center()
 
 func _on_stocks_pressed() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2335,7 +2355,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_help_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2464,9 +2484,11 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return (not _source_inventory_modal_open() or _inventory_applying) and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_inventory_modal_open() and not _inventory_applying:
+		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_help_modal_open():
 		return {"ok": false, "message": "請先關閉遊戲說明。"}
 	if _legacy_save_modal_open():
@@ -2512,6 +2534,8 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	if _source_inventory_modal_open():
+		_close_source_inventory(false)
 	if source_help_controller != null:
 		source_help_controller.cancel()
 	_presentation_generation += 1
@@ -2540,6 +2564,8 @@ func _on_movement_finished() -> void:
 		_refresh_from_state(result)
 
 func _refresh_from_state(result: Dictionary = {}) -> void:
+	if _source_inventory_modal_open() and _inventory_owner != game_state:
+		_close_source_inventory(false)
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	var snapshot := _read_snapshot()
@@ -2611,8 +2637,9 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
 		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy)
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
-		source_shell.call("set_toolbar_enabled", "cards", false)
-		source_shell.call("set_toolbar_enabled", "tools", false)
+		var inventory_enabled := _source_inventory_operation_allowed()
+		source_shell.call("set_toolbar_enabled", "cards", inventory_enabled)
+		source_shell.call("set_toolbar_enabled", "tools", inventory_enabled)
 		source_shell.call("set_toolbar_enabled", "sale", false)
 	_last_rendered_phase = phase
 
@@ -2875,6 +2902,8 @@ func _update_actions(phase: String, current_index: int) -> void:
 		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
 	elif SleepPresentation.automatic(player):
 		action_hint_label.text = SleepPresentation.hint(player)
+	elif _source_inventory_modal_open():
+		action_hint_label.text = "請選擇卡片" if _inventory_mode == "cards" else "請選擇道具"
 	elif not human_turn:
 		action_hint_label.text = "%s 思考中…" % str(player.get("name", "AI"))
 	elif phase == "await_route":
@@ -3097,6 +3126,9 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 	_handle_result(result)
 
 func _update_cards_popup() -> void:
+	var adapter_owner: Variant = _inventory_owner
+	var adapter_generation := _inventory_generation
+	var adapter_attempt := _inventory_attempt
 	for child in cards_popup_list.get_children():
 		child.free()
 	var cards := _as_array(_current_player().get("cards", []))
@@ -3199,6 +3231,7 @@ func _update_cards_popup() -> void:
 				preview.name = "SummonGodTarget"
 				row.add_child(preview)
 			var use := _make_button("使用", func() -> void:
+				if not _inventory_adapter_current(adapter_owner, adapter_generation) or (adapter_owner != null and adapter_attempt != _inventory_attempt): return
 				var params: Dictionary = {"card_id": card_id}
 				if theft_picker != null:
 					var selected: Dictionary = theft_picker.selection()
@@ -3221,7 +3254,7 @@ func _update_cards_popup() -> void:
 					params["tile_id"] = tile_option.get_selected_id()
 				# Close inventory before a card can open its reaction window.
 				cards_popup.hide()
-				var result := _invoke_game("choose_action", ["use_card", params])
+				var result := _apply_inventory_action("use_card", params)
 				_append_local_log("使用卡片 %s：%s" % [card_id, _result_text(result, "已送出卡片指令。")])
 				_handle_result(result)
 			)
@@ -4253,6 +4286,9 @@ func _shop_transaction(action: String, item_kind: String, item_id: String, quant
 	call_deferred("_update_shop_popup")
 
 func _append_tool_inventory() -> void:
+	var adapter_owner: Variant = _inventory_owner
+	var adapter_generation := _inventory_generation
+	var adapter_attempt := _inventory_attempt
 	var player := _current_player()
 	var vehicle := str(player.get("vehicle", "walking"))
 	var vehicle_names := {"walking": "步行", "motorcycle": "機車", "car": "汽車", "engineering": "工程車"}
@@ -4320,6 +4356,7 @@ func _append_tool_inventory() -> void:
 			tile_option = _make_inventory_tile_picker(item_id)
 			row.add_child(tile_option)
 		var use := _make_button("使用", func() -> void:
+			if not _inventory_adapter_current(adapter_owner, adapter_generation) or (adapter_owner != null and adapter_attempt != _inventory_attempt): return
 			var params: Dictionary = {"tool_id": item_id}
 			if value_option != null:
 				params["value"] = value_option.get_selected_id()
@@ -4330,7 +4367,7 @@ func _append_tool_inventory() -> void:
 				if transport_selection.is_empty():
 					return
 				params.merge(transport_selection)
-			var result := _invoke_game("choose_action", ["use_tool", params])
+			var result := _apply_inventory_action("use_tool", params)
 			_append_local_log("使用道具 %s：%s" % [item_id, _result_text(result, "已送出道具指令。")])
 			_handle_result(result)
 			cards_popup.hide()
@@ -4343,6 +4380,10 @@ func _append_tool_inventory() -> void:
 			use.disabled = true
 		if detained_turn_active and item_id != "時光機":
 			use.disabled = true
+		# The source inventory may open an empty transport selector, but only
+		# when every existing execution gate already admits this tool.
+		var transport_selector_admissible := transport_picker != null and not use.disabled
+		use.set_meta("transport_selector_admissible", transport_selector_admissible)
 		if transport_picker != null:
 			use.disabled = use.disabled or transport_picker.selection().is_empty()
 			transport_picker.selection_changed.connect(func(available: bool) -> void:
@@ -4409,3 +4450,170 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 		picker.disabled = true
 		picker.tooltip_text = "關閉背包後，可縮放或平移地圖，再重新選擇目標。"
 	return picker
+
+# S19 owns only list lifetime; existing rows remain the validated S22 adapters.
+func _build_source_inventory_panel() -> void:
+	var panel := SourceInventoryPanel.new()
+	panel.z_index = 70
+	panel.selected.connect(_source_inventory_selected.bind(panel), CONNECT_DEFERRED)
+	panel.cancelled.connect(func() -> void:
+		if panel == source_inventory_panel and not _inventory_applying: _close_source_inventory())
+	source_shell.reference_canvas.add_child(panel)
+	source_inventory_panel = panel
+	panel.close()
+
+func _source_inventory_modal_open() -> bool:
+	return _inventory_owner != null
+
+func _source_inventory_operation_allowed() -> bool:
+	return _has_original_inventory() and _is_human_turn() and not _source_modal_open() and not _presentation_busy and not _ai_pending and state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+
+func _open_source_inventory(mode: String) -> void:
+	if not _source_inventory_operation_allowed(): return
+	if source_inventory_panel != null:
+		source_inventory_panel.get_parent().remove_child(source_inventory_panel)
+		source_inventory_panel.queue_free()
+	_build_source_inventory_panel()
+	_presentation_generation += 1
+	_inventory_generation = _presentation_generation
+	_inventory_owner = game_state
+	_inventory_mode = mode
+	_ai_pending = false
+	if not _inventory_quit_policy_held:
+		_inventory_prior_auto_quit = get_tree().auto_accept_quit
+		_inventory_quit_policy_held = true
+	get_tree().auto_accept_quit = false
+	_inventory_window = get_window()
+	var panel := source_inventory_panel
+	_inventory_close_callback = func() -> void:
+		if panel == source_inventory_panel and not _inventory_applying: _close_source_inventory()
+	_inventory_window.close_requested.connect(_inventory_close_callback)
+	_show_source_inventory_list()
+	_update_all()
+
+func _show_source_inventory_list() -> void:
+	if not _inventory_adapter_current(_inventory_owner, _inventory_generation) or _inventory_owner == null: return
+	_inventory_target_active = false
+	_inventory_attempt += 1
+	var cards: Array = []
+	for item in _current_player().get("cards", []):
+		var record := InventoryCatalogue.card(str(item))
+		if not record.is_empty(): cards.append(record)
+	var tools: Array = []
+	for record in InventoryCatalogue.tools():
+		var count := int(_current_player().get("tools", {}).get(record.id, 0))
+		if count > 0:
+			record["count"] = count
+			tools.append(record)
+	source_inventory_panel.set_visual_accessor(source_shell.get("_visuals"))
+	var edition := ""
+	var source: Variant = _active_map_definition.get("source", {})
+	if source is Dictionary:
+		edition = str(source.get("edition", "")).strip_edges()
+	if edition not in ["Game", "MultiverseJourney"]:
+		edition = str(source_shell.get("_source_edition"))
+	source_inventory_panel.configure({"mode": _inventory_mode, "edition": edition, "cards": cards, "tools": tools, "vehicle": _current_player().get("vehicle", "walking")})
+
+func _inventory_adapter_current(owner: Variant, generation: int) -> bool:
+	if owner == null: return not _source_inventory_modal_open()
+	return owner == game_state and owner == _inventory_owner and generation == _presentation_generation and generation == _inventory_generation
+
+func _source_inventory_selected(source_id: int, panel: Control) -> void:
+	if panel != source_inventory_panel or _inventory_owner == null or not _inventory_adapter_current(_inventory_owner, _inventory_generation): return
+	_inventory_applying = true
+	panel.close()
+	_inventory_applying = false
+	if _inventory_mode == "tools" and source_id == 14:
+		if str(_current_player().get("vehicle", "walking")) not in ["motorcycle", "car"]:
+			_show_source_inventory_list()
+			return
+		var result := _apply_inventory_action("set_vehicle", {"vehicle": "walking"})
+		_append_local_log(_result_text(result, "已收回交通工具。"))
+		_handle_result(result)
+		return
+	var catalogue: Array = InventoryCatalogue.cards() if _inventory_mode == "cards" else InventoryCatalogue.tools()
+	var item_id := ""
+	for record in catalogue:
+		if int(record.source_id) == source_id: item_id = str(record.id)
+	if item_id.is_empty():
+		_show_source_inventory_list()
+		return
+	_update_cards_popup()
+	var prefix := "UseCard_" if _inventory_mode == "cards" else "UseTool_"
+	var use: Button = cards_popup_list.find_child(prefix + item_id, true, false)
+	var transport_picker: TransportPicker = cards_popup_list.find_child("TransportPicker", true, false)
+	var transport_selector_admissible := _inventory_mode == "tools" and item_id == "傳送機" and transport_picker != null and use != null and bool(use.get_meta("transport_selector_admissible", false))
+	if use == null or (use.disabled and not transport_selector_admissible):
+		_append_local_log("目前無法使用%s；持有物品保持不變。" % item_id)
+		_show_source_inventory_list()
+		_refresh_log_only()
+		return
+	var row := use.get_parent()
+	var has_choice := false
+	for child in row.get_children():
+		if child is OptionButton or child is TheftPicker or child is TransportPicker: has_choice = true
+	if not has_choice:
+		use.pressed.emit()
+		return
+	for child in cards_popup_list.get_children(): child.visible = child == row
+	_inventory_target_active = true
+	# A single validated target row must fit the 640x480 source host too.
+	cards_popup.min_size = Vector2i(600, 260)
+	cards_popup_list.get_parent().custom_minimum_size = Vector2(0, 100)
+	cards_popup.popup_centered(Vector2i(620, 280))
+	_settle_inventory_popup(cards_popup, Vector2i(620, 280))
+
+func _apply_inventory_action(action: String, params: Dictionary) -> Dictionary:
+	var source_session := _source_inventory_modal_open()
+	if source_session and not _inventory_adapter_current(_inventory_owner, _inventory_generation): return {"ok": false}
+	_inventory_applying = source_session
+	var result := _invoke_game("choose_action", [action, params])
+	_inventory_applying = false
+	if source_session:
+		if bool(result.get("ok", false)):
+			_close_source_inventory(false)
+		else:
+			call_deferred("_show_source_inventory_list")
+	return result
+
+func _inventory_target_hidden() -> void:
+	if _inventory_target_active and _source_inventory_modal_open():
+		var owner: Variant = _inventory_owner
+		var generation := _inventory_generation
+		var attempt := _inventory_attempt
+		# popup_hide is synchronous. Revoke an already queued Use callback now;
+		# only the matching cancelled session may restore its held-item list.
+		_inventory_target_active = false
+		_inventory_attempt += 1
+		call_deferred("_restore_inventory_list_after_target_hidden", owner, generation, attempt)
+
+func _restore_inventory_list_after_target_hidden(owner: Variant, generation: int, cancelled_attempt: int) -> void:
+	if owner != _inventory_owner or generation != _inventory_generation or not _inventory_adapter_current(owner, generation): return
+	if _inventory_target_active or _inventory_attempt != cancelled_attempt + 1: return
+	_show_source_inventory_list()
+
+func _close_source_inventory(refresh: bool = true) -> void:
+	if _inventory_owner == null: return
+	_inventory_owner = null
+	_inventory_generation = -1
+	_inventory_mode = ""
+	_inventory_target_active = false
+	if source_inventory_panel != null: source_inventory_panel.close()
+	if cards_popup != null: cards_popup.hide()
+	if is_instance_valid(_inventory_window) and _inventory_close_callback.is_valid() and _inventory_window.close_requested.is_connected(_inventory_close_callback):
+		_inventory_window.close_requested.disconnect(_inventory_close_callback)
+	_inventory_window = null
+	_inventory_close_callback = Callable()
+	_restore_inventory_quit_policy()
+	_ai_pending = false
+	if refresh: _update_all()
+
+func _exit_tree() -> void:
+	if _inventory_quit_policy_held:
+		get_tree().auto_accept_quit = _inventory_prior_auto_quit
+		_inventory_quit_policy_held = false
+
+func _restore_inventory_quit_policy() -> void:
+	if _inventory_quit_policy_held and not _source_inventory_modal_open():
+		get_tree().auto_accept_quit = _inventory_prior_auto_quit
+		_inventory_quit_policy_held = false

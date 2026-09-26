@@ -24,7 +24,9 @@ func run() -> void:
 	var edition := OS.get_environment("RICHMAN4_INVENTORY_EDITION")
 	if edition.is_empty(): edition = "Game"
 	var definition := find_map(ui,edition,1 if edition == "Game" else 7)
-	check(ui._new_game(160,4,definition,ui._default_setup_options(4,definition)), "actual factory for legal held-item fixtures")
+	var setup_options: Dictionary = ui._default_setup_options(4,definition)
+	setup_options["original_hazards"] = true
+	check(ui._new_game(160,4,definition,setup_options), "actual factory for legal held-item fixtures")
 	var game: Object = ui.game_state
 	var actor: Dictionary = game.state.players[0]
 	for card in ["免費","停留","均富"]:
@@ -113,14 +115,22 @@ func run() -> void:
 	await settle()
 	press(view,ui.source_shell.toolbar_buttons.tools)
 	await settle()
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	ui._refresh_from_state()
 	var old_panel: Control = ui.source_inventory_panel
 	before = game.to_json()
-	check(old_panel.view_model().tools.size() > 0,"owner race fixture has a held ordinary tool")
+	var owner_has_source3 := false
+	for slot in range(15): owner_has_source3 = owner_has_source3 or old_panel.slot_source_id(slot) == 3
+	check(old_panel.view_model().mode == "tools" and old_panel.is_open() and owner_has_source3,"owner race uses Tools mode with held source tool 3")
+	ui._update_cards_popup()
+	var source3_use: Button = ui.cards_popup_list.find_child("UseTool_地雷",true,false)
+	check(source3_use != null and not source3_use.disabled,"owner race source tool 3 has a legal core action")
 	var replacement: Object = Core.from_dict(game.to_dict())
+	old_panel.selected.emit(3)
 	ui.game_state = replacement
 	ui._refresh_from_state()
 	check(not old_panel.is_open() and not ui._source_modal_open(), "owner replacement clears stale list")
-	old_panel.selected.emit(1)
 	await settle()
 	check(JSON.parse_string(game.to_json()) == JSON.parse_string(before) and JSON.parse_string(replacement.to_json()) == JSON.parse_string(before), "old owner callback cannot affect either game")
 	check(not ui._source_modal_open() and not ui.cards_popup.visible and auto_accept_quit == prior_quit, "deferred old owner callback leaves no target/modal/quit-policy residue")

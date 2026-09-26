@@ -18,7 +18,6 @@ func run() -> void:
 	ui.set_process(false)
 	definition = find_map(ui,"Game",1)
 	options = ui._default_setup_options(4,definition)
-	options.human_flags = [true,true,true,true]
 	options.start_date = {"year":1998,"month":1,"day":1}
 	for tile in definition.board:
 		if int(tile.get("event_code",0)) == 15:
@@ -40,8 +39,9 @@ func run() -> void:
 
 func game_at_shop(seed_value: int = 162, human: bool = true, admit: bool = true) -> Object:
 	var setup := options.duplicate(true)
-	setup.human_flags = [human,true,true,true]
 	var game: Object = Core.new_game_on_board(seed_value,4,definition,setup)
+	if not human:
+		check(game.set_player_ai(0,true), "rare AI shop fixture switches actor 0 before admission")
 	game.state.god_objects = [] # Isolate shop fixtures from unrelated random god occupancy.
 	game.state.players[0].position = node_id
 	game.state.players[0].points = 10000

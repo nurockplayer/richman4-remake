@@ -15,7 +15,6 @@ func run() -> void:
 	ui.set_process(false)
 	definition = find_map(ui,"Game",1)
 	options = ui._default_setup_options(4,definition)
-	options.human_flags = [true,true,true,true]
 	for tile in definition.board:
 		if int(tile.get("event_code",0)) == 15:
 			node_id = int(tile.index)
@@ -63,10 +62,18 @@ func run() -> void:
 	await create_timer(0.2).timeout
 	check(game.to_dict() == before,"completed gift never repeats acknowledgement")
 	controller.cancel()
-	check(game.to_dict() == before and ui._source_shop_modal_open(),"controller cancellation preserves pending core ownership")
+	check(game.to_dict() == before and ui._source_shop_modal_open() and root.get_tree().auto_accept_quit == prior_quit,"controller cancellation restores prior true quit policy and preserves pending core ownership")
+	root.get_tree().auto_accept_quit = false
+	prior_quit = false
 	ui._sync_source_shop()
 	await settle()
 	check(controller.panel.is_open() and controller.panel != panel and not root.get_tree().auto_accept_quit,"same persisted visit resumes with new presenter ownership")
+	controller.cancel()
+	check(root.get_tree().auto_accept_quit == prior_quit and game.to_dict() == before,"second cancellation restores prior false quit policy")
+	ui._sync_source_shop()
+	await settle()
+	controller = ui.source_shop_controller
+	check(controller.panel.is_open() and not root.get_tree().auto_accept_quit,"visit reopens after false-policy cancellation")
 	check(ui._new_game(2,4,definition,options),"formal new-game replacement succeeds")
 	await settle()
 	check(ui.game_state != game and game.to_dict() == before and not ui._source_shop_modal_open() and root.get_tree().auto_accept_quit == prior_quit,"new game releases shop policy without mutating old pending world")
@@ -77,5 +84,26 @@ func run() -> void:
 	view.queue_free()
 	await settle()
 	check(root.get_tree().auto_accept_quit == prior_quit and game.to_dict() == before,"tree exit releases policy and preserves pending world")
+	root.get_tree().auto_accept_quit = true
+	var true_view := SubViewport.new()
+	true_view.size = Vector2i(640,480)
+	root.add_child(true_view)
+	var true_ui := MainScene.instantiate()
+	true_view.add_child(true_ui)
+	await settle()
+	true_ui.set_process(false)
+	true_ui._apply_loaded_game(game,before,false)
+	true_ui._sync_source_shop()
+	await settle()
+	check(not root.get_tree().auto_accept_quit,"true-policy replacement fixture opens shop gate")
+	check(true_ui._new_game(3,4,definition,options),"true-policy replacement starts new game")
+	await settle()
+	check(root.get_tree().auto_accept_quit,"shop replacement restores prior true quit policy")
+	true_ui._apply_loaded_game(game,before,false)
+	true_ui._sync_source_shop()
+	await settle()
+	true_view.queue_free()
+	await settle()
+	check(root.get_tree().auto_accept_quit,"tree exit restores prior true quit policy")
 	print("Source shop lifecycle checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)

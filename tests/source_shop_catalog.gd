@@ -21,9 +21,8 @@ func run() -> void:
 	for edition in ["Game", "MultiverseJourney"]:
 		var definition := find_map(ui,edition,1 if edition == "Game" else 7)
 		var options: Dictionary = ui._default_setup_options(4,definition)
-		options.human_flags = [true,true,true,true]
 		check(ui._new_game(162,4,definition,options),"actual definition-derived MainUI game starts: " + edition)
-		var game: Object = normal_shop(definition,options)
+		var game: Object = normal_shop(definition, options)
 		check(game != null,"ordinary public movement reaches source shop: " + edition)
 		if game == null: continue
 		check(game.state.phase == "await_shop","ordinary shop landing owns pending source visit: " + edition)
@@ -79,6 +78,8 @@ func normal_shop(definition: Dictionary, options: Dictionary) -> Object:
 			var actor := int(game.state.current_player)
 			var tile: Dictionary = game.state.board[int(game.state.players[actor].position)]
 			if game.state.phase != "await_shop" or int(tile.get("event_code",0)) != 15: continue
+			if not bool(game.state.players[0].get("is_human", false)) or bool(game.state.players[0].get("is_ai", true)): continue
+			check(int(game.state.current_player) == 0, "ordinary shop return is actor 0 with default human control")
 			print("SHOP_NORMAL_ENTRY edition=%s seed=%d step=%d node=%d phase=%s" % [str(game.state.map_source.edition),seed_value,step,int(tile.index),str(game.state.phase)])
 			return game
 	return null

@@ -274,7 +274,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
 	for key in options.keys():
 		# Dictionary dot assignment produces StringName keys in Godot. Treat
 		# those keys as their canonical string spelling so callers that adjust a
@@ -324,14 +324,6 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	else:
 		for player_id in range(player_count):
 			character_ids.append(player_id)
-	var human_flags: Array = []
-	if options.has("human_flags"):
-		if typeof(options["human_flags"]) != TYPE_ARRAY or options["human_flags"].size() != player_count: return {}
-		for value in options["human_flags"]:
-			if typeof(value) != TYPE_BOOL: return {}
-			human_flags.append(value)
-	else:
-		for player_id in range(player_count): human_flags.append(player_id == 0)
 	var original_inventory: bool = false
 	if options.has("original_inventory"):
 		if typeof(options["original_inventory"]) != TYPE_BOOL:
@@ -403,7 +395,6 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"wealth_multiplier": wealth_multiplier,
 		"start_date": normalized_start_date,
 		"character_ids": character_ids,
-		"human_flags": human_flags,
 		"original_inventory": original_inventory,
 		"original_facilities": original_facilities,
 		"original_gods": original_gods,
@@ -471,10 +462,6 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		start_position,
 		_is_graph(),
 	)
-	for player_id in range(player_count):
-		var is_human := bool(options.human_flags[player_id])
-		state.players[player_id]["is_human"] = is_human
-		state.players[player_id]["is_ai"] = not is_human
 	if bool(options.get("original_statuses", false)):
 		for player in state["players"]:
 			player["prison_days"] = 0

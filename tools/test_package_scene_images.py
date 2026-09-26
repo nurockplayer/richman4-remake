@@ -6,10 +6,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from decode_original_images import VisualChunk, VisualResource, write_png
 from original_ui_assets import export_ui_resources
 from test_decode_original_images import make_mkf, make_smp, read_png_rgba
+import package_scene_images
 from package_scene_images import validate
 
 
@@ -113,6 +115,68 @@ class PackageSceneTests(unittest.TestCase):
             self.assertEqual(validate(destination / "manifest.json")[1], sorted(map(Path, [
                 "images/Panel11.png", "images/base/old.png"])))
             self.assertFalse((destination / "images" / "unrelated.png").exists())
+
+    def test_cli_symlink_manifest_uses_canonical_manifest_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            inherited = png_record(base / "images" / "old.png", "images/old.png")
+            base_manifest = write_scene_manifest(base, [inherited])
+            canonical = root / "overlay"
+            (canonical / "images").mkdir(parents=True)
+            (canonical / "images" / "base").symlink_to(base / "images", target_is_directory=True)
+            own = png_record(canonical / "images" / "Panel11.png", "images/Panel11.png")
+            manifest = write_scene_manifest(canonical, [own, dict(inherited, path="images/base/old.png")])
+            link_dir = root / "manifest-link"
+            link_dir.mkdir()
+            linked_manifest = link_dir / "scene.json"
+            linked_manifest.symlink_to(manifest)
+            destination = root / "package"
+
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("package_scene_images.py")),
+                                     str(linked_manifest), "--base-manifest", str(base_manifest),
+                                     "--destination", str(destination)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(validate(destination / "manifest.json")[1], sorted(map(Path, [
+                "images/Panel11.png", "images/base/old.png"])))
+
+    def test_cli_symlink_manifest_does_not_copy_identical_byte_sibling_shadows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            inherited = png_record(base / "images" / "old.png", "images/old.png")
+            base_manifest = write_scene_manifest(base, [inherited])
+            canonical = root / "overlay"
+            (canonical / "images").mkdir(parents=True)
+            (canonical / "images" / "base").symlink_to(base / "images", target_is_directory=True)
+            own = png_record(canonical / "images" / "Panel11.png", "images/Panel11.png")
+            manifest = write_scene_manifest(canonical, [own, dict(inherited, path="images/base/old.png")])
+            link_dir = root / "manifest-link"
+            (link_dir / "images" / "base").mkdir(parents=True)
+            (link_dir / "images" / "Panel11.png").write_bytes((canonical / "images" / "Panel11.png").read_bytes())
+            (link_dir / "images" / "base" / "old.png").write_bytes((base / "images" / "old.png").read_bytes())
+            linked_manifest = link_dir / "scene.json"
+            linked_manifest.symlink_to(manifest)
+            destination = root / "package"
+            copied_sources = []
+            real_copyfile = package_scene_images.shutil.copyfile
+
+            def record_copy(source, target, *args, **kwargs):
+                if Path(target) != destination / "manifest.json":
+                    copied_sources.append(Path(source).resolve())
+                return real_copyfile(source, target, *args, **kwargs)
+
+            with mock.patch.object(sys, "argv", ["package_scene_images.py", str(linked_manifest),
+                                                   "--base-manifest", str(base_manifest),
+                                                   "--destination", str(destination)]), \
+                    mock.patch.object(package_scene_images.shutil, "copyfile", side_effect=record_copy):
+                package_scene_images.main()
+
+            expected_sources = sorted([(canonical / "images" / "Panel11.png").resolve(),
+                                       (base / "images" / "old.png").resolve()])
+            self.assertEqual(sorted(copied_sources), expected_sources)
+            self.assertEqual(validate(destination / "manifest.json")[1], sorted(map(Path, [
+                "images/Panel11.png", "images/base/old.png"])))
 
     def test_ui_export_is_bounded_provenanced_and_packaged(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -134,6 +134,7 @@ def main():
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--base-manifest", type=Path)
     args = parser.parse_args()
+    args.manifest = args.manifest.resolve()
     _, paths = validate(args.manifest, base_manifest=args.base_manifest)
     if args.destination:
         args.destination.mkdir(parents=True, exist_ok=False)

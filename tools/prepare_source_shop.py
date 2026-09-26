@@ -405,10 +405,22 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         # inputs remain untouched canonical sources.
         for source, relative in inherited:
             staged_leaf = staged / relative
+            # _merge_image_links can inherit a whole directory as a symlink.
+            # In that case the leaf itself is regular when inspected through
+            # the link, and os.replace(staged_leaf, target) would move the
+            # canonical S19 file. Break every symlinked staging ancestor
+            # before writing this referenced leaf.
+            ancestors = list(staged_leaf.parents)
+            for ancestor in reversed(ancestors):
+                if ancestor == staged:
+                    continue
+                if ancestor.is_symlink():
+                    ancestor.unlink()
+                    ancestor.mkdir(parents=True, exist_ok=True)
             if staged_leaf.is_symlink():
                 staged_leaf.unlink()
-                staged_leaf.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, staged_leaf)
+            staged_leaf.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, staged_leaf)
             if not staged_leaf.is_file():
                 raise AssetError(f"staged inherited scene image is unavailable: {relative}")
         output.mkdir(parents=True, exist_ok=True)

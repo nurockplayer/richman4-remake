@@ -31,7 +31,7 @@ const EXIT_PRESSED_CHUNK := 36
 const CATALOG_ORIGIN := Vector2(5, 10)
 const POINTS_ORIGIN := Vector2(230, 246)
 const POINTS_ANCHOR := Vector2(310, 257)
-const FEEDBACK_RECT := Rect2(140, 466, 360, 14)
+const FEEDBACK_RECT := Rect2(330, 269, 220, 24)
 const MERCHANT_CENTER := Vector2(320, 240)
 const SOURCE_TEXT := Color("#ffffff")
 const SOURCE_OUTLINE := Color("#101010")
@@ -332,7 +332,7 @@ func _render() -> void:
 	if not _is_ready_state() and not str(_model.get("gift_message", "")).is_empty():
 		_make_centered_label("SourceShopGiftMessage", str(_model.get("gift_message", "")), Vector2(320, 440), Vector2(360, 26), 16, SOURCE_TEXT)
 	elif _is_ready_state() and not str(_model.get("feedback", "")).is_empty():
-		_make_centered_label("SourceShopFeedback", str(_model.get("feedback", "")), FEEDBACK_RECT.get_center(), FEEDBACK_RECT.size, 12, SOURCE_TEXT)
+		_make_centered_label("SourceShopFeedback", str(_model.get("feedback", "")), FEEDBACK_RECT.get_center(), FEEDBACK_RECT.size, 16, SOURCE_TEXT)
 
 func _make_text(node_name: String, value: String, origin: Vector2, extent: Vector2, font_size: int) -> Label:
 	var label := Label.new()

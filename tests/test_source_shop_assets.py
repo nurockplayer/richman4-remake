@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import struct
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -25,6 +27,9 @@ from prepare_source_shop import (  # noqa: E402
     _verify_scene_paths,
     AssetError,
 )
+from test_decode_original_images import make_mkf  # noqa: E402
+from test_package_scene_images import png_record, write_scene_manifest  # noqa: E402
+from package_scene_images import validate as validate_scene_manifest  # noqa: E402
 
 
 def _png_rgba(path: Path) -> tuple[int, int, bytes]:
@@ -54,6 +59,116 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 
 class SourceShopAssetTests(unittest.TestCase):
+    def test_real_s19_to_s20_cli_and_guarded_package_regression(self):
+        temporary = tempfile.TemporaryDirectory(prefix="source-shop-real-cli-", dir="/private/tmp")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        tools = Path(__file__).resolve().parents[1] / "tools"
+        inventory_cli = tools / "prepare_inventory_assets.py"
+        shop_cli = tools / "prepare_source_shop.py"
+        package_cli = tools / "package_scene_images.py"
+        editions = ("Game", "MultiverseJourney")
+
+        def visual_resource(count):
+            pixels = struct.pack("<3H", 0, 0x8000, 0x03e0)
+            start = 12 + count * 12
+            payload = b"SMP\0" + struct.pack("<II", count, start)
+            payload += b"".join(struct.pack("<hhhhI", 3, 1, -2, 5, len(pixels)) for _ in range(count))
+            payload += pixels * count
+            return payload, pixels, start
+
+        def owner_zip(path, resource_index, count):
+            payload, pixels, image_start = visual_resource(count)
+            hashes = {}
+            with zipfile.ZipFile(path, "w") as archive:
+                for edition in editions:
+                    mkf = make_mkf([(b"plain", 5, 0, 0)] * resource_index + [
+                        (payload, len(payload), image_start, len(pixels) * count)
+                    ])
+                    member = f"dfw4cskzl_136622/{edition}/Panel.mkf"
+                    archive.writestr(member, mkf)
+                    hashes[edition] = {
+                        "archive": hashlib.sha256(mkf).hexdigest(),
+                        "payload": hashlib.sha256(payload).hexdigest(),
+                    }
+            return hashes, hashlib.sha256(pixels).hexdigest()
+
+        def identity(path, schema, resource_index, count, archive_hashes, pixels_hash):
+            records = []
+            for edition in editions:
+                records.append({
+                    "edition": edition,
+                    "physical_index": resource_index,
+                    "archive_sha256": archive_hashes[edition]["archive"],
+                    "payload_sha256": archive_hashes[edition]["payload"],
+                    "chunks": [
+                        {"index": index, "width": 3, "height": 1, "x": -2, "y": 5,
+                         "pixel_data_sha256": pixels_hash}
+                        for index in range(count)
+                    ],
+                })
+            document = {"records": records}
+            if schema:
+                document["schema"] = schema
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+        base_root = root / "base-source"
+        base_png = base_root / "images" / "base-map.png"
+        base_record = png_record(base_png, "images/base-map.png")
+        base_manifest = write_scene_manifest(base_root, [base_record], filename="resolved-s19-base.json")
+
+        s19_zip = root / "s19-owner.zip"
+        s19_hashes, s19_pixels_hash = owner_zip(s19_zip, 11, 17)
+        s19_identity = root / "s19-identity.json"
+        identity(s19_identity, None, 11, 17, s19_hashes, s19_pixels_hash)
+        s19_output = root / "s19-output"
+        s19_command = [sys.executable, str(inventory_cli), "--zip", str(s19_zip),
+                       "--output", str(s19_output), "--identity", str(s19_identity),
+                       "--base-manifest", str(base_manifest)]
+        s19 = subprocess.run(s19_command, capture_output=True, text=True, timeout=120, check=False)
+        self.assertEqual(s19.returncode, 0, f"S19 CLI stdout:\n{s19.stdout}\nS19 CLI stderr:\n{s19.stderr}")
+        s19_scene = s19_output / "scene-manifest.json"
+        self.assertTrue(s19_scene.is_file(), f"S19 output absent; stdout:\n{s19.stdout}\nstderr:\n{s19.stderr}")
+        s19_value = json.loads(s19_output.joinpath("manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual({edition: len(s19_value["resources"][edition]["chunks"]) for edition in editions},
+                         {edition: 17 for edition in editions})
+        self.assertTrue(all((s19_output / s19_value["resources"][edition]["chunks"]["0"]["path"]).is_file()
+                            for edition in editions), "S19 CLI output omitted declared decoded PNGs")
+        validate_scene_manifest(s19_scene, base_manifest=base_manifest)
+        s19_package = subprocess.run(
+            [sys.executable, str(package_cli), str(s19_scene), "--base-manifest", str(base_manifest)],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        self.assertEqual(s19_package.returncode, 0,
+                         f"S19 guarded package stdout:\n{s19_package.stdout}\nS19 guarded package stderr:\n{s19_package.stderr}")
+
+        s20_zip = root / "s20-owner.zip"
+        s20_hashes, s20_pixels_hash = owner_zip(s20_zip, 10, 38)
+        s20_identity = root / "s20-identity.json"
+        identity(s20_identity, "richman4.source-shop-panel10-identity/v1", 10, 38,
+                 s20_hashes, s20_pixels_hash)
+        s20_output = root / "s20-output"
+        s20_command = [sys.executable, str(shop_cli), "--zip", str(s20_zip),
+                       "--output", str(s20_output), "--identity", str(s20_identity),
+                       "--base-manifest", str(s19_scene)]
+        s20 = subprocess.run(s20_command, capture_output=True, text=True, timeout=120, check=False)
+        self.assertEqual(s20.returncode, 0,
+                         f"S20 CLI stdout:\n{s20.stdout}\nS20 CLI stderr:\n{s20.stderr}")
+        s20_scene = s20_output / "scene-manifest.json"
+        self.assertTrue(s20_scene.is_file(), f"S20 output absent; stdout:\n{s20.stdout}\nstderr:\n{s20.stderr}")
+        s20_value = json.loads(s20_output.joinpath("manifest.json").read_text(encoding="utf-8"))
+        self.assertTrue(all((s19_output / s19_value["resources"][edition]["chunks"]["0"]["path"]).is_file()
+                            for edition in editions), "S20 CLI modified the S19 Panel11 source tree")
+        self.assertEqual({edition: len(s20_value["resources"][edition]["chunks"]) for edition in editions},
+                         {edition: 16 for edition in editions})
+        validate_scene_manifest(s20_scene, base_manifest=s19_scene)
+        package = subprocess.run(
+            [sys.executable, str(package_cli), str(s20_scene), "--base-manifest", str(s19_scene)],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        self.assertEqual(package.returncode, 0,
+                         f"S20 guarded package stdout:\n{package.stdout}\nS20 guarded package stderr:\n{package.stderr}")
+
     def test_missing_inherited_scene_image_refuses_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(AssetError, "unresolved image paths: images/base/Game/map/1.png"):

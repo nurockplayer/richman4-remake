@@ -3,11 +3,18 @@ const Core = preload("res://game/core/game_state.gd")
 const Shop = preload("res://game/core/source_shop_flow.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
 const Catalogue = preload("res://game/content/original_inventory.gd")
+const GodCardFixture = preload("res://tests/fixtures/god_card_fixture.gd")
 var definition: Dictionary
 var options: Dictionary
 var node_id := -1
 
 func run() -> void:
+	if OS.get_environment("RICHMAN4_SHOP_COMPOSE_ONLY") == "1":
+		_test_composed_poor_god_shop_closure()
+		print("Source shop composed poor-god checks: %d, failures: %d" % [checks, failures])
+		quit(1 if failures else 0)
+		return
+	_test_composed_poor_god_shop_closure()
 	if OS.get_environment("RICHMAN4_MAP_CATALOG").is_empty():
 		print("PRECONDITION_UNMET installed catalog required")
 		quit(2)
@@ -36,6 +43,66 @@ func run() -> void:
 	await settle()
 	print("Source shop core checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
+
+func _test_composed_poor_god_shop_closure() -> void:
+	var fixture_definition: Dictionary = GodCardFixture.definition()
+	var company_node := -1
+	for tile in fixture_definition.get("board", []):
+		if tile is Dictionary and (tile.has("company_node_index") or int(tile.get("source_company_id", 0)) > 0):
+			company_node = int(tile.get("index", -1))
+			tile["event_code"] = 15
+			tile["source_status_bits"] = (int(tile.get("source_status_bits", 0)) & ~0xff) | 15
+			break
+	check(company_node >= 0, "complete-company god-card fixture exposes a company shop tile")
+	if company_node < 0: return
+	for god_id in [5, 6]:
+		for player_count in [2, 3]:
+			var game: Object = Core.new_game_on_board(19800 + god_id * 10 + player_count, player_count, fixture_definition, GodCardFixture.new_game_options())
+			check(game != null, "composed poor-god shop game starts")
+			if game == null: continue
+			var actor: Dictionary = game.state.players[0]
+			actor.position = company_node
+			actor.points = 10000
+			actor.cash = 0
+			game.state.bank.deposits -= int(actor.deposit)
+			actor.deposit = 0
+			game.state.phase = "await_action"
+			game.state.god_objects = [{"id": god_id, "owner": -1, "node": 2, "days": 0}]
+			check(Inventory.grant_card(game.state.inventory_supply, actor.cards, "請神符").get("ok", false), "composed fixture grants summon card")
+			game._set_action_options(0)
+			check(Shop.admit(game, 0), "public shop admission opens before public card command")
+			var visit: Dictionary = game.shop_visit_snapshot()
+			check(not visit.is_empty(), "public shop admission exposes a visit snapshot")
+			var offer_id := int(visit.tool_offers[0].get("source_id", -1)) if not visit.is_empty() and not visit.tool_offers.is_empty() else -1
+			var trade: Dictionary = game.choose_action("buy_item", {"visit_id": int(visit.get("visit_id", -1)), "item_kind": "tool", "source_id": offer_id, "offer_index": 0})
+			check(trade.get("ok", false), "public shop trade completes before poor-god command")
+			var contribution := int(game.state.shop_visit.contribution)
+			var company: Dictionary = game.get_company_at(company_node)
+			var posted_before := [int(company.get("monthly_profit", 0)), int(company.get("cumulative_profit", 0))]
+			var leave: Dictionary = game.leave_shop(int(visit.get("visit_id", -1)))
+			check(leave.get("ok", false) and contribution > 0, "public shop close posts the completed trade contribution")
+			check(int(company.monthly_profit) == posted_before[0] + contribution and int(company.cumulative_profit) == posted_before[1] + contribution, "shop contribution posts once to monthly and cumulative venue totals")
+			var after_close: Array = [int(company.monthly_profit), int(company.cumulative_profit)]
+			check(not game.leave_shop(int(visit.get("visit_id", -1))).get("ok", false) and after_close == [int(company.monthly_profit), int(company.cumulative_profit)], "repeated public close cannot post shop contribution twice")
+			game.state.players[0].position = 1
+			game.state.players[0].previous_position = -1
+			game.state.last_roll = [1]
+			game.state.last_total = 1
+			game.state.last_roll_total = 1
+			var spell: Dictionary = game.choose_action("use_card", {"card_id": "請神符", "visible_tile_ids": [2]})
+			check(spell.get("ok", false) and not bool(game.state.players[0].alive), "public summon card after shop close bankrupts its caster")
+			var prefix := "god%d players%d: " % [god_id, player_count]
+			check(Core.validate_save(game.to_dict()).get("ok", false), prefix + "public shop-close then poor-god state passes save validation")
+			var restored: Object = Core.from_dict(JSON.parse_string(game.to_json()))
+			check(restored != null, prefix + "composed terminal or handoff state restores from JSON")
+			if player_count == 2:
+				check(game.state.phase == "game_over" and int(game.state.winner) == 1, prefix + "public poor-god bankruptcy ends two-player game")
+			else:
+				check(int(game.state.current_player) == 1 and game.state.phase == "await_roll" and int(game.state.turn) == 2 and not game.state.action_options.is_empty(), prefix + "public poor-god bankruptcy hands three-player game to the deterministic next actor")
+				if restored != null:
+					var next_result: Dictionary = game.run_ai_turn()
+					var replay_result: Dictionary = restored.run_ai_turn()
+					check(next_result.get("ok", false) and replay_result.get("ok", false) and game.to_json() == restored.to_json(), prefix + "post-handoff continuation matches its JSON-restored replay")
 
 func game_at_shop(seed_value: int = 162, human: bool = true, admit: bool = true) -> Object:
 	var setup := options.duplicate(true)

@@ -70,17 +70,30 @@ func _run() -> void:
 	panel._gui_input(_event(Vector2(12,80), MOUSE_BUTTON_LEFT, true))
 	expect(actions.size() == 5, "closed panel ignores stale input")
 	for edition in ["Game", "MultiverseJourney"]:
-		var feedback_model := _model("cards", edition)
-		feedback_model.feedback = "餘額不足"
-		panel.configure(feedback_model)
-		var feedback: Control = panel.find_child("SourceShopFeedback", true, false)
-		var feedback_rect: Rect2 = panel.source_geometry().feedback
-		var held_rect := Rect2(232, 298, 400, 168)
-		expect(feedback != null and not feedback_rect.intersects(held_rect), edition + " feedback stays outside all fifteen held slots")
-		for scale_value in [1, 2]:
-			panel.scale = Vector2.ONE * scale_value
-			expect(panel.source_geometry().canvas == Vector2(640,480) and panel.source_geometry().held_grid_origin == Vector2(232,298) and panel.source_geometry().feedback == Rect2(140,466,360,14), edition + " logical geometry and safe feedback survive %dx viewport scale" % scale_value)
-		panel.scale = Vector2.ONE
+		for status in ["交易完成", "餘額不足"]:
+			var feedback_model := _model("cards", edition)
+			feedback_model.feedback = status
+			feedback_model.card_offers = []
+			feedback_model.cards = []
+			for source_id in range(1, 16):
+				feedback_model.card_offers.append({"source_id": source_id, "name": "card", "price": 1})
+				feedback_model.cards.append({"source_id": source_id, "name": "held"})
+			panel.configure(feedback_model)
+			var feedback: Control = panel.find_child("SourceShopFeedback", true, false)
+			expect(feedback != null, edition + " " + status + " feedback label is rendered")
+			for scale_value in [1, 2]:
+				panel.scale = Vector2.ONE * scale_value
+				var geometry: Dictionary = panel.source_geometry()
+				var actual := Rect2(feedback.get_global_rect().position / float(scale_value), feedback.get_global_rect().size / float(scale_value)) if feedback != null else Rect2()
+				var held_rect := Rect2(232, 298, 400, 168)
+				var catalog_rect := Rect2(5, 10, 222, 462)
+				var points_rect := Rect2(230, 246, 90, 40)
+				var blank_band := Rect2(330, 269, 220, 24)
+				expect(actual.position.y >= 0 and actual.position.x >= 0 and actual.end.x <= 640 and actual.end.y <= 480, edition + " " + status + " actual label rectangle stays inside logical canvas at %dx" % scale_value)
+				expect(not actual.intersects(held_rect) and not actual.intersects(catalog_rect) and not actual.intersects(points_rect) and not actual.intersects(Rect2(556, 246, 81, 41)) and not actual.intersects(Rect2(542, 13, 86, 86)), edition + " " + status + " actual label avoids held cells, catalog, points, EXIT, and tab at %dx" % scale_value)
+				expect(actual.position.x >= blank_band.position.x and actual.position.y >= blank_band.position.y and actual.end.x <= blank_band.end.x and actual.end.y <= blank_band.end.y and actual.size.y >= 24 and geometry.feedback == blank_band, edition + " " + status + " actual readable feedback fits the blank band")
+				expect(geometry.held_grid_origin == Vector2(232, 298) and geometry.exit == Rect2(556, 246, 81, 41) and geometry.tab == Rect2(542, 13, 86, 86), edition + " source hit geometry stays fixed")
+			panel.scale = Vector2.ONE
 	panel.configure(_model("cards", "Game", false, "店主送你一件禮物"))
 	expect(panel.is_open() and panel.visible and panel.find_child("SourceShopGiftMessage", true, false) != null, "gift pending keeps source panel and message visible")
 	var gift_mode: String = panel.view_model().mode

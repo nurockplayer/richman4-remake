@@ -505,7 +505,7 @@ def patch_existing(
     replacement_targets = _preflight_write_set(output, destinations)
     _preflight_replacement_inputs(
         [zip_path, identity_path, base_manifest, *_scene_image_inputs(base_data, base_manifest)],
-        replacement_targets[-4:],
+        replacement_targets,
     )
 
     # Build all candidates and metadata before touching published files. The

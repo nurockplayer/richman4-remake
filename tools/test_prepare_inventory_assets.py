@@ -181,6 +181,76 @@ class InventoryAssetTests(unittest.TestCase):
                 accepted = self._run_real_cli(zip_path, output, identity_path, base_manifest, patch=True)
                 self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
+    def test_patch_cli_refuses_vehicle_destination_zip_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="patch-cli-vehicle-input-") as temporary:
+            root = Path(temporary)
+            fixture = self._patch_fixture(root)
+            output, _, _, base_manifest = fixture[:4]
+            zip_path, identity_path = self._real_synthetic_inputs(root)
+            vehicle_destination = output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png"
+            original_target = vehicle_destination.read_bytes()
+            shutil.copyfile(zip_path, vehicle_destination)
+            input_bytes = vehicle_destination.read_bytes()
+            before = self._snapshot_full(output)
+
+            rejected = self._run_real_cli(vehicle_destination, output, identity_path, base_manifest, patch=True)
+            self.assertNotEqual(rejected.returncode, 0, "patch CLI accepted and overwrote a ZIP at a vehicle PNG destination")
+            self.assertIn("input", rejected.stderr.lower())
+            self.assertEqual(vehicle_destination.read_bytes(), input_bytes)
+            self.assertEqual(self._snapshot_full(output), before)
+
+            vehicle_destination.write_bytes(original_target)
+            safe_zip = root / "safe-owner.zip"
+            shutil.copyfile(zip_path, safe_zip)
+            accepted = self._run_real_cli(safe_zip, output, identity_path, base_manifest, patch=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_patch_cli_refuses_valid_base_manifest_as_its_own_metadata_input(self):
+        with tempfile.TemporaryDirectory(prefix="patch-cli-metadata-input-") as temporary:
+            root = Path(temporary)
+            fixture = self._patch_fixture(root)
+            output, _, _, safe_base = fixture[:4]
+            zip_path, identity_path = self._real_synthetic_inputs(root)
+
+            internal_map = output / "images" / "base-map.png"
+            record = png_record(internal_map, "images/base-map.png")
+            scene_manifest = output / "scene-manifest.json"
+            scene_data = json.loads(scene_manifest.read_text(encoding="utf-8"))
+            temporary_scene = write_scene_manifest(root, [record], filename="valid-map.json")
+            scene_data["maps"] = json.loads(temporary_scene.read_text(encoding="utf-8"))["maps"]
+
+            def refresh_scene_images(value):
+                if isinstance(value, dict):
+                    if isinstance(value.get("path"), str):
+                        value.update(png_record(output / value["path"], value["path"]))
+                    else:
+                        for child in value.values():
+                            refresh_scene_images(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        refresh_scene_images(child)
+
+            refresh_scene_images(scene_data["ui"])
+            scene_manifest.write_text(json.dumps(scene_data), encoding="utf-8")
+            validate_scene_manifest(scene_manifest)
+            base_bytes = scene_manifest.read_bytes()
+            before = self._snapshot_full(output)
+
+            rejected = self._run_real_cli(zip_path, output, identity_path, scene_manifest, patch=True)
+            self.assertNotEqual(rejected.returncode, 0, "patch CLI accepted and overwrote its valid scene-manifest input")
+            self.assertIn("input", rejected.stderr.lower())
+            self.assertEqual(scene_manifest.read_bytes(), base_bytes)
+            self.assertEqual(self._snapshot_full(output), before)
+
+            external = root / "safe-base"
+            external_image = external / "images" / "base-map.png"
+            external_image.parent.mkdir(parents=True)
+            shutil.copyfile(internal_map, external_image)
+            external_manifest = write_scene_manifest(external, [png_record(external_image, "images/base-map.png")], filename="scene.json")
+            validate_scene_manifest(external_manifest)
+            accepted = self._run_real_cli(zip_path, output, identity_path, external_manifest, patch=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
     def test_patch_refuses_base_input_at_metadata_destination_and_retries(self):
         with tempfile.TemporaryDirectory(prefix="patch-metadata-input-") as temporary:
             root = Path(temporary)

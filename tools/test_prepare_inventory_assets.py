@@ -51,9 +51,11 @@ class InventoryAssetTests(unittest.TestCase):
         output = root / "inventory"
         source = root / "source"
         output.mkdir()
-        source_images = source / "images" / "Game" / "map"
-        source_images.mkdir(parents=True)
-        (source_images / "1.png").write_bytes(b"base-map")
+        source_images = source / "images"
+        for edition in EDITIONS:
+            edition_map = source_images / edition / "map"
+            edition_map.mkdir(parents=True)
+            (edition_map / "1.png").write_bytes(f"base-map:{edition}".encode())
         zip_path = root / "owner.zip"
         zip_path.write_bytes(b"unused mock archive")
         identity_path = root / "identity.json"
@@ -68,6 +70,10 @@ class InventoryAssetTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(f"original:{edition}:{index}".encode())
         old_base = root / "old-base"
+        for edition in EDITIONS:
+            old_map = old_base / edition / "map"
+            old_map.mkdir(parents=True)
+            (old_map / "1.png").write_bytes(f"old-base-map:{edition}".encode())
         (old_base / "kept").mkdir(parents=True)
         (old_base / "kept" / "link-target").write_bytes(b"old")
         (image_root / "base").symlink_to(old_base, target_is_directory=True)
@@ -76,13 +82,19 @@ class InventoryAssetTests(unittest.TestCase):
         scene_resources = {}
         expected_chunks = []
         for index in range(CHUNK_COUNT):
-            relative = f"images/Game/ui/Panel/11/{index}.png"
-            chunks[str(index)] = {"path": relative, "sha256": "old", "transparent_word_zero": index in TRANSPARENT_CHUNKS}
-            scene_resources[str(index)] = {"path": relative, "sha256": "old", "transparent_word_zero": index in TRANSPARENT_CHUNKS}
             expected_chunks.append({"index": index, "width": 1, "height": 1, "x": index, "y": 0, "pixel_data_sha256": inventory.hashlib.sha256(f"pixels:{index}".encode()).hexdigest()})
-        resources = {edition: {"source": {"edition": edition}, "chunks": json.loads(json.dumps(chunks))} for edition in EDITIONS}
-        scene_ui = {edition: {"Panel": {"resources": {"11": {"chunks": json.loads(json.dumps(scene_resources))}}}} for edition in EDITIONS}
-        scene = {"schema": "richman4.scene-images/v1", "maps": [{"path": "images/Game/map/1.png"}], "characters": {}, "ui": scene_ui}
+        resources = {}
+        scene_ui = {}
+        for edition in EDITIONS:
+            chunks = {}
+            scene_resources = {}
+            for index in range(CHUNK_COUNT):
+                relative = f"images/{edition}/ui/Panel/11/{index}.png"
+                chunks[str(index)] = {"path": relative, "sha256": "old", "transparent_word_zero": index in TRANSPARENT_CHUNKS}
+                scene_resources[str(index)] = {"path": relative, "sha256": "old", "transparent_word_zero": index in TRANSPARENT_CHUNKS}
+            resources[edition] = {"source": {"edition": edition}, "chunks": chunks}
+            scene_ui[edition] = {"Panel": {"resources": {"11": {"chunks": scene_resources}}}}
+        scene = {"schema": "richman4.scene-images/v1", "maps": [{"path": f"images/{edition}/map/1.png"} for edition in EDITIONS], "characters": {}, "ui": scene_ui}
         (output / "manifest.json").write_text(json.dumps({"schema": "richman4.inventory-assets/v1", "resources": resources}), encoding="utf-8")
         (output / "scene-manifest.json").write_text(json.dumps(scene), encoding="utf-8")
         (output / "provenance.json").write_text(json.dumps({"resources": {}}), encoding="utf-8")
@@ -126,7 +138,7 @@ class InventoryAssetTests(unittest.TestCase):
         return values, link.is_symlink(), os.readlink(link) if link.is_symlink() else None
 
     def test_patch_existing_late_second_edition_failure_keeps_all_published_bytes(self):
-        with tempfile.TemporaryDirectory(prefix="asset-transaction-", dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))
             before = self._snapshot(fixture[0])
             with self.assertRaises(inventory.AssetError):
@@ -134,7 +146,7 @@ class InventoryAssetTests(unittest.TestCase):
             self.assertEqual(self._snapshot(fixture[0]), before)
 
     def test_patch_existing_base_link_failure_restores_original_link_and_bytes(self):
-        with tempfile.TemporaryDirectory(prefix="asset-transaction-", dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))
             output = fixture[0]
             before = self._snapshot(output)
@@ -146,8 +158,21 @@ class InventoryAssetTests(unittest.TestCase):
                 self._run_mock_patch(fixture, ensure=fail_after_partial_link)
             self.assertEqual(self._snapshot(output), before)
 
+    def test_patch_existing_missing_authoritative_base_path_rolls_back_links_and_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
+            fixture = self._patch_fixture(Path(temporary))
+            output, _, _, base_manifest = fixture[:4]
+            before = self._snapshot(output)
+            authoritative_path = base_manifest.parent / "images" / "MultiverseJourney" / "map" / "1.png"
+            authoritative_path.unlink()
+            self.assertEqual((output / "images" / "base" / "MultiverseJourney" / "map" / "1.png").read_bytes(), b"old-base-map:MultiverseJourney")
+            with self.assertRaisesRegex(inventory.AssetError, "unresolved image paths"):
+                self._run_mock_patch(fixture)
+            self.assertEqual(self._snapshot(output), before)
+            self.assertTrue((output / "images" / "base" / "MultiverseJourney" / "map" / "1.png").is_file())
+
     def test_patch_existing_metadata_failure_restores_pngs_json_and_links(self):
-        with tempfile.TemporaryDirectory(prefix="asset-transaction-", dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))
             output = fixture[0]
             before = self._snapshot(output)
@@ -165,7 +190,7 @@ class InventoryAssetTests(unittest.TestCase):
             self.assertEqual(self._snapshot(output), before)
 
     def test_patch_existing_success_and_repeat_are_stable(self):
-        with tempfile.TemporaryDirectory(prefix="asset-transaction-", dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))
             manifest = self._run_mock_patch(fixture)
             output = fixture[0]

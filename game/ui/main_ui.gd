@@ -4566,7 +4566,19 @@ func _apply_inventory_action(action: String, params: Dictionary) -> Dictionary:
 
 func _inventory_target_hidden() -> void:
 	if _inventory_target_active and _source_inventory_modal_open():
-		call_deferred("_show_source_inventory_list")
+		var owner: Variant = _inventory_owner
+		var generation := _inventory_generation
+		var attempt := _inventory_attempt
+		# popup_hide is synchronous. Revoke an already queued Use callback now;
+		# only the matching cancelled session may restore its held-item list.
+		_inventory_target_active = false
+		_inventory_attempt += 1
+		call_deferred("_restore_inventory_list_after_target_hidden", owner, generation, attempt)
+
+func _restore_inventory_list_after_target_hidden(owner: Variant, generation: int, cancelled_attempt: int) -> void:
+	if owner != _inventory_owner or generation != _inventory_generation or not _inventory_adapter_current(owner, generation): return
+	if _inventory_target_active or _inventory_attempt != cancelled_attempt + 1: return
+	_show_source_inventory_list()
 
 func _close_source_inventory(refresh: bool = true) -> void:
 	if _inventory_owner == null: return

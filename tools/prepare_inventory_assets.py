@@ -375,8 +375,6 @@ def patch_existing(
               "chunks_0_1_15_16": "opaque source/caller draw",
               "chunks_2_14": "WORD 0 transparent per source icon caller",
           }
-      # Validate the prospective paths before publication. Existing base links
-      # may be stale, so validate base paths against the authoritative source.
       image_paths: list[str] = []
       def collect_paths(value):
           if isinstance(value, dict):
@@ -386,18 +384,6 @@ def patch_existing(
           elif isinstance(value, str) and value.startswith("images/"):
               image_paths.append(value)
       collect_paths(scene)
-      staged_targets = {target.resolve() for _, target in staged_pngs}
-      source_images = base_manifest.parent / "images"
-      missing = []
-      for item in image_paths:
-          candidate = output / item
-          if candidate.exists() or candidate.is_symlink() or candidate.resolve() in staged_targets:
-              continue
-          if item.startswith("images/base/") and (source_images / item[len("images/base/"):]).exists():
-              continue
-          missing.append(item)
-      if missing:
-          raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
 
       manifest_payload = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
       scene_payload = json.dumps(scene, ensure_ascii=False, indent=2) + "\n"
@@ -424,6 +410,12 @@ def patch_existing(
           base_link.rename(backup_link)
       try:
           _ensure_base_link(output, base_manifest)
+          # Validate against the final composed links. A stale prior link (or
+          # a dangling symlink) must not make a missing authoritative path
+          # appear publishable.
+          missing = [item for item in image_paths if not (output / item).is_file()]
+          if missing:
+              raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
           for staged, target in staged_pngs:
               staged.replace(target)
           for path, payload in metadata:

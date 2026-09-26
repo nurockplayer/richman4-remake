@@ -77,7 +77,9 @@ def _preflight_write_set(output: Path, destinations: list[tuple[str | Path, bool
 
 def _preflight_inputs(inputs: list[Path], targets: list[Path]) -> None:
     """Refuse publication that would replace an input or a real tree holding it."""
-    canonical_inputs = {path.resolve(strict=False) for path in inputs}
+    # Match _prepare_into's input normalization so a home-relative alias cannot
+    # evade the publication boundary check.
+    canonical_inputs = {path.expanduser().resolve(strict=False) for path in inputs}
     for target in targets:
         if target.resolve(strict=False) in canonical_inputs:
             raise AssetError(f"publication destination is also an input: {target}")

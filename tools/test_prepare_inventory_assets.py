@@ -19,6 +19,8 @@ from io import StringIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prepare_inventory_assets as inventory
+from test_package_scene_images import png_record, write_scene_manifest
+from package_scene_images import validate as validate_scene_manifest
 from prepare_inventory_assets import CHUNK_COUNT, EDITIONS, RESOURCE_INDEX, TRANSPARENT_CHUNKS, _load_identity, _rewrite_base_paths
 
 
@@ -73,8 +75,8 @@ class InventoryAssetTests(unittest.TestCase):
                 self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
 
     def test_prepare_protects_base_manifest_inputs_from_publication(self):
-        # Exact metadata destination alias and input nested under the real base
-        # directory are refused before any publication rename.
+        # These valid base manifests let the old producer reach publication;
+        # the refusal must come from the protected-input boundary itself.
         for layout in ("metadata", "inside-base"):
             with self.subTest(layout=layout), tempfile.TemporaryDirectory(prefix="fresh-input-boundary-") as temporary:
                 root = Path(temporary)
@@ -82,32 +84,64 @@ class InventoryAssetTests(unittest.TestCase):
                 output, zip_path, identity_path, base_manifest = fixture[:4]
                 if layout == "metadata":
                     base_manifest = output / "manifest.json"
-                    shutil.copytree(fixture[3].parent / "images", output / "images")
-                    external = root / "old-base"
-                    external.mkdir(exist_ok=True)
-                    (external / "marker").write_bytes(b"linked output survives")
-                    (output / "images" / "base").symlink_to(external, target_is_directory=True)
-                    base_manifest.write_text(json.dumps({"schema": "richman4.scene-images/v1", "maps": [], "characters": {}, "ui": {}}))
+                    image = png_record(output / "images" / "publication-input.png", "images/publication-input.png")
+                    base_manifest = write_scene_manifest(output, [image], filename="manifest.json")
                 else:
-                    shutil.copytree(fixture[3].parent / "images", output / "images")
-                    (output / "images" / "base").mkdir()
-                    base_manifest = output / "images" / "base" / "input.json"
-                    base_manifest.write_text(json.dumps({"schema": "richman4.scene-images/v1", "maps": [], "characters": {}, "ui": {}}))
+                    base_root = output / "images" / "base"
+                    image = png_record(base_root / "images" / "publication-input.png", "images/publication-input.png")
+                    base_manifest = write_scene_manifest(base_root, [image], filename="input.json")
+                validate_scene_manifest(base_manifest)
                 original = base_manifest.read_bytes()
+                original_hash = inventory.hashlib.sha256(original).hexdigest()
                 (output / "scene-manifest.json").write_bytes(b"prior scene")
                 (output / "provenance.json").write_bytes(b"prior provenance")
                 before = self._snapshot(output)
-                with self.assertRaises(inventory.AssetError):
+                with self.assertRaisesRegex(inventory.AssetError, "also an input|input-containing"):
                     self._run_prepare((output, zip_path, identity_path, base_manifest, *fixture[4:]))
                 self.assertEqual(self._snapshot(output), before)
                 self.assertEqual(base_manifest.read_bytes(), original)
                 self.assertEqual(json.loads(base_manifest.read_text())["schema"], "richman4.scene-images/v1")
+                self.assertEqual(inventory.hashlib.sha256(base_manifest.read_bytes()).hexdigest(), original_hash)
+                self.assertEqual((output / "scene-manifest.json").read_bytes(), b"prior scene")
+                self.assertEqual((output / "provenance.json").read_bytes(), b"prior provenance")
                 # Moving the source away from the destructive boundary is valid.
                 safe = root / "safe-scene.json"
-                shutil.copytree(fixture[3].parent / "images", root / "images", dirs_exist_ok=True)
+                safe_images = root / "safe-images"
+                safe_image = png_record(safe_images / "publication-input.png", "images/publication-input.png")
+                safe.parent.mkdir(parents=True, exist_ok=True)
                 safe.write_bytes(original)
+                (safe.parent / "images").symlink_to(safe_images, target_is_directory=True)
                 result = self._run_prepare((output, zip_path, identity_path, safe, *fixture[4:]))
                 self.assertEqual(len(result["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
+    def test_prepare_protects_expanded_home_alias_from_publication(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-home-alias-boundary-") as temporary:
+            root = Path(temporary)
+            fixture = self._prepare_fixture(root)
+            output, zip_path, identity_path, base_manifest = fixture[:4]
+            source = base_manifest.parent
+            output = source
+            image = png_record(source / "images" / "publication-input.png", "images/publication-input.png")
+            base_manifest = write_scene_manifest(source, [image], filename="manifest.json")
+            validate_scene_manifest(base_manifest)
+            original = base_manifest.read_bytes()
+            alias = Path("~") / os.path.relpath(base_manifest, Path.home())
+            self.assertEqual(alias.expanduser().resolve(), base_manifest.resolve())
+            output.mkdir(parents=True, exist_ok=True)
+            (output / "scene-manifest.json").write_bytes(b"prior scene")
+            (output / "provenance.json").write_bytes(b"prior provenance")
+            before = self._snapshot(output)
+            with self.assertRaisesRegex(inventory.AssetError, "also an input"):
+                self._run_prepare((output, zip_path, identity_path, alias, *fixture[4:]))
+            self.assertEqual(base_manifest.read_bytes(), original)
+            self.assertEqual(self._snapshot(output), before)
+            safe = root / "safe-scene.json"
+            safe_images = root / "images"
+            safe_image = png_record(safe_images / "publication-input.png", "images/publication-input.png")
+            safe.write_bytes(write_scene_manifest(root, [safe_image], filename="safe-scene.json").read_bytes())
+            validate_scene_manifest(safe)
+            result = self._run_prepare((output, zip_path, identity_path, safe, *fixture[4:]))
+            self.assertEqual(len(result["resources"]["Game"]["chunks"]), CHUNK_COUNT)
 
     def test_prepare_allows_shared_parent_when_output_is_separate(self):
         with tempfile.TemporaryDirectory(prefix="fresh-shared-parent-") as temporary:

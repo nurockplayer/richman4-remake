@@ -16,11 +16,13 @@ func run() -> void:
 		print("PRECONDITION_UNMET edition must be Game1/MJ7 and scale 1/2")
 		quit(2)
 		return
-	capture_directory = OS.get_environment("CAPTUREdirectory")
+	capture_directory = OS.get_environment("RICHMAN4_SHOP_CAPTURE")
 	var view := SubViewport.new()
 	view.size = Vector2i(640, 480) * scale_value
 	view.gui_embed_subwindows = true
+	view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(view)
+	view.notify_mouse_entered()
 	var ui := MainScene.instantiate()
 	ui.scale = Vector2.ONE * scale_value
 	view.add_child(ui)
@@ -76,6 +78,8 @@ func run() -> void:
 			check(game.state.players[actor].points == points - int(offer.price) and game.shop_visit_snapshot().card_offers[0].is_empty(), "viewport input buys one row and preserves its hole")
 			var held := str(offer.get("id", ""))
 			var held_index: int = game.state.players[actor].cards.find(held)
+			check(held_index >= 0, "purchased card is held before sale")
+			await capture(view, ui, "completed-hole-held")
 			await _push_panel(view, panel, Vector2(233 + (held_index % 5) * 80 + 1, 299 + (held_index / 5) * 56 + 1), MOUSE_BUTTON_LEFT, true)
 			check(held_index >= 0 and game.state.players[actor].cards.find(held) < 0, "viewport input sells one held card")
 			var offers_before_tab: Array = game.state.shop_visit.card_offers.duplicate(true)
@@ -85,7 +89,6 @@ func run() -> void:
 			await settle()
 			check(panel.view_model().mode == "tools" and game.state.shop_visit.card_offers == offers_before_tab and game._rng.state == rng_before_tab, "tab activates on release outside without reroll through viewport input")
 			await capture(view, ui, "tools")
-			await capture(view, ui, "completed-hole-held")
 			var save: Dictionary = game.to_dict()
 			check(Core.validate_save(save).ok and Core.from_dict(JSON.parse_string(game.to_json())) != null, "pending traded visit passes save validation and round trips")
 			var old_panel := panel
@@ -98,7 +101,6 @@ func run() -> void:
 			game = replacement
 			controller = ui.source_shop_controller
 			panel = controller.panel
-			await capture(view, ui, "return-board")
 			var return_before: Dictionary = game.to_dict()
 			await _push_panel(view, panel, Vector2(556, 246), MOUSE_BUTTON_LEFT, true)
 			await _push_panel(view, panel, Vector2(1, 479), MOUSE_BUTTON_LEFT, false)
@@ -115,7 +117,6 @@ func run() -> void:
 			await _push_panel(view, right_panel, Vector2(1, 1), MOUSE_BUTTON_RIGHT, false)
 			await settle()
 			check(right_owner.state.phase == "await_action" and right_owner.state.shop_visit.closed and right_owner.state.inventory_supply == save.inventory_supply and right_owner.state.players[actor].cards == save.players[actor].cards, "right-up cancels a loaded visit and preserves completed trades")
-			await capture(view, ui, "return-board")
 	if not capture_directory.is_empty():
 		var file := FileAccess.open(capture_directory.path_join("captures.json"), FileAccess.WRITE)
 		file.store_string(JSON.stringify(capture_records, "\\t"))
@@ -138,20 +139,27 @@ func _push_panel(view: SubViewport, panel: Control, point: Vector2, button: Mous
 func capture(view: SubViewport, ui: Control, label: String) -> void:
 	if capture_directory.is_empty(): return
 	if DisplayServer.get_name() == "headless": return
-	var panel: Control = ui.source_shop_controller.panel
+	var panel: Control = ui.source_shop_controller.panel if ui.source_shop_controller != null else null
+	var panel_open: bool = panel != null and panel.is_open()
 	if FileAccess.file_exists("res://.local/imported-original/manifest.json"):
-		check(panel.source_art_available(), "actual Panel10 art loaded: " + label)
-		check(ui.source_inventory_panel.source_art_available(), "actual Panel11 art loaded: " + label)
+		if panel_open:
+			check(panel.source_art_available(), "actual displayed Panel10 art loaded: " + label)
+			var art_status: Dictionary = panel.source_art_status()
+			for role in art_status:
+				check(bool(art_status[role]), "actual displayed Panel10 role loaded (%s): %s" % [role, label])
 	DirAccess.make_dir_recursive_absolute(capture_directory)
 	await process_frame
 	await RenderingServer.frame_post_draw
 	var image := view.get_texture().get_image()
 	var path := capture_directory.path_join(label + ".png")
 	check(image != null and image.get_size() == view.size and image.save_png(path) == OK, "native viewport capture: " + label)
-	var snapshot: Dictionary = ui.game_state.shop_visit_snapshot()
-	var snapshot_json := JSON.stringify(snapshot)
+	var core_snapshot: Dictionary = ui.game_state.to_dict()
+	var visit_snapshot: Dictionary = ui.game_state.shop_visit_snapshot()
+	var snapshot_json := JSON.stringify(core_snapshot)
 	var hash_context := HashingContext.new()
 	hash_context.start(HashingContext.HASH_SHA256)
 	hash_context.update(snapshot_json.to_utf8_buffer())
 	var snapshot_hash := hash_context.finish().hex_encode()
-	capture_records.append({"path": path, "sha256": FileAccess.get_sha256(path), "size": [view.size.x, view.size.y], "mode": panel.view_model().mode, "geometry": panel.source_geometry(), "edition": ui._active_map_definition.get("source", {}).get("edition", ""), "core_snapshot": snapshot, "core_snapshot_sha256": snapshot_hash, "input": "injected loaded-owner/component capture; not physical OS ordinary entry"})
+	var mode: Variant = panel.view_model().mode if panel_open else null
+	var geometry: Variant = panel.source_geometry() if panel_open else null
+	capture_records.append({"path": path, "sha256": FileAccess.get_sha256(path), "size": [view.size.x, view.size.y], "panel_open": panel_open, "mode": mode, "geometry": geometry, "phase": ui.game_state.state.phase, "actor": int(ui.game_state.state.current_player), "edition": ui._active_map_definition.get("source", {}).get("edition", ""), "core_snapshot": core_snapshot, "core_snapshot_sha256": snapshot_hash, "shop_visit_snapshot": visit_snapshot, "review_head": OS.get_environment("RICHMAN4_REVIEW_HEAD"), "input": "injected loaded-owner/component capture; not physical OS ordinary entry"})

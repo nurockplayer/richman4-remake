@@ -226,7 +226,7 @@ class InventoryAssetTests(unittest.TestCase):
                     base_tree = output / "images" / "base"
                 base_tree.mkdir(parents=True)
                 alias_tree = output / "IMAGES" / "BASE"
-                if not os.path.samefile(base_tree, alias_tree):
+                if not alias_tree.exists() or not os.path.samefile(base_tree, alias_tree):
                     self.skipTest("filesystem is case sensitive; base-tree case alias is a distinct entry")
                 real_zip, identity_path = self._real_synthetic_inputs(root)
                 aliased_zip = alias_tree / "declared-owner.zip"
@@ -257,7 +257,7 @@ class InventoryAssetTests(unittest.TestCase):
             record = png_record(base_image, "images/safe.png")
             base_manifest = write_scene_manifest(output, [record], filename="MANIFEST.JSON")
             destination = output / "manifest.json"
-            if not os.path.samefile(base_manifest, destination):
+            if not destination.exists() or not os.path.samefile(base_manifest, destination):
                 self.skipTest("filesystem is case sensitive; metadata case alias is a distinct entry")
             zip_path, identity_path = self._real_synthetic_inputs(root)
             original_bytes = base_manifest.read_bytes()
@@ -290,7 +290,7 @@ class InventoryAssetTests(unittest.TestCase):
             backing.parent.mkdir(parents=True)
             record = png_record(backing, "images/background.png")
             canonical_base = output / "images" / "base"
-            if not os.path.samefile(backing.parent, canonical_base):
+            if not canonical_base.exists() or not os.path.samefile(backing.parent, canonical_base):
                 self.skipTest("filesystem is case sensitive; base-tree case alias is a distinct entry")
             external_images = root / "images"
             external_images.mkdir()

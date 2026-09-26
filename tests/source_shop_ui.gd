@@ -52,6 +52,12 @@ func run() -> void:
 	var controller: Control = ui.source_shop_controller
 	var panel: Control = controller.panel
 	check(panel != null and panel.is_open(), "loaded pending visit opens source panel")
+	var blocked_snapshot: Dictionary = game.to_dict()
+	controller.sync(game,true)
+	await _push_panel(view,panel,Vector2(1,1),MOUSE_BUTTON_RIGHT,false)
+	check(game.to_dict() == blocked_snapshot and panel.visible and not panel.is_visible_in_tree(),"blocked ancestor rejects global right-up without closing the local panel")
+	controller.sync(game,false)
+	check(panel.is_open() and panel.is_visible_in_tree(),"unchanged snapshot unblocking restores the interactive visit")
 	if panel != null and panel.is_open():
 		_assert_panel_viewport_bounds(view, panel)
 	var actual_source: Dictionary = ui._active_map_definition.get("source", {})
@@ -114,10 +120,17 @@ func run() -> void:
 			ui._sync_source_shop()
 			await settle()
 			var right_panel: Control = ui.source_shop_controller.panel
+			var right_controller: Control = ui.source_shop_controller
 			check(right_panel.is_open(), "saved visit reopens for right-up cancel")
+			var closed_count_before := _shop_closed_count(right_owner)
+			right_controller.sync(right_owner,true)
+			await _push_panel(view, right_panel, Vector2(1, 1), MOUSE_BUTTON_RIGHT, false)
+			check(right_owner.state.phase == "await_shop" and right_panel.visible and not right_panel.is_visible_in_tree(), "blocked right-up leaves the saved visit open")
+			right_controller.sync(right_owner,false)
+			check(right_panel.is_open() and right_panel.is_visible_in_tree(), "unblocked saved visit accepts input again")
 			await _push_panel(view, right_panel, Vector2(1, 1), MOUSE_BUTTON_RIGHT, false)
 			await settle()
-			check(right_owner.state.phase == "await_action" and right_owner.state.shop_visit.closed and right_owner.state.inventory_supply == save.inventory_supply and right_owner.state.players[actor].cards == save.players[actor].cards, "right-up cancels a loaded visit and preserves completed trades")
+			check(right_owner.state.phase == "await_action" and right_owner.state.shop_visit.closed and _shop_closed_count(right_owner) == closed_count_before+1 and right_owner.state.inventory_supply == save.inventory_supply and right_owner.state.players[actor].cards == save.players[actor].cards, "unblocked right-up closes a loaded visit exactly once and preserves completed trades")
 	if not capture_directory.is_empty():
 		var file := FileAccess.open(capture_directory.path_join("captures.json"), FileAccess.WRITE)
 		file.store_string(JSON.stringify(capture_records))
@@ -136,6 +149,12 @@ func _push_panel(view: SubViewport, panel: Control, point: Vector2, button: Mous
 	event.pressed = down
 	view.push_input(event, true)
 	await process_frame
+
+func _shop_closed_count(game: Object) -> int:
+	var count := 0
+	for event in game.state.event_log:
+		if event is Dictionary and event.get("type","") == "shop_closed": count += 1
+	return count
 
 func _assert_panel_viewport_bounds(view: SubViewport, panel: Control) -> Dictionary:
 	var transform := panel.get_global_transform_with_canvas()

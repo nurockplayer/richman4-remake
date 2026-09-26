@@ -9,6 +9,7 @@ func run() -> void:
 	view.size = Vector2i(640,480)
 	view.gui_embed_subwindows = true
 	root.add_child(view)
+	view.notify_mouse_entered()
 	var ui := MainScene.instantiate()
 	view.add_child(ui)
 	await settle()
@@ -44,6 +45,12 @@ func run() -> void:
 	await create_timer(1.2).timeout
 	await settle()
 	check(game.shop_visit_snapshot().ready and panel.is_open() and panel.visible,"gift naturally settles once then opens same shop")
+	before = game.to_dict()
+	controller.sync(game,true)
+	await _push_view(view,panel,Vector2(1,1),MOUSE_BUTTON_RIGHT,false)
+	check(game.to_dict() == before and panel.visible and not panel.is_visible_in_tree(),"blocked ancestor rejects global right-up without cancelling the local panel")
+	controller.sync(game,false)
+	check(panel.is_open() and panel.is_visible_in_tree(),"unblocking unchanged snapshot restores an interactive open panel")
 	# Public acknowledgement updates only gift_pending and normal result metadata.
 	check(game.state.shop_visit.card_offers == before.shop_visit.card_offers and game.state.shop_visit.tool_offers == before.shop_visit.tool_offers and game.state.inventory_supply == before.inventory_supply and game.state.players == before.players and game._rng.state == int(before.rng_state),"gift timer does not grant again, reroll, or transact")
 	var down := InputEventMouseButton.new()
@@ -107,3 +114,13 @@ func run() -> void:
 	check(root.get_tree().auto_accept_quit,"tree exit restores prior true quit policy")
 	print("Source shop lifecycle checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
+
+func _push_view(view: SubViewport, panel: Control, point: Vector2, button: MouseButton, down: bool) -> void:
+	var canvas_point: Vector2 = panel.get_global_transform_with_canvas() * point
+	var event := InputEventMouseButton.new()
+	event.position = canvas_point
+	event.global_position = canvas_point
+	event.button_index = button
+	event.pressed = down
+	view.push_input(event,true)
+	await process_frame

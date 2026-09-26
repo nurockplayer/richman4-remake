@@ -216,6 +216,7 @@ func _test_lifetime_persistence() -> void:
 	check(game.to_dict() == before,"same-visit reopen cannot replenish offers or gift")
 	valid(game,"closed visit")
 	_test_closed_visit_actor_history(game)
+	_test_closed_visit_post_close_actions(game)
 	check(game.end_turn().ok,"closed visit returns to ordinary turn continuation")
 	valid(game,"after shop turn")
 
@@ -243,6 +244,19 @@ func _test_closed_visit_actor_history(game: Object) -> void:
 	check(ai_visit.closed and not ai_visit.human and ai_game.set_player_ai(0,false),"closed AI visit permits public AI-to-human mode change")
 	check(ai_game.state.shop_visit == ai_visit,"AI-origin visit retains its historical actor flag")
 	valid(ai_game,"closed AI visit after human toggle")
+
+func _test_closed_visit_post_close_actions(game: Object) -> void:
+	var visit: Dictionary = game.state.shop_visit.duplicate(true)
+	check(Inventory.grant_card(game.state.inventory_supply,game.state.players[0].cards,"陷害").ok,"legal caster fixture receives trap card")
+	check(Inventory.grant_card(game.state.inventory_supply,game.state.players[1].cards,"復仇").ok,"legal living target fixture receives revenge card")
+	check(game.trap_target_players(0).has(1),"public trap target list includes living non-detained revenge holder")
+	var result: Dictionary = game.choose_action("use_card",{"card_id":"陷害","target_id":1})
+	check(result.get("ok",false),"post-close public trap action resolves revenge")
+	check(game.state.players[0].position != int(visit.node_id) and int(game.state.players[0].prison_days) > 0,"revenge moves closed-visit caster to prison")
+	check(game.state.shop_visit == visit and game.state.phase == "await_action","post-close card continuation retains immutable visit and ordinary action phase")
+	valid(game,"closed visit after revenge movement")
+	var restored: Object = Core.from_dict(JSON.parse_string(game.to_json()))
+	check(restored != null and restored.state.players[0].position == game.state.players[0].position and restored.state.shop_visit == visit,"JSON round trip preserves moved actor and closed visit history")
 
 func _test_commercial_gift_ai() -> void:
 	var game := game_at_shop(22,true,false)

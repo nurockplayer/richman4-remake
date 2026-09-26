@@ -142,7 +142,7 @@ func _gui_input(event: InputEvent) -> void:
 	accept_event()
 
 func _input(event: InputEvent) -> void:
-	if is_open() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
+	if is_visible_in_tree() and is_open() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
 		get_viewport().set_input_as_handled()
 		_cancel()
 

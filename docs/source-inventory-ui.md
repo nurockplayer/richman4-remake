@@ -40,6 +40,20 @@ scene images through an overlay. Backgrounds 0/1 and vehicle 15/16 are opaque;
 icons 2–14 skip source WORD 0. No original/derived artwork is distributed here.
 The canonical asset source remains the existing private Git/LFS manifest.
 
+For an overlay scene manifest that references inherited private scene images,
+provide its explicit base manifest to the packager:
+
+```sh
+python3 tools/package_scene_images.py overlay/scene-manifest.json \
+  --base-manifest base/scene-manifest.json
+```
+
+`tools/package_macos.sh` accepts the same base manifest through
+`RICHMAN4_SCENE_BASE_MANIFEST`; it uses that file for both the preflight check
+and the final referenced-file copy. Without an explicit base manifest, scene
+validation remains strict. The completed integrated private package remains
+open and has not been validated by this change.
+
 Validation uses the immutable ordinary-toolbar installed-catalog RED→GREEN,
 source component fixtures, public action/lifecycle checks, affected subsystem
 checks and native actual-art comparisons for both editions at 1×/2×. Shared source

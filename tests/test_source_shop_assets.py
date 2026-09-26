@@ -60,7 +60,7 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 class SourceShopAssetTests(unittest.TestCase):
     def test_real_s19_to_s20_cli_and_guarded_package_regression(self):
-        temporary = tempfile.TemporaryDirectory(prefix="source-shop-real-cli-", dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(prefix="source-shop-real-cli-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name).resolve()
         tools = Path(__file__).resolve().parents[1] / "tools"

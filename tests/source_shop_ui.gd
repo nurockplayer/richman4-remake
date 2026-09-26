@@ -119,7 +119,7 @@ func run() -> void:
 			check(right_owner.state.phase == "await_action" and right_owner.state.shop_visit.closed and right_owner.state.inventory_supply == save.inventory_supply and right_owner.state.players[actor].cards == save.players[actor].cards, "right-up cancels a loaded visit and preserves completed trades")
 	if not capture_directory.is_empty():
 		var file := FileAccess.open(capture_directory.path_join("captures.json"), FileAccess.WRITE)
-		file.store_string(JSON.stringify(capture_records, "\\t"))
+		file.store_string(JSON.stringify(capture_records))
 	view.queue_free()
 	await settle()
 	print("Source shop UI checks: %d, failures: %d" % [checks, failures])

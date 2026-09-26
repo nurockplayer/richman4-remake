@@ -117,6 +117,36 @@ func run() -> void:
 	game.call("_set_action_options", 0)
 	ui.cards_popup.hide()
 	ui._refresh_from_state()
+	ui._on_source_tools_requested()
+	await process_frame
+	var source_panel: Control = ui.source_inventory_panel
+	check(source_panel != null and source_panel.is_open(), "source Tools entry opens held inventory")
+	if source_panel != null:
+		source_panel.selected.emit(11)
+		await process_frame
+		use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+		check(ui.cards_popup.visible and use != null and use.disabled, "source transporter opens disabled with empty default property category")
+		var source_before: String = game.to_json()
+		ui.cards_popup.hide()
+		await process_frame
+		check(game.to_json() == source_before and ui._source_inventory_modal_open(), "source picker cancellation preserves state and inventory")
+		source_panel = ui.source_inventory_panel
+		source_panel.selected.emit(11)
+		await process_frame
+		check(select_id(ui.cards_popup.find_child("TransportKind", true, false), 2), "source transporter switches to player targets")
+		use = ui.cards_popup.find_child("UseTool_傳送機", true, false)
+		check(use != null and not use.disabled, "source transporter enables Use for legal player target")
+		if use != null and not use.disabled:
+			var source_count := int(game.state.players[0].tools.get("傳送機", 0))
+			check(Game.validate_save(game.to_dict()).get("ok", false), "source transport save validates before confirmation")
+			use.pressed.emit()
+			await process_frame
+			check(int(game.state.players[0].tools.get("傳送機", 0)) == source_count - 1, "source transport confirms and consumes one tool")
+			check(Game.validate_save(game.to_dict()).get("ok", false), "source transport result remains save-valid")
+		ui._close_source_inventory()
+		check(Inventory.grant_tool(game.state.inventory_supply, game.state.players[0].tools, "傳送機", 1).get("ok", false), "restore the staged transport test tool for existing UI checks")
+		game.state.players[0].position = 2
+		game.state.players[0].previous_position = -1
 	ui._on_cards_pressed()
 	await process_frame
 	use = ui.cards_popup.find_child("UseTool_傳送機", true, false)

@@ -70,8 +70,9 @@ func run() -> void:
 	await settle()
 	var roadblock_id := int(Catalogue.tool("路障").source_id)
 	var roadblock_panel: Control = ui.source_inventory_panel
-	var roadblock_count := int(game.state.players[0].tools.get("路障", 0))
-	var roadblock_before: String = game.to_json()
+	var roadblock_owner: Object = ui.game_state
+	var roadblock_count := int(roadblock_owner.state.players[0].tools.get("路障", 0))
+	var roadblock_before: String = roadblock_owner.to_json()
 	check(roadblock_panel.is_open() and roadblock_count > 0, "ordinary starting inventory contains a usable roadblock")
 	roadblock_panel.selected.emit(roadblock_id)
 	await settle()
@@ -82,7 +83,7 @@ func run() -> void:
 		roadblock_use.call_deferred("emit_signal", "pressed")
 		ui.cards_popup.hide()
 		await settle()
-		check(roadblock_panel.is_open() and game.to_json() == roadblock_before and int(game.state.players[0].tools.get("路障", 0)) == roadblock_count and not auto_accept_quit, "queued roadblock use is revoked with unchanged effect, quantity, and modal hold")
+		check(roadblock_panel.is_open() and ui.game_state == roadblock_owner and roadblock_owner.to_json() == roadblock_before and int(roadblock_owner.state.players[0].tools.get("路障", 0)) == roadblock_count and not auto_accept_quit, "queued roadblock use is revoked with unchanged effect, quantity, active owner, and modal hold")
 		ui._close_source_inventory()
 		await settle()
 		check(not ui._source_inventory_modal_open() and auto_accept_quit == prior_quit, "roadblock cancellation returns cleanly and restores quit policy")

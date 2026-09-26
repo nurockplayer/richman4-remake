@@ -4531,7 +4531,10 @@ func _source_inventory_selected(source_id: int, panel: Control) -> void:
 	_update_cards_popup()
 	var prefix := "UseCard_" if _inventory_mode == "cards" else "UseTool_"
 	var use: Button = cards_popup_list.find_child(prefix + item_id, true, false)
-	if use == null or use.disabled:
+	var transport_picker: TransportPicker = cards_popup_list.find_child("TransportPicker", true, false)
+	var transport_state := _read_snapshot()
+	var transport_selector_admissible := _inventory_mode == "tools" and item_id == "傳送機" and transport_picker != null and _item_implemented("tool", item_id) and (str(transport_state.get("phase", "")) == "await_roll" or str(transport_state.get("phase", "")) == "await_action") and _has_action_option(_as_array(transport_state.get("action_options", [])), "use_tool") and not _detained_turn_active()
+	if use == null or (use.disabled and not transport_selector_admissible):
 		_append_local_log("目前無法使用%s；持有物品保持不變。" % item_id)
 		_show_source_inventory_list()
 		_refresh_log_only()

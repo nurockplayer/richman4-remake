@@ -14,6 +14,8 @@ from unittest import mock
 import tempfile
 import unittest
 import zlib
+from contextlib import redirect_stderr
+from io import StringIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prepare_inventory_assets as inventory
@@ -47,6 +49,18 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 
 class InventoryAssetTests(unittest.TestCase):
+    def test_main_reports_recovery_note_on_stderr(self):
+        error = inventory.AssetError("injected producer failure")
+        error.add_note("rollback incomplete; recovery material retained at /tmp/recovery-path")
+        stderr = StringIO()
+        arguments = ["prepare_inventory_assets", "--zip", "input.zip", "--output", "output", "--identity", "identity.json", "--base-manifest", "scene.json"]
+        with mock.patch.object(sys, "argv", arguments), mock.patch.object(inventory, "prepare", side_effect=error), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                inventory.main()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("injected producer failure", stderr.getvalue())
+        self.assertIn("/tmp/recovery-path", stderr.getvalue())
+
     def test_prepare_late_second_edition_failure_is_retryable_and_preserves_unrelated_files(self):
         with tempfile.TemporaryDirectory(prefix="fresh-prepare-late-") as temporary:
             fixture = self._prepare_fixture(Path(temporary))
@@ -155,6 +169,56 @@ class InventoryAssetTests(unittest.TestCase):
             manifest = self._run_prepare(fixture)
             self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
             self.assertNotEqual((output / "images" / "base").resolve(), old_base.resolve())
+
+    def test_prepare_incomplete_rollback_retains_backup_and_retry_succeeds(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-prepare-recovery-") as temporary:
+            fixture = self._prepare_fixture(Path(temporary))
+            output = fixture[0].resolve()
+            output.mkdir()
+            (output / "keep.txt").write_bytes(b"untouched")
+            old_base = Path(temporary) / "old-base-entry"
+            old_base.mkdir()
+            (old_base / "marker").write_bytes(b"old base")
+            (output / "images").mkdir()
+            base = output / "images" / "base"
+            base.symlink_to(old_base, target_is_directory=True)
+            (output / "manifest.json").write_bytes(b"old manifest")
+            (output / "scene-manifest.json").write_bytes(b"old scene")
+            (output / "provenance.json").write_bytes(b"old provenance")
+            original_manifest = (output / "manifest.json").read_bytes()
+            original_scene = (output / "scene-manifest.json").read_bytes()
+            real_replace = os.replace
+            failed_restore = False
+
+            def inject_failure(source, target):
+                nonlocal failed_restore
+                source, target = Path(source), Path(target)
+                if source.name == "publication-backup-0" and target == base and not failed_restore:
+                    failed_restore = True
+                    raise OSError("injected base restoration failure")
+                if target == output / "scene-manifest.json" and source.name == "scene-manifest.json":
+                    raise OSError("injected late scene publication failure")
+                return real_replace(source, target)
+
+            with mock.patch.object(os, "replace", side_effect=inject_failure):
+                with self.assertRaisesRegex(OSError, "late scene publication") as caught:
+                    self._run_prepare(fixture)
+            self.assertTrue(failed_restore)
+            self.assertFalse(base.exists() or base.is_symlink())
+            self.assertEqual((output / "manifest.json").read_bytes(), original_manifest)
+            self.assertEqual((output / "scene-manifest.json").read_bytes(), original_scene)
+            self.assertEqual((output / "keep.txt").read_bytes(), b"untouched")
+            diagnostic = str(caught.exception) + " " + " ".join(getattr(caught.exception, "__notes__", []))
+            self.assertIn("recovery material retained at", diagnostic)
+            self.assertIn("publication-backup-0", diagnostic)
+            recovery_text = next(note for note in getattr(caught.exception, "__notes__", []) if "recovery material retained at" in note)
+            recovery = Path(recovery_text.split("recovery material retained at ", 1)[1].split(";", 1)[0])
+            self.assertTrue((recovery / "publication-backup-0").is_symlink())
+            (recovery / "publication-backup-0").rename(base)
+            self.assertEqual(os.readlink(base), str(old_base))
+            shutil.rmtree(recovery)
+            result = self._run_prepare(fixture)
+            self.assertEqual(len(result["resources"]["Game"]["chunks"]), CHUNK_COUNT)
 
     def _prepare_fixture(self, root: Path):
         output, zip_path, identity_path, base_path, identity, visual, archive, _ = self._patch_fixture(root)

@@ -562,7 +562,9 @@ def main() -> int:
         action = patch_existing if args.patch_existing else prepare
         result = action(args.zip_path, args.output, args.identity, args.base_manifest)
     except (AssetError, InputError, FormatError, OSError, KeyError, IndexError, zipfile.BadZipFile) as error:
-        parser.exit(1, f"inventory asset preparation failed: {error}\n")
+        notes = getattr(error, "__notes__", ())
+        details = "".join(f"\n{note}" for note in notes)
+        parser.exit(1, f"inventory asset preparation failed: {error}{details}\n")
     print(f"Prepared bounded Panel11 inventory assets: {sum(len(value['chunks']) for value in result['resources'].values())} chunks")
     return 0
 

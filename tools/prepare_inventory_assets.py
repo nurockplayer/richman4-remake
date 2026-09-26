@@ -126,7 +126,7 @@ def _scene_overlay_resource(
     }
 
 
-def prepare(
+def _prepare_into(
     zip_path: Path,
     output: Path,
     identity_path: Path,
@@ -232,6 +232,67 @@ def prepare(
     provenance_payload = {"schema": "richman4.inventory-assets-provenance/v1", "manifest_sha256": _sha256(output / "manifest.json"), "scene_manifest_sha256": _sha256(output / "scene-manifest.json"), "base_manifest": manifest["base_manifest"], "resources": provenance, "decoder_sha256": identity_document.get("decoder_sha256", ""), "limits": "Only Panel11 chunks 0..16 decoded; existing scene/map/character/font assets referenced by symlink and manifest paths. No caller equivalence or product visual PASS claimed."}
     (output / "provenance.json").write_text(json.dumps(provenance_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
+
+
+def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Path) -> dict:
+    """Generate in a private staging directory, then publish the bounded slice."""
+    output = output.expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(prefix=".inventory-prepare-", dir=output.parent))
+    try:
+        manifest = _prepare_into(zip_path, staged, identity_path, base_manifest)
+        scene = _load_json(staged / "scene-manifest.json")
+        paths: list[str] = []
+        def collect(value):
+            if isinstance(value, dict):
+                for item in value.values(): collect(item)
+            elif isinstance(value, list):
+                for item in value: collect(item)
+            elif isinstance(value, str) and value.startswith("images/"):
+                paths.append(value)
+        collect(scene)
+        missing = [item for item in paths if not (staged / item).is_file()]
+        if missing:
+            raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
+        # Detect all owner PNG collisions before the first write to output.
+        staged_pngs = [staged / record["path"] for value in manifest["resources"].values() for record in value["chunks"].values()]
+        targets = [(source, output / source.relative_to(staged)) for source in staged_pngs]
+        collisions = [target for _, target in targets if target.exists() or target.is_symlink()]
+        if collisions:
+            raise AssetError(f"output collision: {collisions[0].relative_to(output).as_posix()}")
+        output.mkdir(parents=True, exist_ok=True)
+        # Keep an existing base link intact; otherwise publish the composed one.
+        staged_base = staged / "images" / "base"
+        base_target = output / "images" / "base"
+        publish_base = not (base_target.exists() or base_target.is_symlink())
+        metadata = [staged / name for name in ("manifest.json", "scene-manifest.json", "provenance.json")]
+        metadata_targets = [output / path.name for path in metadata]
+        originals = {path: path.read_bytes() for path in metadata_targets if path.is_file() and not path.is_symlink()}
+        published = []
+        try:
+            for source, target in targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(target)
+                published.append(target)
+            if publish_base:
+                base_target.parent.mkdir(parents=True, exist_ok=True)
+                staged_base.replace(base_target)
+                published.append(base_target)
+            for source, target in zip(metadata, metadata_targets):
+                source.replace(target)
+                published.append(target)
+        except BaseException:
+            for path in reversed(published):
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    shutil.rmtree(path)
+            for path, data in originals.items():
+                path.write_bytes(data)
+            raise
+        return manifest
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
 
 
 def _write_json(path: Path, value: dict) -> None:

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import struct
+import shutil
 import subprocess
 import sys
 from unittest import mock
@@ -46,6 +47,81 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 
 class InventoryAssetTests(unittest.TestCase):
+    def test_prepare_late_second_edition_failure_is_retryable_and_preserves_unrelated_files(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-prepare-late-") as temporary:
+            fixture = self._prepare_fixture(Path(temporary))
+            output = fixture[0]
+            output.mkdir()
+            (output / "keep.txt").write_bytes(b"owner data")
+            before = self._snapshot(output)
+            with self.assertRaises(inventory.AssetError):
+                self._run_prepare(fixture, bad_second=True)
+            self.assertEqual(self._snapshot(output), before)
+            manifest = self._run_prepare(fixture)
+            self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+            self.assertEqual((output / "keep.txt").read_bytes(), b"owner data")
+
+    def test_prepare_base_link_and_publication_failures_leave_output_unchanged(self):
+        for failure in ("link", "publish"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix="fresh-prepare-fail-") as temporary:
+                fixture = self._prepare_fixture(Path(temporary))
+                output = fixture[0]
+                output.mkdir()
+                (output / "keep.txt").write_bytes(b"kept")
+                before = self._snapshot(output)
+                with self.assertRaises(OSError):
+                    self._run_prepare(fixture, fail_link=failure == "link", fail_png=0 if failure == "publish" else None)
+                self.assertEqual(self._snapshot(output), before)
+
+    def test_prepare_refuses_existing_panel_png_without_touching_unrelated_files(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-prepare-collision-") as temporary:
+            fixture = self._prepare_fixture(Path(temporary))
+            output = fixture[0]
+            collision = output / "images" / EDITIONS[0] / "ui" / "Panel" / "11" / "0.png"
+            collision.parent.mkdir(parents=True)
+            collision.write_bytes(b"owner png")
+            (output / "other.txt").write_bytes(b"unrelated")
+            before = self._snapshot(output)
+            with self.assertRaisesRegex(inventory.AssetError, "output collision"):
+                self._run_prepare(fixture)
+            self.assertEqual(self._snapshot(output), before)
+
+    def _prepare_fixture(self, root: Path):
+        output, zip_path, identity_path, base_path, identity, visual, archive, _ = self._patch_fixture(root)
+        # This mode starts with an output that has unrelated content but no
+        # Panel11 files, matching an accepted first-generation destination.
+        shutil.rmtree(output)
+        source = base_path.parent
+        for edition in EDITIONS:
+            for kind in ("map", "character", "ui"):
+                path = source / "images" / edition / kind / "base.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"{edition}:{kind}".encode())
+        base_path.write_text(json.dumps({"schema": "richman4.scene-images/v1", "maps": [{"path": f"images/{e}/map/base.png"} for e in EDITIONS], "characters": {e: {"path": f"images/{e}/character/base.png"} for e in EDITIONS}, "ui": {e: {"Panel": {"resources": {"3": {"chunks": {"0": {"path": f"images/{e}/ui/base.png"}}}}}} for e in EDITIONS}}), encoding="utf-8")
+        identity_path.write_text("{}", encoding="utf-8")
+        return output, zip_path, identity_path, base_path, identity, visual, archive
+
+    @staticmethod
+    def _run_prepare(fixture, *, bad_second=False, fail_png=None, fail_link=False):
+        output, zip_path, identity_path, base_path, identity, visual, archive = fixture
+        identity = {key: dict(value) for key, value in identity.items()}
+        if bad_second:
+            identity[(EDITIONS[1], RESOURCE_INDEX)]["archive_sha256"] = "wrong"
+        def write(path, chunk, *_args, **_kwargs):
+            if fail_png == chunk.index:
+                raise OSError("injected PNG publication failure")
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_bytes(b"tiny-png:" + chunk.pixels)
+        ensure = mock.Mock(side_effect=OSError("injected base-link failure")) if fail_link else inventory._ensure_base_link
+        with mock.patch.object(inventory.zipfile, "ZipFile", archive), \
+             mock.patch.object(inventory, "_load_identity", return_value=identity), \
+             mock.patch.object(inventory, "parse_mkf", side_effect=lambda path, data: SimpleNamespace(entries=[object()] * CHUNK_COUNT, edition=Path(path).parts[-2])), \
+             mock.patch.object(inventory, "decode_entry", side_effect=lambda mkf, entry: f"payload:{mkf.edition}".encode()), \
+             mock.patch.object(inventory, "parse_visual_resource", return_value=visual), \
+             mock.patch.object(inventory, "write_png", side_effect=write), \
+             mock.patch.object(inventory, "_ensure_base_link", side_effect=ensure):
+            return inventory.prepare(zip_path, output, identity_path, base_path)
+
     def _patch_fixture(self, root: Path):
         """Create only the tiny files that patch_existing owns or references."""
         output = root / "inventory"

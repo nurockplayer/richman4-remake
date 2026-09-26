@@ -20,7 +20,15 @@ func run() -> void:
 		return
 	for edition in ["Game", "MultiverseJourney"]:
 		var definition := find_map(ui, edition, 1 if edition == "Game" else 7)
+		var requested_map_number := 1 if edition == "Game" else 7
+		var requested_source: Variant = definition.get("source", {})
+		check(not definition.is_empty(), "requested catalog definition exists before factory: %s/%d" % [edition, requested_map_number])
+		check(requested_source is Dictionary and str(requested_source.get("edition", "")) == edition and int(requested_source.get("map_number", -1)) == requested_map_number, "requested definition source metadata matches %s/%d before factory" % [edition, requested_map_number])
+		if definition.is_empty() or not (requested_source is Dictionary):
+			continue
 		check(ui._new_game(160,4,definition,ui._default_setup_options(4,definition)), "actual catalog-derived game starts: " + edition)
+		var active_source: Variant = ui._active_map_definition.get("source", {})
+		check(active_source is Dictionary and str(active_source.get("edition", "")) == edition and int(active_source.get("map_number", -1)) == requested_map_number, "factory activates requested catalog map %s/%d" % [edition, requested_map_number])
 		check(ui._has_original_inventory(), "actual catalogue enables source inventory")
 		await settle()
 		for mode in ["cards", "tools"]:

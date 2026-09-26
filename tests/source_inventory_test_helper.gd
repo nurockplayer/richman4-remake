@@ -31,7 +31,8 @@ func make_ui(parent: Node) -> Variant:
 
 func find_map(ui: Control, edition: String, source_id: int) -> Dictionary:
 	for value in ui._map_catalog:
-		if str(value.get("edition", "")) == edition and int(value.get("source_map_id", -1)) == source_id:
+		var source: Variant = value.get("source", {})
+		if source is Dictionary and str(source.get("edition", "")) == edition and int(source.get("map_number", -1)) == source_id:
 			return value
 	return {}
 

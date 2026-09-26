@@ -25,14 +25,18 @@ func run() -> void:
 	if edition.is_empty(): edition = "Game"
 	var definition: Dictionary = {}
 	var source_map_number := 1 if edition == "Game" else 7
-	for candidate in ui._map_catalog:
-		var candidate_source: Variant = candidate.get("source", {})
-		if candidate_source is Dictionary and str(candidate_source.get("edition", "")) == edition and int(candidate_source.get("map_number", -1)) == source_map_number:
-			definition = candidate
-			break
+	definition = find_map(ui, edition, source_map_number)
+	check(not definition.is_empty(), "requested catalog map exists before factory: %s/%d" % [edition, source_map_number])
+	var requested_source: Variant = definition.get("source", {})
+	check(requested_source is Dictionary and str(requested_source.get("edition", "")) == edition and int(requested_source.get("map_number", -1)) == source_map_number, "requested definition metadata matches %s/%d before factory" % [edition, source_map_number])
+	if definition.is_empty() or not (requested_source is Dictionary):
+		quit(1)
+		return
 	var setup_options: Dictionary = ui._default_setup_options(4,definition)
 	setup_options["original_hazards"] = true
 	check(ui._new_game(160,4,definition,setup_options), "actual factory for legal held-item fixtures")
+	var active_source: Variant = ui._active_map_definition.get("source", {})
+	check(active_source is Dictionary and str(active_source.get("edition", "")) == edition and int(active_source.get("map_number", -1)) == source_map_number, "factory activates requested source map %s/%d" % [edition, source_map_number])
 	var game: Object = ui.game_state
 	var actor: Dictionary = game.state.players[0]
 	for card in ["免費","停留","均富"]:

@@ -196,6 +196,9 @@ func _test_lifetime_persistence() -> void:
 			"gift": bad.shop_visit.gift = {"item_kind":"card","item_id":"missing"}
 			"phase": bad.phase = "await_action"
 		check(Core.from_dict(bad) == null,"malformed visit rejected: " + mutate)
+	var missing_closed := before.duplicate(true)
+	missing_closed.shop_visit.erase("closed")
+	check(Core.from_dict(missing_closed) == null,"malformed visit missing closed flag is rejected")
 	var mismatched_open_actor := before.duplicate(true)
 	mismatched_open_actor.players[0].is_ai = true
 	mismatched_open_actor.players[0].is_human = false
@@ -215,8 +218,12 @@ func _test_lifetime_persistence() -> void:
 	Shop.admit(game,0)
 	check(game.to_dict() == before,"same-visit reopen cannot replenish offers or gift")
 	valid(game,"closed visit")
+	var closed_await_shop: Dictionary = game.to_dict()
+	closed_await_shop.phase = "await_shop"
+	check(Core.from_dict(closed_await_shop) == null,"closed visit cannot restore into shop phase")
 	_test_closed_visit_actor_history(game)
 	_test_closed_visit_post_close_actions(game)
+	_test_closed_visit_pending_card_response()
 	check(game.end_turn().ok,"closed visit returns to ordinary turn continuation")
 	valid(game,"after shop turn")
 
@@ -257,6 +264,19 @@ func _test_closed_visit_post_close_actions(game: Object) -> void:
 	valid(game,"closed visit after revenge movement")
 	var restored: Object = Core.from_dict(JSON.parse_string(game.to_json()))
 	check(restored != null and restored.state.players[0].position == game.state.players[0].position and restored.state.shop_visit == visit,"JSON round trip preserves moved actor and closed visit history")
+
+func _test_closed_visit_pending_card_response() -> void:
+	var game := game_at_shop()
+	var visit_id := int(game.state.shop_visit.visit_id)
+	check(game.leave_shop(visit_id).ok,"response fixture closes source shop")
+	var visit: Dictionary = game.state.shop_visit.duplicate(true)
+	check(game.set_player_ai(1,false),"post-close response fixture enables human opponent")
+	check(Inventory.grant_card(game.state.inventory_supply,game.state.players[0].cards,"夢遊").ok,"post-close response fixture grants dream card")
+	check(Inventory.grant_card(game.state.inventory_supply,game.state.players[1].cards,"嫁禍").ok,"post-close response fixture grants opponent redirect card")
+	var pending: Dictionary = game.choose_action("use_card",{"card_id":"夢遊","target_id":1})
+	check(pending.get("ok",false) and pending.get("awaiting_response",false),"post-close card action reaches opponent response")
+	check(game.state.shop_visit == visit and game.state.phase == "await_action" and game.state.action_options == ["respond_trap"],"closed visit permits ordinary pending card response phase")
+	valid(game,"closed visit during pending card response")
 
 func _test_commercial_gift_ai() -> void:
 	var game := game_at_shop(22,true,false)

@@ -223,11 +223,12 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	var player: Variant = players[int(visit.player_id)]
 	var tile: Variant = board[int(visit.node_id)]
 	if not player is Dictionary or not tile is Dictionary or not _integer(visit.get("turn"), 1, 1000000000) or not _integer(data.get("turn"), int(visit.turn), int(visit.turn)) or not _integer(data.get("current_player"), int(visit.player_id), int(visit.player_id)) or not bool(player.get("alive", false)) or not _integer(tile.get("event_code"), 15, 15): return ["stale source shop owner"]
+	for key in ["human", "closed", "gift_pending"]:
+		if typeof(visit.get(key)) != TYPE_BOOL: return ["invalid source shop flag"]
+	if bool(visit.closed) and data.get("phase") == "await_shop": return ["closed source shop in pending phase"]
 	# A closed visit is immutable accounting/replay history. Ordinary actions
 	# after EXIT can move the actor or advance the phase without reopening it.
 	if not bool(visit.closed) and not _integer(player.get("position"), int(visit.node_id), int(visit.node_id)): return ["stale source shop owner"]
-	for key in ["human", "closed", "gift_pending"]:
-		if typeof(visit.get(key)) != TYPE_BOOL: return ["invalid source shop flag"]
 	if not bool(visit.closed) and bool(visit.human) != (bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))): return ["source shop actor mismatch"]
 	if not bool(visit.closed) and data.get("phase") != "await_shop": return ["source shop phase mismatch"]
 	if not _integer(visit.get("contribution"), 0, LIMIT) or not visit.get("gift") is Dictionary: return ["invalid source shop contribution or gift"]

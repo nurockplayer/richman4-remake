@@ -44,6 +44,37 @@ class AssetError(ValueError):
     """A private source or output does not satisfy the bounded contract."""
 
 
+def _preflight_destination(output: Path, relative: str | Path, *, allow_leaf_symlink: bool = False) -> Path:
+    """Validate an owned destination without following a redirected parent."""
+    relative = Path(relative)
+    if relative.is_absolute() or not relative.parts or any(part in ("", ".", "..") for part in relative.parts):
+        raise AssetError(f"unsafe publication destination: {relative}")
+    root = output.resolve()
+    target = root / relative
+    current = root
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise AssetError(f"publication parent is a symlink: {current}")
+        if current.exists() and not current.is_dir():
+            raise AssetError(f"publication parent is not a directory: {current}")
+    resolved_parent = target.parent.resolve()
+    if resolved_parent != root and root not in resolved_parent.parents:
+        raise AssetError(f"publication destination escapes output root: {relative}")
+    if target.is_symlink() and not allow_leaf_symlink:
+        raise AssetError(f"publication destination is a symlink: {relative}")
+    return target
+
+
+def _preflight_write_set(output: Path, destinations: list[tuple[str | Path, bool]]) -> list[Path]:
+    """Check all owned writes and reject aliases before the first live change."""
+    targets = [_preflight_destination(output, relative, allow_leaf_symlink=allow_link) for relative, allow_link in destinations]
+    resolved = [target.resolve(strict=False) for target in targets]
+    if len(set(resolved)) != len(resolved):
+        raise AssetError("publication write set contains aliased destinations")
+    return targets
+
+
 def _rewrite_base_paths(value):
     """Repoint existing scene image records through the private base link."""
 
@@ -255,17 +286,21 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         missing = [item for item in paths if not (staged / item).is_file()]
         if missing:
             raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
-        # Detect all owner PNG collisions before the first write to output.
+        # Validate the complete owned write set before moving any live entry.
         staged_pngs = [staged / record["path"] for value in manifest["resources"].values() for record in value["chunks"].values()]
-        targets = [(source, output / source.relative_to(staged)) for source in staged_pngs]
+        destinations = [source.relative_to(staged) for source in staged_pngs]
+        destinations.extend(Path(name) for name in ("images/base", "manifest.json", "scene-manifest.json", "provenance.json"))
+        allow_leaf_links = {"images/base", "manifest.json", "scene-manifest.json", "provenance.json"}
+        owned_targets = _preflight_write_set(output, [(path, path.as_posix() in allow_leaf_links) for path in destinations])
+        targets = list(zip(staged_pngs, owned_targets[:len(staged_pngs)]))
         collisions = [target for _, target in targets if target.exists() or target.is_symlink()]
         if collisions:
             raise AssetError(f"output collision: {collisions[0].relative_to(output).as_posix()}")
         output.mkdir(parents=True, exist_ok=True)
         staged_base = staged / "images" / "base"
-        base_target = output / "images" / "base"
+        base_target = owned_targets[len(staged_pngs)]
         metadata = [staged / name for name in ("manifest.json", "scene-manifest.json", "provenance.json")]
-        metadata_targets = [output / path.name for path in metadata]
+        metadata_targets = owned_targets[len(staged_pngs) + 1:]
         # Move old producer-owned entries aside on the same filesystem. This
         # preserves regular files, directories, and symlinks without copying.
         backups: list[tuple[Path, Path]] = []
@@ -413,6 +448,18 @@ def patch_existing(
         if set(chunks) != {str(index) for index in range(CHUNK_COUNT)}:
             raise AssetError(f"existing manifest has an unexpected Panel11 {edition} chunk set")
 
+    destinations: list[tuple[str | Path, bool]] = []
+    for edition in EDITIONS:
+        for index in (15, 16):
+            canonical = f"images/{edition}/ui/{ARCHIVE_KEY}/{RESOURCE_INDEX}/{index}.png"
+            inventory_path = manifest["resources"][edition]["chunks"][str(index)].get("path")
+            scene_record_path = panel_resources[edition]["chunks"][str(index)].get("path")
+            if inventory_path != canonical or scene_record_path != canonical:
+                raise AssetError(f"Panel11 {edition} chunk {index} destination is not canonical")
+            destinations.append((canonical, False))
+    destinations.extend((("images/base", True), ("manifest.json", True), ("scene-manifest.json", True), ("provenance.json", True)))
+    _preflight_write_set(output, destinations)
+
     # Build all candidates and metadata before touching published files. The
     # only staged image data is the four small vehicle PNGs.
     staged_root = Path(tempfile.mkdtemp(prefix=".inventory-patch-", dir=output))
@@ -441,7 +488,7 @@ def patch_existing(
                 if hashlib.sha256(chunk.pixels).hexdigest() != expected_chunk["pixel_data_sha256"]:
                     raise AssetError(f"{member}: Panel11 chunk {index} pixels differ from pinned identity")
                 record = manifest["resources"][edition]["chunks"][str(index)]
-                target = output / record["path"]
+                target = _preflight_destination(output, record["path"])
                 if not target.is_file() or target.is_symlink():
                     raise AssetError(f"existing Panel11 output is unavailable: {record['path']}")
                 staged = staged_root / f"{edition}-{index}.png"

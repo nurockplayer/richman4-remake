@@ -355,6 +355,106 @@ class InventoryAssetTests(unittest.TestCase):
                 self._run_mock_patch(fixture, bad_second=True)
             self.assertEqual(self._snapshot(fixture[0]), before)
 
+    def test_patch_preflight_rejects_redirected_panel_parent_before_any_publication_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="asset-destination-preflight-") as temporary:
+            root = Path(temporary)
+            fixture = self._patch_fixture(root)
+            output = fixture[0]
+            canonical = output / "images" / "Game" / "ui" / "Panel" / "11"
+            external = root / "outside-panel"
+            external.mkdir()
+            for index in range(CHUNK_COUNT):
+                (external / f"{index}.png").write_bytes(f"outside:{index}".encode())
+            shutil.rmtree(canonical)
+            canonical.symlink_to(external, target_is_directory=True)
+            old_base = os.readlink(output / "images" / "base")
+            manifest_before = (output / "manifest.json").read_bytes()
+            scene_before = (output / "scene-manifest.json").read_bytes()
+            external_before = {path.name: (path.read_bytes(), path.is_symlink()) for path in external.iterdir()}
+            with self.assertRaises(inventory.AssetError):
+                self._run_mock_patch(fixture)
+            self.assertEqual({path.name: (path.read_bytes(), path.is_symlink()) for path in external.iterdir()}, external_before)
+            self.assertEqual((output / "manifest.json").read_bytes(), manifest_before)
+            self.assertEqual((output / "scene-manifest.json").read_bytes(), scene_before)
+            self.assertEqual(os.readlink(output / "images" / "base"), old_base)
+            canonical.unlink()
+            canonical.mkdir()
+            for index in range(CHUNK_COUNT):
+                (canonical / f"{index}.png").write_bytes(f"original:Game:{index}".encode())
+            manifest = self._run_mock_patch(fixture)
+            self.assertEqual((canonical / "15.png").read_bytes(), b"new-png:pixels:15")
+            self.assertEqual(manifest["resources"]["Game"]["chunks"]["15"]["path"], "images/Game/ui/Panel/11/15.png")
+
+    def test_patch_preflight_rejects_noncanonical_paths_without_mutation_and_retries(self):
+        for traversal in ("../outside.png",):
+            with self.subTest(destination=traversal), tempfile.TemporaryDirectory(prefix="asset-destination-path-") as temporary:
+                root = Path(temporary)
+                fixture = self._patch_fixture(root)
+                output = fixture[0]
+                outside = root / "outside.png"
+                outside.write_bytes(b"outside sentinel")
+                for destination in (traversal, str(outside.resolve())):
+                    with self.subTest(destination=destination):
+                        original_manifest = json.loads((output / "manifest.json").read_text())
+                        original_manifest["resources"]["Game"]["chunks"]["15"]["path"] = destination
+                        manifest_path = output / "manifest.json"
+                        manifest_path.write_text(json.dumps(original_manifest))
+                        manifest_before = manifest_path.read_bytes()
+                        scene_before = (output / "scene-manifest.json").read_bytes()
+                        base_entry = output / "images" / "base"
+                        old_base = os.readlink(base_entry) if base_entry.is_symlink() else None
+                        with self.assertRaises(inventory.AssetError):
+                            self._run_mock_patch(fixture)
+                        self.assertEqual(outside.read_bytes(), b"outside sentinel")
+                        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+                        self.assertEqual((output / "scene-manifest.json").read_bytes(), scene_before)
+                        self.assertEqual(os.readlink(base_entry) if base_entry.is_symlink() else None, old_base)
+                        original_manifest["resources"]["Game"]["chunks"]["15"]["path"] = "images/Game/ui/Panel/11/15.png"
+                        manifest_path.write_text(json.dumps(original_manifest))
+                        self._run_mock_patch(fixture)
+
+    def test_patch_preflight_requires_scene_and_inventory_to_name_same_canonical_png(self):
+        with tempfile.TemporaryDirectory(prefix="asset-destination-record-") as temporary:
+            fixture = self._patch_fixture(Path(temporary))
+            output = fixture[0]
+            scene_path = output / "scene-manifest.json"
+            scene = json.loads(scene_path.read_text())
+            scene["ui"]["Game"]["Panel"]["resources"]["11"]["chunks"]["15"]["path"] = "images/Game/ui/Panel/11/16.png"
+            scene_path.write_text(json.dumps(scene))
+            before = self._snapshot(output)
+            with self.assertRaises(inventory.AssetError):
+                self._run_mock_patch(fixture)
+            self.assertEqual(self._snapshot(output), before)
+            scene["ui"]["Game"]["Panel"]["resources"]["11"]["chunks"]["15"]["path"] = "images/Game/ui/Panel/11/15.png"
+            scene_path.write_text(json.dumps(scene))
+            manifest = self._run_mock_patch(fixture)
+            scene_after = json.loads(scene_path.read_text())
+            record = scene_after["ui"]["Game"]["Panel"]["resources"]["11"]["chunks"]["15"]
+            self.assertEqual(record["path"], "images/Game/ui/Panel/11/15.png")
+            self.assertEqual(record["sha256"], inventory._sha256(output / record["path"]))
+            self.assertEqual(manifest["resources"]["Game"]["chunks"]["15"]["sha256"], record["sha256"])
+
+    def test_prepare_preflight_rejects_images_parent_symlink_before_publication_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-destination-preflight-") as temporary:
+            root = Path(temporary)
+            fixture = self._prepare_fixture(root)
+            output = fixture[0]
+            output.mkdir()
+            outside = root / "outside-images"
+            outside.mkdir()
+            sentinel = outside / "sentinel"
+            sentinel.write_bytes(b"outside data")
+            (output / "images").symlink_to(outside, target_is_directory=True)
+            before_link = os.readlink(output / "images")
+            with self.assertRaises(inventory.AssetError):
+                self._run_prepare(fixture)
+            self.assertEqual(sentinel.read_bytes(), b"outside data")
+            self.assertEqual(os.readlink(output / "images"), before_link)
+            self.assertEqual(list(outside.iterdir()), [sentinel])
+            (output / "images").unlink()
+            manifest = self._run_prepare(fixture)
+            self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
     def test_patch_existing_base_link_failure_restores_original_link_and_bytes(self):
         with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))

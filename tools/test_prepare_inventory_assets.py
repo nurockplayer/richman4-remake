@@ -50,7 +50,7 @@ class InventoryAssetTests(unittest.TestCase):
     def test_prepare_late_second_edition_failure_is_retryable_and_preserves_unrelated_files(self):
         with tempfile.TemporaryDirectory(prefix="fresh-prepare-late-") as temporary:
             fixture = self._prepare_fixture(Path(temporary))
-            output = fixture[0]
+            output = fixture[0].resolve()
             output.mkdir()
             (output / "keep.txt").write_bytes(b"owner data")
             before = self._snapshot(output)
@@ -85,6 +85,76 @@ class InventoryAssetTests(unittest.TestCase):
             with self.assertRaisesRegex(inventory.AssetError, "output collision"):
                 self._run_prepare(fixture)
             self.assertEqual(self._snapshot(output), before)
+
+    def test_prepare_repoints_stale_base_and_preserves_unrelated_output(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-prepare-stale-base-") as temporary:
+            fixture = self._prepare_fixture(Path(temporary))
+            output, _, _, base_manifest = fixture[:4]
+            output.mkdir()
+            (output / "keep.txt").write_bytes(b"unrelated")
+            old_base = Path(temporary) / "old-base-entry"
+            old_base.mkdir()
+            (old_base / "stale").write_bytes(b"stale")
+            (output / "images").mkdir()
+            (output / "images" / "base").symlink_to(old_base, target_is_directory=True)
+
+            manifest = self._run_prepare(fixture)
+            scene = json.loads((output / "scene-manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual((output / "keep.txt").read_bytes(), b"unrelated")
+            self.assertTrue((output / "images" / "base").is_dir())
+            self.assertFalse((output / "images" / "base").resolve() == old_base.resolve())
+            self.assertTrue((base_manifest.parent / "images" / "Game" / "map" / "base.png").is_file())
+            for record in scene["maps"]:
+                self.assertTrue((output / record["path"]).is_file(), record["path"])
+            self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
+    def test_prepare_late_publication_failure_restores_entries_and_retry_succeeds(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-prepare-rollback-") as temporary:
+            fixture = self._prepare_fixture(Path(temporary))
+            output = fixture[0].resolve()
+            output.mkdir()
+            (output / "keep.txt").write_bytes(b"untouched")
+            old_base = Path(temporary) / "old-base-entry"
+            old_base.mkdir()
+            (old_base / "marker").write_bytes(b"old base")
+            (output / "images").mkdir()
+            (output / "images" / "base").symlink_to(old_base, target_is_directory=True)
+            metadata_target = Path(temporary) / "original-manifest.json"
+            metadata_target.write_bytes(b"original manifest bytes")
+            (output / "manifest.json").symlink_to(metadata_target)
+            (output / "scene-manifest.json").write_bytes(b"old scene bytes")
+            (output / "provenance.json").write_bytes(b"old provenance bytes")
+            before = self._snapshot(output)
+            real_replace = os.replace
+            observed_live_change = False
+            injected = False
+
+            def fail_at_scene_publication(source, target):
+                nonlocal observed_live_change, injected
+                source = Path(source)
+                target = Path(target)
+                if target.name == "scene-manifest.json" and target.parent.resolve() == output and not injected:
+                    injected = True
+                    observed_live_change = (
+                        (output / "images" / "Game" / "ui" / "Panel" / "11" / "0.png").read_bytes().startswith(b"tiny-png:")
+                        and (output / "images" / "base").resolve() != old_base.resolve()
+                        and (output / "manifest.json").is_file()
+                        and (output / "manifest.json").read_bytes() != b"original manifest bytes"
+                    )
+                    raise OSError("injected late scene publication failure")
+                return real_replace(source, target)
+
+            with mock.patch.object(os, "replace", fail_at_scene_publication):
+                with self.assertRaisesRegex(OSError, "late scene publication"):
+                    self._run_prepare(fixture)
+            self.assertTrue(observed_live_change, "failure seam must occur after live PNG/base/manifest changes")
+            self.assertEqual(self._snapshot(output), before)
+            self.assertTrue((output / "manifest.json").is_symlink())
+            self.assertEqual(os.readlink(output / "manifest.json"), str(metadata_target))
+            self.assertEqual(metadata_target.read_bytes(), b"original manifest bytes")
+            manifest = self._run_prepare(fixture)
+            self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+            self.assertNotEqual((output / "images" / "base").resolve(), old_base.resolve())
 
     def _prepare_fixture(self, root: Path):
         output, zip_path, identity_path, base_path, identity, visual, archive, _ = self._patch_fixture(root)

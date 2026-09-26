@@ -11,6 +11,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -261,34 +262,43 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         if collisions:
             raise AssetError(f"output collision: {collisions[0].relative_to(output).as_posix()}")
         output.mkdir(parents=True, exist_ok=True)
-        # Keep an existing base link intact; otherwise publish the composed one.
         staged_base = staged / "images" / "base"
         base_target = output / "images" / "base"
-        publish_base = not (base_target.exists() or base_target.is_symlink())
         metadata = [staged / name for name in ("manifest.json", "scene-manifest.json", "provenance.json")]
         metadata_targets = [output / path.name for path in metadata]
-        originals = {path: path.read_bytes() for path in metadata_targets if path.is_file() and not path.is_symlink()}
-        published = []
+        # Move old producer-owned entries aside on the same filesystem. This
+        # preserves regular files, directories, and symlinks without copying.
+        backups: list[tuple[Path, Path]] = []
+        published: list[Path] = []
         try:
+            for index, target in enumerate([base_target, *metadata_targets]):
+                if target.exists() or target.is_symlink():
+                    backup = staged / f"publication-backup-{index}"
+                    os.replace(target, backup)
+                    backups.append((backup, target))
             for source, target in targets:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                source.replace(target)
+                os.replace(source, target)
                 published.append(target)
-            if publish_base:
-                base_target.parent.mkdir(parents=True, exist_ok=True)
-                staged_base.replace(base_target)
-                published.append(base_target)
+            base_target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staged_base, base_target)
+            published.append(base_target)
             for source, target in zip(metadata, metadata_targets):
-                source.replace(target)
+                os.replace(source, target)
                 published.append(target)
         except BaseException:
             for path in reversed(published):
                 if path.is_symlink() or path.is_file():
-                    path.unlink()
+                    path.unlink(missing_ok=True)
                 elif path.is_dir():
                     shutil.rmtree(path)
-            for path, data in originals.items():
-                path.write_bytes(data)
+            for backup, target in reversed(backups):
+                if target.exists() or target.is_symlink():
+                    if target.is_dir() and not target.is_symlink():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                os.replace(backup, target)
             raise
         return manifest
     finally:

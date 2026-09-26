@@ -39,6 +39,8 @@ func run() -> void:
 	_test_capacity_supply()
 	_test_lifetime_persistence()
 	_test_commercial_gift_ai()
+	_test_terminal_admission_guard()
+	_test_terminal_movement_admission()
 	ui.queue_free()
 	await settle()
 	print("Source shop core checks: %d, failures: %d" % [checks,failures])
@@ -103,6 +105,83 @@ func _test_composed_poor_god_shop_closure() -> void:
 					var next_result: Dictionary = game.run_ai_turn()
 					var replay_result: Dictionary = restored.run_ai_turn()
 					check(next_result.get("ok", false) and replay_result.get("ok", false) and game.to_json() == restored.to_json(), prefix + "post-handoff continuation matches its JSON-restored replay")
+
+func _test_terminal_movement_admission() -> void:
+	var fixture_definition: Dictionary = definition.duplicate(true)
+	var shop_node := -1
+	for tile in fixture_definition.get("board", []):
+		if tile is Dictionary and (tile.has("company_node_index") or int(tile.get("source_company_id", 0)) > 0):
+			shop_node = int(tile.index)
+			tile.event_code = 15
+			tile.source_status_bits = (int(tile.get("source_status_bits", 0)) & ~0xff) | 15
+			break
+	check(shop_node >= 0, "v7 terminal recipe finds a company shop node")
+	if shop_node < 0: return
+	var v7: Dictionary = options.duplicate(true)
+	for key in ["original_inventory","original_facilities","original_gods","original_companies"]: v7[key] = true
+	for key in ["original_statuses","original_hazards","original_property_cards","original_remodel","original_research","original_building_cards"]: v7[key] = false
+	if v7.get("character_ids", []) is Array: v7.character_ids = v7.character_ids.slice(0,2)
+	var game: Object = Core.new_game_on_board(19833,2,fixture_definition,v7)
+	check(game != null, "v7 terminal movement game starts without hazards")
+	if game == null: return
+	var shop_tile: Dictionary = game._tile_at(shop_node)
+	var predecessor := int(shop_tile.adjacent[0]) if not shop_tile.get("adjacent", []).is_empty() else -1
+	if predecessor < 0: return
+	var prior := -1
+	for neighbor in game._tile_at(predecessor).get("adjacent", []):
+		if int(neighbor) != shop_node:
+			prior = int(neighbor)
+			break
+	check(prior >= 0, "v7 terminal movement fixture has a previous node")
+	if prior < 0: return
+	# Reduce only the moving actor's outbound choices while keeping the two
+	# traversed edges reciprocal and valid.
+	for tile_index in range(game.state.board.size()):
+		var tile_value: Dictionary = game.state.board[tile_index]
+		var edges: Array = tile_value.get("adjacent", [])
+		if tile_index == predecessor:
+			tile_value.adjacent = [shop_node, prior]
+		elif tile_index == shop_node:
+			tile_value.adjacent = [predecessor]
+		elif tile_index != prior:
+			var kept: Array = []
+			for edge in edges:
+				if int(edge) != predecessor and int(edge) != shop_node: kept.append(edge)
+			tile_value.adjacent = kept
+	var actor: Dictionary = game.state.players[0]
+	actor.position = predecessor
+	actor.previous_position = prior
+	actor.attached_god_id = 0
+	var rival: Dictionary = game.state.players[1]
+	game.state.bank.deposits -= int(rival.deposit)
+	rival.deposit = 0
+	rival.cash = 0
+	rival.attached_god_id = 0
+	game.state.god_objects = [{"id":1,"owner":-1,"node":shop_node,"days":0}]
+	game.state.phase = "await_roll"
+	check(Inventory.grant_tool(game.state.inventory_supply,actor.tools,"遙控骰子",1).ok, "v7 terminal fixture grants legal remote dice")
+	game._set_action_options(0)
+	var precheck: Dictionary = Core.validate_save(game.to_dict())
+	check(precheck.get("ok",false), "v7 terminal remote-dice prestate is valid " + str(precheck.get("errors",[])))
+	var scheduled: Dictionary = game.choose_action("use_tool",{"tool_id":"遙控骰子","value":1})
+	check(scheduled.get("ok",false), "public remote-dice command schedules value one")
+	var rolled: Dictionary = game.roll()
+	check(rolled.get("ok",false), "public remote-dice roll reaches the final opponent's bankruptcy")
+	var terminal: Dictionary = game.to_dict()
+	check(terminal.phase == "game_over" and int(terminal.winner) == 0, "terminal roll preserves the moving human as winner")
+	check(terminal.shop_visit.is_empty() and int(terminal.shop_sequence) == 0, "terminal landing does not open a visit or advance shop admission sequence")
+	var terminal_check: Dictionary = Core.validate_save(terminal)
+	check(terminal_check.get("ok",false), "terminal public state validates after shop admission guard " + str(terminal_check.get("errors",[])))
+	var restored: Object = Core.from_dict(JSON.parse_string(game.to_json()))
+	check(restored != null and restored.state.phase == "game_over" and int(restored.state.winner) == 0 and restored.shop_visit_snapshot().is_empty(), "terminal public JSON restore keeps winner and has no open shop visit")
+
+func _test_terminal_admission_guard() -> void:
+	var game: Object = game_at_shop(8821, true, false)
+	game.state.phase = "game_over"
+	game.state.winner = 0
+	var before: Dictionary = game.to_dict()
+	check(not Shop.admit(game, 0), "terminal source shop admission is rejected")
+	check(game.to_dict() == before, "terminal admission rejection leaves RNG, sequence, gift, visit, events and accounting unchanged")
 
 func game_at_shop(seed_value: int = 162, human: bool = true, admit: bool = true) -> Object:
 	var setup := options.duplicate(true)

@@ -72,6 +72,10 @@ func _init() -> void:
 	hide()
 
 func configure(model: Dictionary) -> bool:
+	# Acknowledge is the only asynchronous model transition allowed to carry
+	# an accepted EXIT-down into the same visit's later EXIT-up. The controller
+	# cancels/replaces this panel when either owner or visit identity changes.
+	var preserve_exit := _pressed_exit and int(_model.get("visit_id", -1)) == int(model.get("visit_id", -2)) and bool(_model.get("gift_pending", false)) and not bool(model.get("gift_pending", false)) and bool(model.get("ready", false))
 	_model = model.duplicate(true)
 	_edition = str(_model.get("edition", ""))
 	_mode = str(_model.get("mode", ""))
@@ -81,8 +85,8 @@ func configure(model: Dictionary) -> bool:
 	# trading and mode changes until ready becomes true.
 	_is_open = _model_valid
 	_pressed_mode = false
-	_pressed_exit = false
-	_closing = false
+	_pressed_exit = preserve_exit
+	_closing = preserve_exit
 	_render()
 	if _is_open: show()
 	else: hide()

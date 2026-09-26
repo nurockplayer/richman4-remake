@@ -112,6 +112,40 @@ func run() -> void:
 	true_view.queue_free()
 	await settle()
 	check(root.get_tree().auto_accept_quit,"tree exit restores prior true quit policy")
+	# Owning MainUI path: accepted EXIT-down during the real gift interval survives
+	# natural acknowledgement and exits on the later release outside the button.
+	var exit_game: Object = game_at_shop(19827,true,false)
+	exit_game.get_company_at(node_id).owner = 0
+	exit_game._resolve_landing(0,false)
+	var exit_before: Dictionary = exit_game.to_dict()
+	var exit_view := SubViewport.new()
+	exit_view.size = Vector2i(640,480)
+	root.add_child(exit_view)
+	var exit_ui := MainScene.instantiate()
+	exit_view.add_child(exit_ui)
+	await settle()
+	exit_ui.set_process(false)
+	exit_ui._apply_loaded_game(exit_game,exit_before,false)
+	exit_ui._sync_source_shop()
+	await settle()
+	var exit_controller: Control = exit_ui.source_shop_controller
+	var exit_panel: Control = exit_controller.panel
+	var exit_gift_before: Dictionary = exit_game.to_dict()
+	var exit_company_before: Dictionary = exit_game.get_company_at(node_id).duplicate(true)
+	await _push_view(exit_view,exit_panel,Vector2(560,250),MOUSE_BUTTON_LEFT,true)
+	check(exit_game.shop_visit_snapshot().gift_pending and exit_panel.is_open(),"EXIT-down is accepted during gift interval")
+	await create_timer(1.7).timeout
+	await settle()
+	check(exit_game.shop_visit_snapshot().ready and exit_panel.is_open(),"natural gift acknowledgement retains same open visit while EXIT remains held")
+	await _push_view(exit_view,exit_panel,Vector2(1,479),MOUSE_BUTTON_LEFT,false)
+	await settle()
+	check(exit_game.state.phase == "await_action" and exit_controller.panel == null,"EXIT-up after acknowledgement closes shop and returns to await_action")
+	check(exit_game.state.last_event.type == "shop_closed" and bool(exit_game.state.shop_visit.closed),"public leave result closes the visit exactly once")
+	check(exit_game.state.inventory_supply == exit_gift_before.inventory_supply and exit_game._rng.state == int(exit_gift_before.rng_state) and exit_game.state.players == exit_gift_before.players,"acknowledgement and EXIT release add no gift, RNG draw, trade, or player mutation")
+	var exit_company_after: Dictionary = exit_game.get_company_at(node_id)
+	check(int(exit_company_after.monthly_profit) == int(exit_company_before.monthly_profit) and int(exit_company_after.cumulative_profit) == int(exit_company_before.cumulative_profit),"zero-contribution close leaves company accounting unchanged")
+	exit_view.queue_free()
+	await settle()
 	print("Source shop lifecycle checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
 

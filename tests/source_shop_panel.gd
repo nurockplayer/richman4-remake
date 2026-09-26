@@ -20,7 +20,7 @@ func _settle() -> void:
 func _model(mode := "cards", edition := "Game", ready := true, gift := "") -> Dictionary:
 	var card_offers: Array = [{"source_id": 1, "name": "均富", "price": 200}, {}, {"source_id": 1, "name": "均富", "price": 200}, {"source_id": 2, "name": "均貧", "price": 200}]
 	var tool_offers: Array = [{"source_id": 1, "name": "娃娃", "price": 15}, {}, {"source_id": 3, "name": "地雷", "price": 25}]
-	return {"edition":edition, "visit_id":42, "mode":mode, "card_offers":card_offers, "tool_offers":tool_offers, "cards":[{"source_id":4,"name":"換地"},{"source_id":4,"name":"換地"}], "tools":[{"source_id":2,"name":"路障","count":9},{"source_id":5,"name":"機車","count":10}], "points":1000, "ready":ready, "feedback":"", "gift_message":gift}
+	return {"edition":edition, "visit_id":42, "mode":mode, "card_offers":card_offers, "tool_offers":tool_offers, "cards":[{"source_id":4,"name":"換地"},{"source_id":4,"name":"換地"}], "tools":[{"source_id":2,"name":"路障","count":9},{"source_id":5,"name":"機車","count":10}], "points":1000, "ready":ready, "gift_pending":not ready, "feedback":"", "gift_message":gift}
 
 func _run() -> void:
 	var panel: Control = load(PATH).new()
@@ -103,6 +103,23 @@ func _run() -> void:
 	expect(actions.size() == 5, "gift pending ignores buy")
 	panel._gui_input(_event(Vector2(556,246), MOUSE_BUTTON_LEFT, true)); panel._gui_input(_event(Vector2(0,0), MOUSE_BUTTON_LEFT, false))
 	expect(cancels == 4 and not panel.is_open(), "gift pending exit cancels")
+	# Same-visit readiness change must preserve an accepted EXIT down/up gesture.
+	var exit_latch := _model("cards", "Game", false, "店主送你一件禮物")
+	panel.configure(exit_latch)
+	panel._gui_input(_event(Vector2(560,250), MOUSE_BUTTON_LEFT, true))
+	exit_latch.ready = true
+	exit_latch.gift_pending = false
+	exit_latch.gift_message = ""
+	panel.configure(exit_latch)
+	panel._gui_input(_event(Vector2(1,479), MOUSE_BUTTON_LEFT, false))
+	expect(cancels == 5 and not panel.is_open(), "same-visit gift acknowledgement preserves EXIT latch through outside release")
+	panel.configure(_model("cards"))
+	panel._gui_input(_event(Vector2(560,250), MOUSE_BUTTON_LEFT, true))
+	var replacement := _model("cards")
+	replacement.visit_id = 43
+	panel.configure(replacement)
+	panel._gui_input(_event(Vector2(1,479), MOUSE_BUTTON_LEFT, false))
+	expect(cancels == 5 and panel.is_open(), "visit replacement invalidates stale EXIT release")
 	panel.configure({})
 	expect(not panel.is_open() and not panel.source_art_available(), "invalid model fails closed")
 	var invalid := _model()

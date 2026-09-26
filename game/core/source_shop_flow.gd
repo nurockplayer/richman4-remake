@@ -33,7 +33,7 @@ static func current(game: Object, allow_closed: bool = false) -> Dictionary:
 	return visit
 
 static func admit(game: Object, player_id: int) -> bool:
-	if not enabled(game): return false
+	if not enabled(game) or str(game.state.get("phase", "")) == "game_over": return false
 	var player: Dictionary = game._player(player_id)
 	var tile: Dictionary = game._tile_at(int(player.get("position", -1)))
 	if player_id != int(game.state.current_player) or not bool(player.get("alive", false)) or int(tile.get("event_code", -1)) != 15 or game._status_active(player) or game._sleep_active(player): return false

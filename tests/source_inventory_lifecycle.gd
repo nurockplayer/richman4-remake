@@ -63,14 +63,14 @@ func run() -> void:
 	await settle()
 	check(not ui._source_inventory_modal_open() and auto_accept_quit == prior_quit,"cancel returns to board and restores quit policy")
 	# Exercise the production starting roadblock through queue-before-cancel.
-	game.state.phase = "await_roll"
-	game._set_action_options(0)
+	var roadblock_owner: Object = ui.game_state
+	roadblock_owner.state.phase = "await_roll"
+	roadblock_owner._set_action_options(0)
 	ui._refresh_from_state()
 	ui._on_source_tools_requested()
 	await settle()
 	var roadblock_id := int(Catalogue.tool("路障").source_id)
 	var roadblock_panel: Control = ui.source_inventory_panel
-	var roadblock_owner: Object = ui.game_state
 	var roadblock_count := int(roadblock_owner.state.players[0].tools.get("路障", 0))
 	var roadblock_before: String = roadblock_owner.to_json()
 	check(roadblock_panel.is_open() and roadblock_count > 0, "ordinary starting inventory contains a usable roadblock")

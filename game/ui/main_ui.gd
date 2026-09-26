@@ -4380,6 +4380,10 @@ func _append_tool_inventory() -> void:
 			use.disabled = true
 		if detained_turn_active and item_id != "時光機":
 			use.disabled = true
+		# The source inventory may open an empty transport selector, but only
+		# when every existing execution gate already admits this tool.
+		var transport_selector_admissible := transport_picker != null and not use.disabled
+		use.set_meta("transport_selector_admissible", transport_selector_admissible)
 		if transport_picker != null:
 			use.disabled = use.disabled or transport_picker.selection().is_empty()
 			transport_picker.selection_changed.connect(func(available: bool) -> void:
@@ -4532,8 +4536,7 @@ func _source_inventory_selected(source_id: int, panel: Control) -> void:
 	var prefix := "UseCard_" if _inventory_mode == "cards" else "UseTool_"
 	var use: Button = cards_popup_list.find_child(prefix + item_id, true, false)
 	var transport_picker: TransportPicker = cards_popup_list.find_child("TransportPicker", true, false)
-	var transport_state := _read_snapshot()
-	var transport_selector_admissible := _inventory_mode == "tools" and item_id == "傳送機" and transport_picker != null and _item_implemented("tool", item_id) and (str(transport_state.get("phase", "")) == "await_roll" or str(transport_state.get("phase", "")) == "await_action") and _has_action_option(_as_array(transport_state.get("action_options", [])), "use_tool") and not _detained_turn_active()
+	var transport_selector_admissible := _inventory_mode == "tools" and item_id == "傳送機" and transport_picker != null and use != null and bool(use.get_meta("transport_selector_admissible", false))
 	if use == null or (use.disabled and not transport_selector_admissible):
 		_append_local_log("目前無法使用%s；持有物品保持不變。" % item_id)
 		_show_source_inventory_list()

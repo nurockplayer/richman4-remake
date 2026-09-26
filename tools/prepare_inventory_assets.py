@@ -75,18 +75,35 @@ def _preflight_write_set(output: Path, destinations: list[tuple[str | Path, bool
     return targets
 
 
-def _preflight_inputs(inputs: list[Path], targets: list[Path]) -> None:
-    """Refuse publication that would replace an input or a real tree holding it."""
-    # Match _prepare_into's input normalization so a home-relative alias cannot
-    # evade the publication boundary check.
+def _scene_image_inputs(scene: dict, manifest_path: Path) -> list[Path]:
+    """Return canonical backing paths for every image referenced by a scene."""
+    paths: list[Path] = []
+
+    def collect(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, str) and value.startswith("images/"):
+            paths.append(manifest_path.parent / value)
+    collect(scene)
+    return paths
+
+
+def _preflight_replacement_inputs(inputs: list[Path], targets: list[Path]) -> None:
+    """Reject inputs whose canonical backing paths are removed by replacement."""
     canonical_inputs = {path.expanduser().resolve(strict=False) for path in inputs}
     for target in targets:
-        if target.resolve(strict=False) in canonical_inputs:
+        # Replacing a symlink only removes the link entry; its referent is safe.
+        if target.is_symlink():
+            continue
+        canonical_target = target.expanduser().resolve(strict=False)
+        if canonical_target in canonical_inputs:
             raise AssetError(f"publication destination is also an input: {target}")
-        if target.is_dir() and not target.is_symlink():
-            canonical_target = target.resolve()
-            if any(path != canonical_target and canonical_target in path.parents for path in canonical_inputs):
-                raise AssetError(f"publication would remove an input-containing directory: {target}")
+        if target.is_dir() and any(canonical_target in path.parents for path in canonical_inputs):
+            raise AssetError(f"publication would remove an input-containing directory: {target}")
 
 
 def _rewrite_base_paths(value):
@@ -282,7 +299,10 @@ def _prepare_into(
 
 def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Path) -> dict:
     """Generate in a private staging directory, then publish the bounded slice."""
+    zip_path = zip_path.expanduser().resolve()
     output = output.expanduser().resolve()
+    identity_path = identity_path.expanduser().resolve()
+    base_manifest = base_manifest.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=".inventory-prepare-", dir=output.parent))
     try:
@@ -306,7 +326,10 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         destinations.extend(Path(name) for name in ("images/base", "manifest.json", "scene-manifest.json", "provenance.json"))
         allow_leaf_links = {"images/base", "manifest.json", "scene-manifest.json", "provenance.json"}
         owned_targets = _preflight_write_set(output, [(path, path.as_posix() in allow_leaf_links) for path in destinations])
-        _preflight_inputs([zip_path, identity_path, base_manifest], [owned_targets[len(staged_pngs)], *owned_targets[len(staged_pngs) + 1:]])
+        _preflight_replacement_inputs(
+            [zip_path, identity_path, base_manifest, *_scene_image_inputs(_load_json(base_manifest), base_manifest)],
+            [owned_targets[len(staged_pngs)], *owned_targets[len(staged_pngs) + 1:]],
+        )
         for target in owned_targets[len(staged_pngs) + 1:]:
             if target.exists() and not target.is_symlink() and not target.is_file():
                 raise AssetError(f"metadata publication destination is not a regular file or symlink: {target.name}")
@@ -340,6 +363,9 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
             for source, target in zip(metadata, metadata_targets):
                 os.replace(source, target)
                 published.append(target)
+            missing = [item for item in paths if not (output / item).is_file()]
+            if missing:
+                raise AssetError(f"published scene manifest has unresolved image paths: {missing[0]}")
         except BaseException as original_error:
             recovery_errors: list[str] = []
             for path in reversed(published):
@@ -476,7 +502,11 @@ def patch_existing(
                 raise AssetError(f"Panel11 {edition} chunk {index} destination is not canonical")
             destinations.append((canonical, False))
     destinations.extend((("images/base", True), ("manifest.json", True), ("scene-manifest.json", True), ("provenance.json", True)))
-    _preflight_write_set(output, destinations)
+    replacement_targets = _preflight_write_set(output, destinations)
+    _preflight_replacement_inputs(
+        [zip_path, identity_path, base_manifest, *_scene_image_inputs(base_data, base_manifest)],
+        replacement_targets[-4:],
+    )
 
     # Build all candidates and metadata before touching published files. The
     # only staged image data is the four small vehicle PNGs.

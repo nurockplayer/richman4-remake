@@ -22,6 +22,7 @@ import prepare_inventory_assets as inventory
 from test_package_scene_images import png_record, write_scene_manifest
 from package_scene_images import validate as validate_scene_manifest
 from prepare_inventory_assets import CHUNK_COUNT, EDITIONS, RESOURCE_INDEX, TRANSPARENT_CHUNKS, _load_identity, _rewrite_base_paths
+from test_decode_original_images import make_mkf
 
 
 def _png_rgba(path: Path) -> tuple[int, int, bytes]:
@@ -51,6 +52,167 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 
 class InventoryAssetTests(unittest.TestCase):
+    @staticmethod
+    def _real_synthetic_inputs(root: Path):
+        start = 12 + CHUNK_COUNT * 12
+        pixels = struct.pack("<3H", 0, 0x8000, 0x03e0)
+        payload = b"SMP\0" + struct.pack("<II", CHUNK_COUNT, start)
+        payload += b"".join(struct.pack("<hhhhI", 3, 1, -2, 5, len(pixels)) for _ in range(CHUNK_COUNT))
+        payload += pixels * CHUNK_COUNT
+        mkf = make_mkf([(b"plain", 5, 0, 0)] * 11 + [(payload, len(payload), start, len(pixels) * CHUNK_COUNT)])
+        zip_path = root / "synthetic-owner.zip"
+        with inventory.zipfile.ZipFile(zip_path, "w") as archive:
+            for edition in EDITIONS:
+                archive.writestr(inventory.ARCHIVE_MEMBER.format(edition=edition), mkf)
+        identity_path = root / "synthetic-identity.json"
+        identity_path.write_text(json.dumps({"records": [{
+            "edition": edition, "physical_index": RESOURCE_INDEX,
+            "archive_sha256": inventory.hashlib.sha256(mkf).hexdigest(),
+            "payload_sha256": inventory.hashlib.sha256(payload).hexdigest(),
+            "chunks": [{"index": index, "width": 3, "height": 1, "x": -2, "y": 5,
+                        "pixel_data_sha256": inventory.hashlib.sha256(pixels).hexdigest()}
+                       for index in range(CHUNK_COUNT)],
+        } for edition in EDITIONS]}))
+        return zip_path, identity_path
+
+    @staticmethod
+    def _run_real_cli(zip_path: Path, output: Path, identity_path: Path, base_manifest: Path, *, patch=False):
+        command = [sys.executable, str(Path(inventory.__file__)), "--zip", str(zip_path),
+                   "--output", str(output), "--identity", str(identity_path),
+                   "--base-manifest", str(base_manifest)]
+        if patch:
+            command.append("--patch-existing")
+        return subprocess.run(command, capture_output=True, text=True, check=False)
+
+    def test_prepare_refuses_referenced_images_inside_replaced_base_tree(self):
+        for linked in (False, True):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory(prefix="fresh-image-input-") as temporary:
+                root = Path(temporary)
+                output = root / "inventory-output"
+                zip_path, identity_path = self._real_synthetic_inputs(root)
+                # Use a valid manifest and actual PNG. In the link variant the
+                # reference is an external symlink whose canonical target is
+                # still inside the real tree that publication replaces.
+                image = output / "images" / "base" / "map.png"
+                image.parent.mkdir(parents=True)
+                if linked:
+                    external = output / "images" / "base" / "canonical-map.png"
+                    record = png_record(external, "images/base/map.png")
+                    image.symlink_to(external)
+                else:
+                    record = png_record(image, "images/base/map.png")
+                base_manifest = write_scene_manifest(output, [record], filename="base-input.json")
+                validate_scene_manifest(base_manifest)
+                before = self._snapshot_full(output)
+                result = self._run_real_cli(zip_path, output, identity_path, base_manifest)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("input", result.stderr.lower())
+                self.assertEqual(self._snapshot_full(output), before)
+                # A disjoint output is a supported retry using the same source.
+                safe_output = root / "safe-output"
+                result = self._run_real_cli(zip_path, safe_output, identity_path, base_manifest)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(json.loads((safe_output / "manifest.json").read_text())["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
+    def test_patch_refuses_archive_identity_and_base_inputs_under_replaced_tree(self):
+        for input_name in ("archive", "identity", "base-image"):
+            with self.subTest(input_name=input_name), tempfile.TemporaryDirectory(prefix="patch-input-tree-") as temporary:
+                root = Path(temporary)
+                fixture = self._patch_fixture(root)
+                output, zip_path, identity_path, base_manifest = fixture[:4]
+                base_tree = output / "images" / "base"
+                base_tree.unlink()
+                base_tree.mkdir()
+                if input_name == "archive":
+                    zip_path = base_tree / "owner.zip"
+                    zip_path.write_bytes(b"synthetic archive input")
+                elif input_name == "identity":
+                    identity_path = base_tree / "identity.json"
+                    identity_path.write_text("{}")
+                else:
+                    base_manifest = base_tree / "base-input.json"
+                    base_root = base_manifest.parent
+                    record = png_record(base_root / "images" / "base" / "map.png", "images/base/map.png")
+                    base_manifest = write_scene_manifest(base_manifest.parent, [record], filename=base_manifest.name)
+                    validate_scene_manifest(base_manifest)
+                before = self._snapshot_full(output)
+                with self.assertRaises(inventory.AssetError):
+                    self._run_mock_patch((output, zip_path, identity_path, base_manifest, *fixture[4:]))
+                self.assertEqual(self._snapshot_full(output), before)
+                safe_output = root / "safe-output"
+                shutil.copytree(output, safe_output, symlinks=True)
+                # retry on the corrected original fixture, disjoint from input
+                result = self._run_mock_patch((safe_output, fixture[1], fixture[2], fixture[3], *fixture[4:]))
+                self.assertEqual(result["schema"], "richman4.inventory-assets/v1")
+
+    def test_patch_cli_refuses_real_inputs_in_replaced_tree_and_retries(self):
+        for input_name in ("archive", "identity", "base-image", "metadata"):
+            with self.subTest(input_name=input_name), tempfile.TemporaryDirectory(prefix="patch-cli-input-tree-") as temporary:
+                root = Path(temporary)
+                fixture = self._patch_fixture(root)
+                output, _, _, base_manifest = fixture[:4]
+                zip_path, identity_path = self._real_synthetic_inputs(root)
+                base_tree = output / "images" / "base"
+                base_tree.unlink()
+                base_tree.mkdir()
+                test_base = base_manifest
+                test_zip, test_identity = zip_path, identity_path
+                if input_name == "archive":
+                    test_zip = base_tree / "synthetic-owner.zip"
+                    shutil.copyfile(zip_path, test_zip)
+                elif input_name == "identity":
+                    test_identity = base_tree / "synthetic-identity.json"
+                    shutil.copyfile(identity_path, test_identity)
+                elif input_name == "base-image":
+                    test_base = base_tree / "base-input.json"
+                    record = png_record(base_tree / "images" / "base" / "map.png", "images/base/map.png")
+                    test_base = write_scene_manifest(base_tree, [record], filename=test_base.name)
+                    validate_scene_manifest(test_base)
+                else:
+                    record = png_record(output / "images" / "own-base-map.png", "images/own-base-map.png")
+                    test_base = write_scene_manifest(output, [record], filename="provenance.json")
+                    validate_scene_manifest(test_base)
+                before = self._snapshot_full(output)
+                rejected = self._run_real_cli(test_zip, output, test_identity, test_base, patch=True)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn("input", rejected.stderr.lower())
+                self.assertEqual(self._snapshot_full(output), before)
+                # Correct the input location while keeping the same real assets.
+                accepted = self._run_real_cli(zip_path, output, identity_path, base_manifest, patch=True)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_patch_refuses_base_input_at_metadata_destination_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="patch-metadata-input-") as temporary:
+            root = Path(temporary)
+            fixture = self._patch_fixture(root)
+            output, zip_path, identity_path, base_manifest = fixture[:4]
+            record = png_record(output / "images" / "safe.png", "images/safe.png")
+            # This is a valid scene document at provenance.json, an owned
+            # metadata destination that patch mode otherwise replaces.
+            base_manifest = write_scene_manifest(output, [record], filename="provenance.json")
+            validate_scene_manifest(base_manifest)
+            before = self._snapshot_full(output)
+            with self.assertRaises(inventory.AssetError):
+                self._run_mock_patch((output, zip_path, identity_path, base_manifest, *fixture[4:]))
+            self.assertEqual(self._snapshot_full(output), before)
+            result = self._run_mock_patch((output, zip_path, identity_path, fixture[3], *fixture[4:]))
+            self.assertEqual(result["schema"], "richman4.inventory-assets/v1")
+
+    @staticmethod
+    def _snapshot_full(output: Path):
+        result = {}
+        for path in output.rglob("*"):
+            rel = path.relative_to(output).as_posix()
+            st = path.lstat()
+            if path.is_symlink():
+                result[rel] = ("symlink", os.readlink(path), st.st_mode, st.st_mtime_ns)
+            elif path.is_file():
+                data = path.read_bytes()
+                result[rel] = ("file", inventory.hashlib.sha256(data).hexdigest(), st.st_mode, st.st_mtime_ns)
+            elif path.is_dir():
+                result[rel] = ("dir", st.st_mode, st.st_mtime_ns)
+        return result
+
     def test_prepare_refuses_metadata_directories_and_retries_without_loss(self):
         for name in ("manifest.json", "scene-manifest.json", "provenance.json"):
             with self.subTest(name=name), tempfile.TemporaryDirectory(prefix="fresh-metadata-directory-") as temporary:

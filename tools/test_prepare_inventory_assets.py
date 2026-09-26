@@ -196,14 +196,138 @@ class InventoryAssetTests(unittest.TestCase):
             aliased_zip = output / "MANIFEST.JSON"
             shutil.copyfile(zip_path, aliased_zip)
             original = aliased_zip.read_bytes()
+            before = self._snapshot_full(output)
             result = self._run_real_cli(aliased_zip, output, identity_path, base_manifest)
             self.assertNotEqual(result.returncode, 0, "CLI replaced ZIP input through case-aliased manifest destination")
             self.assertIn("input", result.stderr.lower())
             self.assertEqual(aliased_zip.read_bytes(), original)
+            self.assertEqual(self._snapshot_full(output), before)
             safe_zip = root / "retry-owner.zip"
             shutil.copyfile(zip_path, safe_zip)
             result = self._run_real_cli(safe_zip, output, identity_path, base_manifest)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_real_cli_refuses_zip_under_case_aliased_replaced_base_tree(self):
+        for patch in (False, True):
+            with self.subTest(patch=patch), tempfile.TemporaryDirectory(prefix="case-aliased-zip-tree-") as temporary:
+                root = Path(temporary)
+                if patch:
+                    fixture = self._patch_fixture(root)
+                    output, _, _, base_manifest = fixture[:4]
+                    base_tree = output / "images" / "base"
+                    base_tree.unlink()
+                else:
+                    output = root / "out"
+                    output.mkdir()
+                    external_image = root / "images" / "map.png"
+                    base_manifest = write_scene_manifest(
+                        root, [png_record(external_image, "images/map.png")], filename="base.json"
+                    )
+                    base_tree = output / "images" / "base"
+                base_tree.mkdir(parents=True)
+                alias_tree = output / "IMAGES" / "BASE"
+                if not os.path.samefile(base_tree, alias_tree):
+                    self.skipTest("filesystem is case sensitive; base-tree case alias is a distinct entry")
+                real_zip, identity_path = self._real_synthetic_inputs(root)
+                aliased_zip = alias_tree / "declared-owner.zip"
+                shutil.copyfile(real_zip, aliased_zip)
+                zip_bytes = aliased_zip.read_bytes()
+                before = self._snapshot_full(output)
+
+                rejected = self._run_real_cli(aliased_zip, output, identity_path, base_manifest, patch=patch)
+                self.assertNotEqual(
+                    rejected.returncode, 0,
+                    f"CLI returned {rejected.returncode}; case-aliased source ZIP remains={aliased_zip.exists()}",
+                )
+                self.assertIn("input", rejected.stderr.lower())
+                self.assertEqual(aliased_zip.read_bytes(), zip_bytes)
+                self.assertEqual(self._snapshot_full(output), before)
+
+                safe_zip = root / "safe-retry.zip"
+                shutil.copyfile(real_zip, safe_zip)
+                accepted = self._run_real_cli(safe_zip, output, identity_path, base_manifest, patch=patch)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_real_cli_refuses_authoritative_base_json_at_case_aliased_metadata_destination(self):
+        with tempfile.TemporaryDirectory(prefix="case-aliased-base-json-") as temporary:
+            root = Path(temporary)
+            output = root / "out"
+            output.mkdir()
+            base_image = output / "images" / "safe.png"
+            record = png_record(base_image, "images/safe.png")
+            base_manifest = write_scene_manifest(output, [record], filename="MANIFEST.JSON")
+            destination = output / "manifest.json"
+            if not os.path.samefile(base_manifest, destination):
+                self.skipTest("filesystem is case sensitive; metadata case alias is a distinct entry")
+            zip_path, identity_path = self._real_synthetic_inputs(root)
+            original_bytes = base_manifest.read_bytes()
+            original_mode = base_manifest.stat().st_mode & 0o7777
+            self.assertEqual(json.loads(original_bytes)["schema"], "richman4.scene-images/v1")
+            before = self._snapshot_full(output)
+
+            rejected = self._run_real_cli(zip_path, output, identity_path, base_manifest)
+            self.assertNotEqual(
+                rejected.returncode, 0,
+                f"CLI returned {rejected.returncode}; authoritative base JSON preserved={base_manifest.read_bytes() == original_bytes}",
+            )
+            self.assertIn("input", rejected.stderr.lower())
+            self.assertEqual(base_manifest.read_bytes(), original_bytes)
+            self.assertEqual(base_manifest.stat().st_mode & 0o7777, original_mode)
+            self.assertEqual(self._snapshot_full(output), before)
+
+            retry_image = root / "images" / "safe.png"
+            retry_manifest = write_scene_manifest(
+                root, [png_record(retry_image, "images/safe.png")], filename="safe-base.json"
+            )
+            accepted = self._run_real_cli(zip_path, output, identity_path, retry_manifest)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_real_cli_preflights_canonical_backing_ancestor_of_inherited_image_symlink(self):
+        with tempfile.TemporaryDirectory(prefix="canonical-backing-case-alias-") as temporary:
+            root = Path(temporary)
+            output = root / "out"
+            backing = output / "IMAGES" / "BASE" / "original.png"
+            backing.parent.mkdir(parents=True)
+            record = png_record(backing, "images/background.png")
+            canonical_base = output / "images" / "base"
+            if not os.path.samefile(backing.parent, canonical_base):
+                self.skipTest("filesystem is case sensitive; base-tree case alias is a distinct entry")
+            external_images = root / "images"
+            external_images.mkdir()
+            inherited_link = external_images / "background.png"
+            inherited_link.symlink_to(backing)
+            base_manifest = write_scene_manifest(root, [record], filename="inherited-base.json")
+            # Its declared path is under root/images while the symlink referent
+            # is under the real tree replaced by fresh publication.
+            validate_scene_manifest(base_manifest)
+            zip_path, identity_path = self._real_synthetic_inputs(root)
+            before = self._snapshot_full(output)
+            backing_bytes = backing.read_bytes()
+            backing_mode = backing.stat().st_mode & 0o7777
+            link_target = os.readlink(inherited_link)
+            source_manifest_bytes = base_manifest.read_bytes()
+            source_manifest_mode = base_manifest.stat().st_mode & 0o7777
+
+            rejected = self._run_real_cli(zip_path, output, identity_path, base_manifest)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("input", rejected.stderr.lower(),
+                          "expected pre-publication input refusal; late unresolved-image rollback is insufficient")
+            self.assertEqual(self._snapshot_full(output), before)
+            self.assertEqual(backing.read_bytes(), backing_bytes)
+            self.assertEqual(backing.stat().st_mode & 0o7777, backing_mode)
+            self.assertEqual(base_manifest.read_bytes(), source_manifest_bytes)
+            self.assertEqual(json.loads(base_manifest.read_text(encoding="utf-8"))["schema"], "richman4.scene-images/v1")
+            self.assertEqual(base_manifest.stat().st_mode & 0o7777, source_manifest_mode)
+            self.assertTrue(inherited_link.is_symlink())
+            self.assertEqual(os.readlink(inherited_link), link_target)
+
+            inherited_link.unlink()
+            safe_image = root / "images" / "background.png"
+            safe_manifest = write_scene_manifest(
+                root, [png_record(safe_image, "images/background.png")], filename="safe-inherited-base.json"
+            )
+            accepted = self._run_real_cli(zip_path, output, identity_path, safe_manifest)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
     def test_patch_cli_refuses_vehicle_destination_zip_and_retries(self):
         with tempfile.TemporaryDirectory(prefix="patch-cli-vehicle-input-") as temporary:

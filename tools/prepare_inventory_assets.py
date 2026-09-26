@@ -106,7 +106,10 @@ def _preflight_replacement_inputs(inputs: list[Path], targets: list[Path]) -> No
             identities.add((info.st_dev, info.st_ino))
         return identities
 
-    input_identities = set().union(*(existing_identities(path.expanduser()) for path in inputs))
+    # Walk from the resolved referents too. A leaf symlink can point into a
+    # directory tree that publication removes even when its lexical parents
+    # are elsewhere (or use different case on a case-insensitive filesystem).
+    input_identities = set().union(*(existing_identities(path) for path in canonical_inputs))
 
     for target in targets:
         # Replacing a symlink only removes the link entry; its referent is safe.

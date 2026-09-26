@@ -270,6 +270,7 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         # preserves regular files, directories, and symlinks without copying.
         backups: list[tuple[Path, Path]] = []
         published: list[Path] = []
+        preserve_recovery = False
         try:
             for index, target in enumerate([base_target, *metadata_targets]):
                 if target.exists() or target.is_symlink():
@@ -286,23 +287,37 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
             for source, target in zip(metadata, metadata_targets):
                 os.replace(source, target)
                 published.append(target)
-        except BaseException:
+        except BaseException as original_error:
+            recovery_errors: list[str] = []
             for path in reversed(published):
-                if path.is_symlink() or path.is_file():
-                    path.unlink(missing_ok=True)
-                elif path.is_dir():
-                    shutil.rmtree(path)
+                try:
+                    if path.is_symlink() or path.is_file():
+                        path.unlink(missing_ok=True)
+                    elif path.is_dir():
+                        shutil.rmtree(path)
+                except OSError as recovery_error:
+                    recovery_errors.append(f"remove {path}: {recovery_error}")
             for backup, target in reversed(backups):
-                if target.exists() or target.is_symlink():
-                    if target.is_dir() and not target.is_symlink():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-                os.replace(backup, target)
+                try:
+                    if target.exists() or target.is_symlink():
+                        if target.is_dir() and not target.is_symlink():
+                            shutil.rmtree(target)
+                        else:
+                            target.unlink()
+                    os.replace(backup, target)
+                except OSError as recovery_error:
+                    recovery_errors.append(f"restore {target} from {backup}: {recovery_error}")
+            if recovery_errors:
+                original_error.add_note(
+                    "rollback incomplete; recovery material retained at "
+                    f"{staged}; " + "; ".join(recovery_errors)
+                )
+                preserve_recovery = True
             raise
         return manifest
     finally:
-        shutil.rmtree(staged, ignore_errors=True)
+        if not locals().get("preserve_recovery", False):
+            shutil.rmtree(staged, ignore_errors=True)
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -472,14 +487,21 @@ def patch_existing(
       }
       metadata = [(manifest_path, manifest_payload), (scene_path, scene_payload),
                   (provenance_path, json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")]
-      touched = [target for _, target in staged_pngs] + [path for path, _ in metadata]
-      original_bytes = {path: path.read_bytes() for path in touched}
+      staged_metadata: list[tuple[Path, Path]] = []
+      for index, (target, payload) in enumerate(metadata):
+          staged = staged_root / f"metadata-{index}.json"
+          staged.write_text(payload, encoding="utf-8")
+          staged_metadata.append((staged, target))
       base_link = output / "images" / "base"
       backup_link = staged_root / "base-link-backup"
       had_base_link = base_link.exists() or base_link.is_symlink()
-      if had_base_link:
-          base_link.rename(backup_link)
+      backups: list[tuple[Path, Path]] = []
+      published: list[Path] = []
       try:
+          if had_base_link:
+              os.replace(base_link, backup_link)
+              backups.append((backup_link, base_link))
+          published.append(base_link)  # _ensure_base_link may fail partway through.
           _ensure_base_link(output, base_manifest)
           # Validate against the final composed links. A stale prior link (or
           # a dangling symlink) must not make a missing authoritative path
@@ -487,26 +509,45 @@ def patch_existing(
           missing = [item for item in image_paths if not (output / item).is_file()]
           if missing:
               raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
-          for staged, target in staged_pngs:
-              staged.replace(target)
-          for path, payload in metadata:
-              _write_json(path, json.loads(payload))
-      except BaseException:
-          for path, data in original_bytes.items():
-              path.write_bytes(data)
-              temporary = path.with_suffix(path.suffix + ".tmp")
-              if temporary.exists():
-                  temporary.unlink()
-          if base_link.is_symlink():
-              base_link.unlink()
-          elif base_link.exists():
-              shutil.rmtree(base_link)
-          if had_base_link:
-              backup_link.rename(base_link)
+          for index, (staged, target) in enumerate([*staged_pngs, *staged_metadata]):
+              if target.exists() or target.is_symlink():
+                  backup = staged_root / f"entry-backup-{index}"
+                  os.replace(target, backup)
+                  backups.append((backup, target))
+              os.replace(staged, target)
+              published.append(target)
+      except BaseException as original_error:
+          recovery_errors: list[str] = []
+
+          def remove_entry(path: Path) -> None:
+              if path.is_symlink() or path.is_file():
+                  path.unlink(missing_ok=True)
+              elif path.is_dir():
+                  shutil.rmtree(path)
+
+          for path in reversed(published):
+              try:
+                  remove_entry(path)
+              except OSError as recovery_error:
+                  recovery_errors.append(f"remove {path}: {recovery_error}")
+          for backup, target in reversed(backups):
+              try:
+                  if target.exists() or target.is_symlink():
+                      remove_entry(target)
+                  os.replace(backup, target)
+              except OSError as recovery_error:
+                  recovery_errors.append(f"restore {target} from {backup}: {recovery_error}")
+          if recovery_errors:
+              original_error.add_note(
+                  "rollback incomplete; recovery material retained at "
+                  f"{staged_root}; " + "; ".join(recovery_errors)
+              )
+              preserve_recovery = True
           raise
       return manifest
     finally:
-      shutil.rmtree(staged_root, ignore_errors=True)
+      if not locals().get("preserve_recovery", False):
+          shutil.rmtree(staged_root, ignore_errors=True)
 
 
 def main() -> int:

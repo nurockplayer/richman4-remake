@@ -317,22 +317,155 @@ class InventoryAssetTests(unittest.TestCase):
             self.assertEqual(self._snapshot(output), before)
             self.assertTrue((output / "images" / "base" / "MultiverseJourney" / "map" / "1.png").is_file())
 
+    def test_patch_existing_readonly_png_is_not_rewritten_when_base_validation_fails(self):
+        with tempfile.TemporaryDirectory(prefix="asset-readonly-rollback-") as temporary:
+            fixture = self._patch_fixture(Path(temporary))
+            output, _, _, base_manifest = fixture[:4]
+            target = output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png"
+            target.chmod(0o444)
+            original = (target.lstat().st_mode, target.read_bytes())
+            base_link = output / "images" / "base"
+            original_link = os.readlink(base_link)
+            original_map = base_link / "MultiverseJourney" / "map" / "1.png"
+            original_map_resolution = original_map.resolve()
+            original_map_bytes = original_map.read_bytes()
+            missing = base_manifest.parent / "images" / "MultiverseJourney" / "map" / "1.png"
+            missing.unlink()
+            direct_writes = []
+            real_write_bytes = Path.write_bytes
+
+            def observe_write(path, data):
+                if path == target:
+                    direct_writes.append(path)
+                return real_write_bytes(path, data)
+
+            with mock.patch.object(Path, "write_bytes", observe_write):
+                with self.assertRaisesRegex(inventory.AssetError, "unresolved image paths"):
+                    self._run_mock_patch(fixture)
+            self.assertEqual(direct_writes, [], "rollback must not write an untouched read-only PNG")
+            self.assertTrue(target.is_file())
+            self.assertFalse(target.is_symlink())
+            self.assertEqual((target.lstat().st_mode, target.read_bytes()), original)
+            self.assertTrue(base_link.is_symlink())
+            self.assertEqual(os.readlink(base_link), original_link)
+            self.assertEqual(original_map.resolve(), original_map_resolution)
+            self.assertEqual(original_map.read_bytes(), original_map_bytes)
+
+            # A complete authoritative base still permits rename-based replacement
+            # of the same read-only entry, followed by a successful retry.
+            missing.write_bytes(b"restored authoritative map")
+            self._run_mock_patch(fixture)
+            self.assertEqual(target.read_bytes(), b"new-png:pixels:15")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+
+    def test_patch_existing_late_failure_restores_metadata_symlink_entry_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="asset-symlink-rollback-") as temporary:
+            fixture = self._patch_fixture(Path(temporary))
+            output = fixture[0]
+            manifest = output / "manifest.json"
+            backing = Path(temporary) / "backing-manifest.json"
+            backing.write_bytes(manifest.read_bytes())
+            backing_before = backing.read_bytes()
+            manifest.unlink()
+            manifest.symlink_to(backing)
+            before = self._snapshot(output)
+            target = output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png"
+            observed_changed_png = False
+            real_replace = os.replace
+            injected = False
+
+            def fail_after_png(source, destination):
+                nonlocal injected, observed_changed_png
+                source, destination = Path(source), Path(destination)
+                if destination == (output / "scene-manifest.json").resolve() and not injected:
+                    injected = True
+                    observed_changed_png = target.read_bytes() == b"new-png:pixels:15"
+                    raise OSError("injected late metadata publication failure")
+                return real_replace(source, destination)
+
+            with mock.patch.object(os, "replace", fail_after_png), self.assertRaisesRegex(OSError, "late metadata publication"):
+                self._run_mock_patch(fixture)
+            self.assertTrue(observed_changed_png, "failure must follow a published PNG change")
+            self.assertEqual(self._snapshot(output), before)
+            self.assertTrue(manifest.is_symlink())
+            self.assertEqual(os.readlink(manifest), str(backing))
+            self.assertEqual(backing.read_bytes(), backing_before)
+            self._run_mock_patch(fixture)
+            self.assertFalse(manifest.is_symlink(), "successful publication replaces the symlink entry")
+            self.assertEqual(target.read_bytes(), b"new-png:pixels:15")
+
+    def test_patch_existing_incomplete_rollback_keeps_recovery_backup_and_other_restores(self):
+        with tempfile.TemporaryDirectory(prefix="asset-recovery-material-") as temporary:
+            fixture = self._patch_fixture(Path(temporary))
+            output = fixture[0]
+            base = output / "images" / "base"
+            original_files = self._snapshot(output)[0]
+            original_base_target = os.readlink(base)
+            original_png = (output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png").read_bytes()
+            original_manifest = (output / "manifest.json").read_bytes()
+            real_replace = os.replace
+            failed_restore = False
+
+            def fail_base_restore(source, target):
+                nonlocal failed_restore
+                source, target = Path(source), Path(target)
+                if (source.name == "base-link-backup" and target == output.resolve() / "images" / "base" and not failed_restore):
+                    failed_restore = True
+                    raise OSError("injected base restoration failure")
+                return real_replace(source, target)
+
+            def inject_failures(source, target):
+                source, target = Path(source), Path(target)
+                if source.name == "base-link-backup" and target == output.resolve() / "images" / "base":
+                    return fail_base_restore(source, target)
+                if source.name == "metadata-1.json" and target == (output / "scene-manifest.json").resolve():
+                    raise OSError("injected late metadata publication failure")
+                return real_replace(source, target)
+
+            with mock.patch.object(os, "replace", side_effect=inject_failures), self.assertRaisesRegex(OSError, "late metadata publication") as caught:
+                self._run_mock_patch(fixture)
+            self.assertTrue(failed_restore)
+            self.assertEqual((output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png").read_bytes(), original_png)
+            self.assertEqual((output / "manifest.json").read_bytes(), original_manifest)
+            live_files = {path: data for path, data in self._snapshot(output)[0].items() if not path.startswith(".inventory-patch-")}
+            self.assertEqual(live_files, original_files)
+            self.assertFalse(base.exists() or base.is_symlink())
+            diagnostic = str(caught.exception) + " " + " ".join(getattr(caught.exception, "__notes__", []))
+            self.assertIn("recovery", diagnostic.lower())
+            recovery_paths = list(output.glob(".inventory-patch-*"))
+            self.assertEqual(len(recovery_paths), 1, "incomplete rollback must preserve backup material")
+            recovery = recovery_paths[0]
+            self.assertTrue(any(recovery.rglob("base-link-backup")))
+
+            # Manual recovery remains possible, and a corrected retry succeeds.
+            (recovery / "base-link-backup").rename(base)
+            self.assertEqual(os.readlink(base), original_base_target)
+            shutil.rmtree(recovery)
+            self._run_mock_patch(fixture)
+            self.assertTrue((base / "Game" / "map" / "1.png").is_file())
+
     def test_patch_existing_metadata_failure_restores_pngs_json_and_links(self):
         with tempfile.TemporaryDirectory(prefix="asset-transaction-") as temporary:
             fixture = self._patch_fixture(Path(temporary))
             output = fixture[0]
             before = self._snapshot(output)
-            real_write = inventory._write_json
-            calls = 0
-            def fail_on_scene(path, value):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
-                    real_write(path, value)
+            target = output / "images" / "Game" / "ui" / "Panel" / "11" / "15.png"
+            real_replace = os.replace
+            observed_png = False
+            injected = False
+
+            def fail_on_scene(source, destination):
+                nonlocal observed_png, injected
+                source, destination = Path(source), Path(destination)
+                if destination == (output / "scene-manifest.json").resolve() and not injected:
+                    injected = True
+                    observed_png = target.read_bytes() == b"new-png:pixels:15"
                     raise OSError("injected metadata publication failure")
-                real_write(path, value)
-            with self.assertRaisesRegex(OSError, "injected metadata publication failure"):
-                self._run_mock_patch(fixture, write_json=fail_on_scene)
+                return real_replace(source, destination)
+
+            with mock.patch.object(os, "replace", fail_on_scene), self.assertRaisesRegex(OSError, "injected metadata publication failure"):
+                self._run_mock_patch(fixture)
+            self.assertTrue(observed_png)
             self.assertEqual(self._snapshot(output), before)
 
     def test_patch_existing_success_and_repeat_are_stable(self):

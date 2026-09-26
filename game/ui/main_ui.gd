@@ -4451,7 +4451,7 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 func _build_source_inventory_panel() -> void:
 	var panel := SourceInventoryPanel.new()
 	panel.z_index = 70
-	panel.selected.connect(_source_inventory_selected.bind(panel))
+	panel.selected.connect(_source_inventory_selected.bind(panel), CONNECT_DEFERRED)
 	panel.cancelled.connect(func() -> void:
 		if panel == source_inventory_panel and not _inventory_applying: _close_source_inventory())
 	source_shell.reference_canvas.add_child(panel)

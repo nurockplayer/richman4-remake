@@ -23,6 +23,7 @@ const RESEARCH_SAVE_VERSION = 12
 const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
+const SourceShop = preload("res://game/core/source_shop_flow.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -273,7 +274,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
 	for key in options.keys():
 		# Dictionary dot assignment produces StringName keys in Godot. Treat
 		# those keys as their canonical string spelling so callers that adjust a
@@ -323,6 +324,14 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 	else:
 		for player_id in range(player_count):
 			character_ids.append(player_id)
+	var human_flags: Array = []
+	if options.has("human_flags"):
+		if typeof(options["human_flags"]) != TYPE_ARRAY or options["human_flags"].size() != player_count: return {}
+		for value in options["human_flags"]:
+			if typeof(value) != TYPE_BOOL: return {}
+			human_flags.append(value)
+	else:
+		for player_id in range(player_count): human_flags.append(player_id == 0)
 	var original_inventory: bool = false
 	if options.has("original_inventory"):
 		if typeof(options["original_inventory"]) != TYPE_BOOL:
@@ -394,6 +403,7 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"wealth_multiplier": wealth_multiplier,
 		"start_date": normalized_start_date,
 		"character_ids": character_ids,
+		"human_flags": human_flags,
 		"original_inventory": original_inventory,
 		"original_facilities": original_facilities,
 		"original_gods": original_gods,
@@ -417,6 +427,8 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 	_configure_setup(options, player_count)
 	if bool(options.get("original_companies", false)):
 		_initialize_original_companies(definition)
+	if SourceShop.enabled(self):
+		SourceShop.initialize(state)
 
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
@@ -459,6 +471,10 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		start_position,
 		_is_graph(),
 	)
+	for player_id in range(player_count):
+		var is_human := bool(options.human_flags[player_id])
+		state.players[player_id]["is_human"] = is_human
+		state.players[player_id]["is_ai"] = not is_human
 	if bool(options.get("original_statuses", false)):
 		for player in state["players"]:
 			player["prison_days"] = 0
@@ -2246,7 +2262,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase == "game_over":
+	if phase in ["game_over", "await_shop"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -3275,6 +3291,8 @@ func item_is_implemented(item_kind: String, item_id: String) -> bool:
 
 
 func is_shop_available() -> bool:
+	if SourceShop.enabled(self):
+		return not SourceShop.current(self).is_empty()
 	if not _is_inventory() or not _is_graph() or state.get("phase", "") != "await_action":
 		return false
 	var player: Dictionary = _current_player()
@@ -3377,6 +3395,7 @@ func _player_owns_tile(player_id: int, tile_index: int) -> bool:
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
+	if state.get("phase", "") == "await_shop": return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -4456,6 +4475,8 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 		var status_kind := "hospital" if int(tile.get("type_and_idx", -1)) == 8001 else "prison"
 		_record_event("status_facility_landed" if final_landing else "status_facility_passed", {"player_id": player_id, "status_kind": status_kind, "node": tile_index, "name": str(tile.get("name", ""))})
 		return
+	if final_landing and int(tile.get("event_code", -1)) == 15 and SourceShop.admit(self, player_id):
+		return
 	if _is_companies() and not get_company_at(tile_index).is_empty():
 		if final_landing:
 			_resolve_company_visit(player_id, tile)
@@ -4720,7 +4741,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") != "game_over":
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5154,6 +5175,10 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if SourceShop.enabled(self) and normalized in ["buy_item", "sell_item"]:
+		return SourceShop.trade(self, normalized, params)
+	if state.get("phase", "") == "await_shop": return _error("請先完成商店操作")
+
 	if normalized == "respond_auction":
 		return AuctionRules.respond(self, params)
 	if normalized == "respond_finance":
@@ -5272,7 +5297,7 @@ func _trade_item(player_id: int, action: String, params: Dictionary) -> Dictiona
 	var record: Dictionary = _inventory_record(item_kind, item_id)
 	if record.is_empty():
 		return _error("商品代號無效")
-	if item_kind == "tool" and int(record.get("source_id", 0)) > OriginalInventory.FINITE_TOOL_SOURCE_ID_MAX:
+	if item_kind == "tool" and int(record.get("source_id", 0)) > OriginalInventory.FINITE_TOOL_SOURCE_ID_MAX and (action == "buy_item" or not SourceShop.enabled(self)):
 		return _error("此道具尚未列入商店")
 	var quantity_value: Variant = params.get("quantity", 1)
 	if typeof(quantity_value) != TYPE_INT or int(quantity_value) <= 0 or int(quantity_value) > OriginalInventory.TOOL_CAPACITY_PER_TYPE:
@@ -5310,7 +5335,7 @@ func _trade_item(player_id: int, action: String, params: Dictionary) -> Dictiona
 			return _error("點數超出上限")
 		var consume_result: Dictionary
 		if item_kind == "card":
-			consume_result = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], item_id)
+			consume_result = OriginalInventory.consume_card(state["inventory_supply"], player["cards"], item_id, int(params.get("held_index", -1)))
 		else:
 			consume_result = OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], item_id, quantity)
 		if not bool(consume_result.get("ok", false)):
@@ -6291,6 +6316,7 @@ func end_turn() -> Dictionary:
 		return _error("請先選擇企業建設目標")
 	var player_id: int = int(state.get("current_player", -1))
 	var player: Dictionary = _player(player_id)
+	if SourceShop.enabled(self): state.shop_visit = {}
 	if bool(player.get("alive", false)):
 		player["turns_taken"] = int(player.get("turns_taken", 0)) + 1
 		_repay_due_loan(player_id)
@@ -6690,6 +6716,11 @@ func _check_game_over(reason: String = "") -> void:
 
 
 func run_ai_turn() -> Dictionary:
+	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
+		return _result(false, "等待商店操作", {"awaiting_response": true, "completed": false})
+	if state.get("phase", "") == "await_shop":
+		SourceShop.ai_turn(self)
+		return _result(true, "AI 商店操作完成", {"completed": true})
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if not AuctionRules.response(self).is_empty():
@@ -7551,6 +7582,8 @@ func _ai_transport_action(player_id: int) -> bool:
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:
+	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
+		return _result(false, "等待商店操作", {"completed_turns": 0, "awaiting_response": true})
 	if _trap_pending():
 		return _error("請先回應陷害卡")
 	if max_turns < 1:
@@ -8040,6 +8073,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var hazards_save: bool = property_cards_save or _valid_int(version_marker, HAZARD_SAVE_VERSION, HAZARD_SAVE_VERSION)
 	var status_save: bool = hazards_save or _valid_int(version_marker, STATUS_SAVE_VERSION, STATUS_SAVE_VERSION)
 	var companies_save: bool = status_save or _valid_int(version_marker, COMPANY_SAVE_VERSION, COMPANY_SAVE_VERSION)
+	var source_shop_save: bool = SourceShop.supports_save(data)
 	var stock_symbols: Array = OriginalStockMarket.symbols() if companies_save else STOCK_SYMBOLS
 	var gods_save: bool = status_save or companies_save or _valid_int(version_marker, GODS_SAVE_VERSION, GODS_SAVE_VERSION)
 	var facility_save: bool = status_save or gods_save or _valid_int(version_marker, FACILITY_SAVE_VERSION, FACILITY_SAVE_VERSION)
@@ -8199,6 +8233,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var allowed_phases: Array = ["await_roll", "await_action", "game_over"]
 	if graph_save:
 		allowed_phases.append("await_route")
+	if source_shop_save:
+		allowed_phases.append("await_shop")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
@@ -9451,6 +9487,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		for auction in auctions:
 			if typeof(auction) != TYPE_DICTIONARY:
 				errors.append("invalid bankruptcy auction entry")
+	var shop_errors: Array = SourceShop.validate(data, source_shop_save)
+	if not shop_errors.is_empty(): errors.append_array(shop_errors)
 	return {"ok": errors.is_empty(), "errors": errors}
 
 
@@ -9485,6 +9523,8 @@ static func _canonicalize_json_numbers(value: Variant) -> Variant:
 static func from_dict(data: Dictionary) -> Richman4GameState:
 	var candidate: Dictionary = data.duplicate(true)
 	_migrate_news_source_kind(candidate)
+	if SourceShop.supports_save(candidate) and not candidate.has("shop_visit") and not candidate.has("shop_sequence"):
+		SourceShop.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -9550,3 +9590,13 @@ static func load_from_path(path: String) -> Richman4GameState:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return null
 	return from_dict(parsed)
+
+
+func shop_visit_snapshot() -> Dictionary:
+	return SourceShop.snapshot(self)
+
+func acknowledge_shop_gift(visit_id: int) -> Dictionary:
+	return SourceShop.acknowledge_gift(self, visit_id)
+
+func leave_shop(visit_id: int) -> Dictionary:
+	return SourceShop.leave(self, visit_id)

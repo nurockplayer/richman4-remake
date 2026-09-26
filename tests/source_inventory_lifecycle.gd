@@ -26,18 +26,29 @@ func run() -> void:
 	ui._on_source_ai_requested()
 	ui._on_roll_pressed()
 	check(game.to_json() == before and ui._source_inventory_modal_open(),"new/load/AI/roll paths cannot mutate active game")
+	ui._on_source_tools_requested()
+	await settle()
 	var old_panel: Control = ui.source_inventory_panel
+	check(old_panel.view_model().tools.size() > 0,"default game has a usable held ordinary tool")
 	var replacement: Object = Core.from_dict(game.to_dict())
 	ui.game_state = replacement
 	ui._refresh_from_state()
 	check(not old_panel.is_open() and not ui._source_inventory_modal_open(),"replaced owner clears stale held list")
 	old_panel.selected.emit(1)
-	check(game.to_json() == before and replacement.to_json() == before,"stale callback cannot affect either owner")
+	await settle()
+	check(game.to_json() == before and replacement.to_json() == before and not ui._source_inventory_modal_open() and not ui.cards_popup.visible,"stale owner callback cannot mutate either game or open a target")
 	check(auto_accept_quit == prior_quit,"owner replacement restores original quit policy")
-	ui._on_source_cards_requested()
+	ui._on_source_tools_requested()
+	await settle()
+	var current_panel: Control = ui.source_inventory_panel
+	check(current_panel.is_open() and current_panel.view_model().tools.size() > 0,"current generation test uses an open list with a held ordinary tool")
+	var current_owner: Object = ui.game_state
 	ui._presentation_generation += 1
-	old_panel.selected.emit(1)
-	check(ui._source_inventory_modal_open(),"old generation callbacks cannot consume the active list")
+	current_panel.selected.emit(3)
+	await settle()
+	check(game.to_json() == before and current_owner == ui.game_state and current_owner.to_json() == before,"stale generation callback preserves game JSON and current owner")
+	check(ui._source_inventory_modal_open() and current_panel.is_open() and not ui.cards_popup.visible,"stale generation callback leaves current held list open")
+	check(not auto_accept_quit,"stale generation callback retains modal quit hold")
 	ui._close_source_inventory()
 	await settle()
 	check(not ui._source_inventory_modal_open() and auto_accept_quit == prior_quit,"cancel returns to board and restores quit policy")

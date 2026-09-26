@@ -23,7 +23,13 @@ func run() -> void:
 	ui.set_process(false)
 	var edition := OS.get_environment("RICHMAN4_INVENTORY_EDITION")
 	if edition.is_empty(): edition = "Game"
-	var definition := find_map(ui,edition,1 if edition == "Game" else 7)
+	var definition: Dictionary = {}
+	var source_map_number := 1 if edition == "Game" else 7
+	for candidate in ui._map_catalog:
+		var candidate_source: Variant = candidate.get("source", {})
+		if candidate_source is Dictionary and str(candidate_source.get("edition", "")) == edition and int(candidate_source.get("map_number", -1)) == source_map_number:
+			definition = candidate
+			break
 	var setup_options: Dictionary = ui._default_setup_options(4,definition)
 	setup_options["original_hazards"] = true
 	check(ui._new_game(160,4,definition,setup_options), "actual factory for legal held-item fixtures")
@@ -40,6 +46,17 @@ func run() -> void:
 	var prior_quit := auto_accept_quit
 	press(view,ui.source_shell.toolbar_buttons.cards)
 	await settle()
+	check_inventory_edition(ui, "cards")
+	var saved_definition: Dictionary = ui._active_map_definition.duplicate(true)
+	var unsupported_definition := saved_definition.duplicate(true)
+	var unsupported_source: Dictionary = unsupported_definition.get("source", {}).duplicate(true)
+	unsupported_source["edition"] = "UnsupportedEdition"
+	unsupported_definition["source"] = unsupported_source
+	ui._active_map_definition = unsupported_definition
+	ui._show_source_inventory_list()
+	check(ui.source_inventory_panel.source_geometry().get("edition", "") == str(ui.source_shell.get("_source_edition")), "unsupported active edition falls back to GameShell inventory edition")
+	ui._active_map_definition = saved_definition
+	ui._show_source_inventory_list()
 	await capture(view,ui,"cards-held")
 	check(ui._source_modal_open() and ui._load_blocked_by_presentation() and not ui._is_human_turn(), "list joins human/modal/load gates")
 	check(not auto_accept_quit, "list holds close policy")
@@ -95,6 +112,7 @@ func run() -> void:
 	ui._refresh_from_state()
 	press(view,ui.source_shell.toolbar_buttons.tools)
 	await settle()
+	check_inventory_edition(ui, "tools")
 	await capture(view,ui,"tools-held-nine")
 	var map_ids: Array = []
 	for slot in range(15): map_ids.append(ui.source_inventory_panel.slot_source_id(slot))
@@ -178,6 +196,28 @@ func select(view: SubViewport, ui: Control, slot: int) -> void:
 		event.position = point if down else Vector2(view.size)-Vector2(10,10)
 		view.push_input(event,true)
 		if down and slot == 0 and ui._inventory_mode == "cards": await capture(view,ui,"pressed-card")
+
+func check_inventory_edition(ui: Control, mode: String) -> void:
+	var source: Variant = ui._active_map_definition.get("source", {})
+	var actual_edition := str(source.get("edition", "")) if source is Dictionary else ""
+	var expected_edition := actual_edition if actual_edition in ["Game", "MultiverseJourney"] else str(ui.source_shell.get("_source_edition"))
+	var geometry: Dictionary = ui.source_inventory_panel.source_geometry()
+	check(geometry.get("edition", "") == expected_edition, "%s inventory uses active map edition %s (actual %s)" % [mode, expected_edition, str(geometry.get("edition", ""))])
+	var visuals: Variant = ui.source_shell.get("_visuals")
+	if visuals is Object and visuals.has_method("ui"):
+		var background_chunk := 0 if mode == "cards" else 1
+		var expected_frame: Dictionary = visuals.ui(expected_edition, "Panel", 11, background_chunk)
+		var frames: Dictionary = ui.source_inventory_panel.source_frames()
+		check(frames.get("background", {}) == expected_frame, "%s Panel11 background frame resolves for active map edition %s" % [mode, expected_edition])
+		if mode == "tools":
+			for slot in range(15):
+				var source_id: int = ui.source_inventory_panel.slot_source_id(slot)
+				if source_id <= 0:
+					continue
+				var chunk: int = source_id + 1 if source_id != 14 else 15
+				var expected_icon: Dictionary = visuals.ui(expected_edition, "Panel", 11, chunk)
+				check(frames.get("slot_%d" % slot, {}) == expected_icon, "tools Panel11 icon frame resolves for active map edition %s" % expected_edition)
+				break
 
 func capture(view: SubViewport, ui: Control, label: String) -> void:
 	if capture_directory.is_empty(): return

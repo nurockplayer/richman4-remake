@@ -4506,7 +4506,13 @@ func _show_source_inventory_list() -> void:
 			record["count"] = count
 			tools.append(record)
 	source_inventory_panel.set_visual_accessor(source_shell.get("_visuals"))
-	source_inventory_panel.configure({"mode": _inventory_mode, "edition": source_shell.get("_source_edition"), "cards": cards, "tools": tools, "vehicle": _current_player().get("vehicle", "walking")})
+	var edition := ""
+	var source: Variant = _active_map_definition.get("source", {})
+	if source is Dictionary:
+		edition = str(source.get("edition", "")).strip_edges()
+	if edition not in ["Game", "MultiverseJourney"]:
+		edition = str(source_shell.get("_source_edition"))
+	source_inventory_panel.configure({"mode": _inventory_mode, "edition": edition, "cards": cards, "tools": tools, "vehicle": _current_player().get("vehicle", "walking")})
 
 func _inventory_adapter_current(owner: Variant, generation: int) -> bool:
 	if owner == null: return not _source_inventory_modal_open()

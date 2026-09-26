@@ -166,15 +166,15 @@ static func _grant_card_record(supply: Dictionary, player_cards: Array, record: 
 
 
 ## Consume one owned card and return it to the finite shared pool.
-static func consume_card(supply: Dictionary, player_cards: Array, identifier: Variant) -> Dictionary:
+static func consume_card(supply: Dictionary, player_cards: Array, identifier: Variant, selected_index: int = -1) -> Dictionary:
 	var record: Dictionary = _record_for(CARD_KIND, identifier)
 	if record.is_empty():
 		return _failure("卡片代號無效。")
 	if not _valid_supply(supply) or not _valid_cards(player_cards):
 		return _failure("卡片供給或背包格式無效。")
 	var card_id: String = str(record["id"])
-	var card_index: int = player_cards.find(card_id)
-	if card_index < 0:
+	var card_index: int = player_cards.find(card_id) if selected_index == -1 else selected_index
+	if card_index < 0 or card_index >= player_cards.size() or player_cards[card_index] != card_id:
 		return _failure("玩家沒有這張卡片。")
 
 	var staged_cards: Array = player_cards.duplicate(true)

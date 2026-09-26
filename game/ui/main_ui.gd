@@ -23,6 +23,7 @@ const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
+const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
@@ -198,6 +199,11 @@ var _company_service_type: OptionButton
 var _company_service_button: Button
 var _presentation_busy := false
 var source_inventory_panel: Control
+var source_shop_controller: Control
+var _shop_prior_auto_quit := true
+var _shop_quit_policy_held := false
+var _shop_window: Window
+var _shop_close_callback := Callable()
 var _inventory_owner: Variant = null
 var _inventory_generation := -1
 var _inventory_mode := ""
@@ -341,6 +347,7 @@ func _build_source_shell() -> void:
 		shell.call("set_board_view", board_view)
 	_build_source_stock_panel()
 	_build_source_inventory_panel()
+	_build_source_shop_controller()
 	_build_source_help_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
@@ -395,20 +402,21 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	_on_new_game_pressed()
 
 func _on_source_load_requested() -> void:
-	if _source_inventory_modal_open(): return
+	if _source_inventory_modal_open() or _source_shop_modal_open(): return
 	_load_game()
 
 func _on_source_save_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	_save_game()
 
 func _on_source_option_requested() -> void:
+	if _source_shop_modal_open(): return
 	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
 	_refresh_log_only()
 
@@ -442,7 +450,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -452,7 +460,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -464,11 +472,12 @@ func _on_source_cards_requested() -> void:
 	_open_source_inventory("cards")
 
 func _on_source_sale_requested() -> void:
+	if _source_shop_modal_open(): return
 	_append_local_log("出售功能請從來源股市畫面操作；目前此指令保留待接入。")
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -1765,7 +1774,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -1858,6 +1867,7 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 		return false
 	else:
 		_cancel_presentation()
+		if source_shop_controller != null: source_shop_controller.cancel()
 		game_state = candidate
 		_active_map_definition = selected_definition
 		_local_log.clear()
@@ -1978,14 +1988,17 @@ func _save_game() -> void:
 func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
+func _source_save_operation_allowed() -> bool:
+	return game_state != null and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
+
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open()
+	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2035,6 +2048,7 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	if restored == null:
 		return
 	_cancel_presentation()
+	if source_shop_controller != null: source_shop_controller.cancel()
 	game_state = restored
 	_adopt_map_from_snapshot(parsed)
 	_local_log.clear()
@@ -2126,6 +2140,7 @@ func _is_legacy_market_snapshot(snapshot: Dictionary) -> bool:
 	return true
 
 func _on_roll_pressed() -> void:
+	if _source_shop_modal_open(): return
 	if _source_inventory_modal_open() or roll_button.disabled:
 		return
 	var rest_status := _player_rest_status(_current_player())
@@ -2484,7 +2499,7 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return (not _source_inventory_modal_open() or _inventory_applying) and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	if _source_inventory_modal_open() and not _inventory_applying:
@@ -2495,10 +2510,13 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
+	var is_shop_response := _source_shop_modal_open() and (method in ["leave_shop", "acknowledge_shop_gift"] or method == "choose_action" and not args.is_empty() and str(args[0]) in ["buy_item", "sell_item"])
+	if _source_shop_modal_open() and not is_shop_response:
+		return {"ok": false, "message": "請先完成商店操作。"}
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
 	var is_finance_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_finance" and FinancialPresentation.human_pending(state)
 	var is_auction_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_auction" and _human_auction_response_pending()
-	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response:
+	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response and not is_shop_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
 		var before := _read_snapshot().duplicate(true)
@@ -2618,6 +2636,7 @@ func _update_all() -> void:
 	news_popup.sync_snapshot(state)
 	fate_popup.sync_snapshot(state)
 	_update_load_gate()
+	_sync_source_shop()
 	_sync_source_shell(phase, current_index)
 	_last_rendered_phase = phase
 
@@ -2635,7 +2654,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "options", false)
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", not _presentation_busy)
+		source_shell.call("set_toolbar_enabled", "save", _source_save_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
 		var inventory_enabled := _source_inventory_operation_allowed()
 		source_shell.call("set_toolbar_enabled", "cards", inventory_enabled)
@@ -2645,6 +2664,8 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 
 func _update_load_gate() -> void:
 	var enabled := not _load_blocked_by_presentation()
+	if _source_shop_modal_open() and not _presentation_busy:
+		_sync_source_shop.call_deferred()
 	if load_button != null:
 		load_button.disabled = not enabled
 	if source_shell != null and source_shell.has_method("set_toolbar_enabled"):
@@ -4451,6 +4472,54 @@ func _make_inventory_tile_picker(item_id: String) -> OptionButton:
 		picker.tooltip_text = "關閉背包後，可縮放或平移地圖，再重新選擇目標。"
 	return picker
 
+func _build_source_shop_controller() -> void:
+	if source_shell == null: return
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null: return
+	var controller: Control = SourceShopController.new()
+	controller.z_index = 71
+	controller.action_requested.connect(_on_source_shop_action_requested)
+	controller.opened.connect(_hold_source_shop_window_policy)
+	controller.closed.connect(_release_source_shop_window_policy)
+	canvas.add_child(controller)
+	source_shop_controller = controller
+	controller.set_visuals(source_shell.get("_visuals"))
+
+func _sync_source_shop() -> void:
+	if source_shop_controller == null: return
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or (source_stock_panel != null and source_stock_panel.visible) or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible)
+	source_shop_controller.sync(game_state, blocked)
+
+func _on_source_shop_action_requested(method: String, args: Array) -> void:
+	if source_shop_controller == null or not _source_shop_modal_open(): return
+	var result := _invoke_game(method, args)
+	if source_shop_controller.has_method("apply_action_result"): source_shop_controller.apply_action_result(result)
+	if method == "leave_shop" or bool(result.get("ok", false)):
+		_handle_result(result)
+	_sync_source_shop()
+
+func _hold_source_shop_window_policy() -> void:
+	if not _shop_quit_policy_held:
+		_shop_prior_auto_quit = get_tree().auto_accept_quit
+		_shop_quit_policy_held = true
+	get_tree().auto_accept_quit = false
+	_shop_window = get_window()
+	_shop_close_callback = func() -> void:
+		if _source_shop_modal_open() and game_state != null:
+			var visit: Dictionary = game_state.shop_visit_snapshot()
+			_on_source_shop_action_requested("leave_shop", [int(visit.get("visit_id", -1))])
+	if is_instance_valid(_shop_window) and not _shop_window.close_requested.is_connected(_shop_close_callback):
+		_shop_window.close_requested.connect(_shop_close_callback)
+
+func _release_source_shop_window_policy() -> void:
+	if is_instance_valid(_shop_window) and _shop_close_callback.is_valid() and _shop_window.close_requested.is_connected(_shop_close_callback):
+		_shop_window.close_requested.disconnect(_shop_close_callback)
+	_shop_window = null
+	_shop_close_callback = Callable()
+	if _shop_quit_policy_held:
+		get_tree().auto_accept_quit = _shop_prior_auto_quit
+		_shop_quit_policy_held = false
+
 # S19 owns only list lifetime; existing rows remain the validated S22 adapters.
 func _build_source_inventory_panel() -> void:
 	var panel := SourceInventoryPanel.new()
@@ -4464,6 +4533,9 @@ func _build_source_inventory_panel() -> void:
 
 func _source_inventory_modal_open() -> bool:
 	return _inventory_owner != null
+
+func _source_shop_modal_open() -> bool:
+	return game_state != null and game_state.has_method("shop_visit_snapshot") and not game_state.shop_visit_snapshot().is_empty()
 
 func _source_inventory_operation_allowed() -> bool:
 	return _has_original_inventory() and _is_human_turn() and not _source_modal_open() and not _presentation_busy and not _ai_pending and state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
@@ -4609,6 +4681,10 @@ func _close_source_inventory(refresh: bool = true) -> void:
 	if refresh: _update_all()
 
 func _exit_tree() -> void:
+	if source_shop_controller != null: source_shop_controller.cancel()
+	if _shop_quit_policy_held:
+		get_tree().auto_accept_quit = _shop_prior_auto_quit
+		_shop_quit_policy_held = false
 	if _inventory_quit_policy_held:
 		get_tree().auto_accept_quit = _inventory_prior_auto_quit
 		_inventory_quit_policy_held = false

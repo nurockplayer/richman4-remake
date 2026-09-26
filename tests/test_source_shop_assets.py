@@ -55,7 +55,7 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 class SourceShopAssetTests(unittest.TestCase):
     def test_missing_inherited_scene_image_refuses_output(self):
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(AssetError, "unresolved image paths: images/base/Game/map/1.png"):
                 _verify_scene_paths(
                     {"maps": [{"path": "images/base/Game/map/1.png"}]},
@@ -110,7 +110,7 @@ class SourceShopAssetTests(unittest.TestCase):
                 ("test_generated_output_preserves_callback_alpha_roles", "SOURCE_SHOP_ASSET_ROOT"),
                 ("test_identity_enumerates_complete_panel10_resources", "SOURCE_SHOP_IDENTITY"),
             ):
-                with self.subTest(value=value, method=method), tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+                with self.subTest(value=value, method=method), tempfile.TemporaryDirectory() as temporary:
                     # A cwd that looks like asset output must still never be read.
                     Path(temporary, "manifest.json").write_text("invalid sentinel")
                     environment = os.environ.copy()
@@ -151,8 +151,8 @@ class SourceShopAssetTests(unittest.TestCase):
         from unittest.mock import patch
         import prepare_source_shop as producer
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
-            root = Path(temporary)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
             zip_path, identity, base = self._inputs(root)
             output = root / "output"
             output.mkdir()
@@ -173,8 +173,8 @@ class SourceShopAssetTests(unittest.TestCase):
         from unittest.mock import patch
         import prepare_source_shop as producer
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
-            root = Path(temporary)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
             zip_path, identity, base = self._inputs(root)
             target = root / "target"
             target.mkdir()
@@ -189,8 +189,8 @@ class SourceShopAssetTests(unittest.TestCase):
         from unittest.mock import patch
         import prepare_source_shop as producer
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
-            root = Path(temporary)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
             zip_path, identity, base = self._inputs(root)
             with patch.object(producer, "_prepare_into") as prepare_into:
                 with self.assertRaisesRegex(producer.AssetError, "aliases a source input"):
@@ -201,8 +201,8 @@ class SourceShopAssetTests(unittest.TestCase):
         from unittest.mock import patch
         import prepare_source_shop as producer
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
-            root = Path(temporary)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
             zip_path, identity, base_manifest = self._inputs(root)
             base_images = root / "images" / "base"
             base_images.mkdir(parents=True)

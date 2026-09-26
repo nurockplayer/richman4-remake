@@ -24,7 +24,6 @@ func run() -> void:
 	root.add_child(view)
 	view.notify_mouse_entered()
 	var ui := MainScene.instantiate()
-	ui.scale = Vector2.ONE * scale_value
 	view.add_child(ui)
 	await settle()
 	ui.set_process(false)
@@ -53,6 +52,8 @@ func run() -> void:
 	var controller: Control = ui.source_shop_controller
 	var panel: Control = controller.panel
 	check(panel != null and panel.is_open(), "loaded pending visit opens source panel")
+	if panel != null and panel.is_open():
+		_assert_panel_viewport_bounds(view, panel)
 	var actual_source: Dictionary = ui._active_map_definition.get("source", {})
 	check(str(actual_source.get("edition", "")) == edition and str(game.state.map_source.edition) == edition, "owner bridge retains requested source edition")
 	var visit: Dictionary = game.shop_visit_snapshot()
@@ -136,11 +137,19 @@ func _push_panel(view: SubViewport, panel: Control, point: Vector2, button: Mous
 	view.push_input(event, true)
 	await process_frame
 
+func _assert_panel_viewport_bounds(view: SubViewport, panel: Control) -> Dictionary:
+	var transform := panel.get_global_transform_with_canvas()
+	var bounds: Rect2 = transform * Rect2(Vector2.ZERO, panel.size)
+	var expected := Rect2(Vector2.ZERO, Vector2(view.size))
+	check(bounds.position.is_equal_approx(expected.position) and bounds.size.is_equal_approx(expected.size), "active source panel fills requested viewport: %s matches %s" % [bounds, expected])
+	return {"bounds": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y], "transform": [transform.x.x, transform.x.y, transform.y.x, transform.y.y, transform.origin.x, transform.origin.y]}
+
 func capture(view: SubViewport, ui: Control, label: String) -> void:
 	if capture_directory.is_empty(): return
 	if DisplayServer.get_name() == "headless": return
 	var panel: Control = ui.source_shop_controller.panel if ui.source_shop_controller != null else null
 	var panel_open: bool = panel != null and panel.is_open()
+	var panel_view: Dictionary = _assert_panel_viewport_bounds(view, panel) if panel_open else {}
 	if FileAccess.file_exists("res://.local/imported-original/manifest.json"):
 		if panel_open:
 			check(panel.source_art_available(), "actual displayed Panel10 art loaded: " + label)
@@ -162,4 +171,4 @@ func capture(view: SubViewport, ui: Control, label: String) -> void:
 	var snapshot_hash := hash_context.finish().hex_encode()
 	var mode: Variant = panel.view_model().mode if panel_open else null
 	var geometry: Variant = panel.source_geometry() if panel_open else null
-	capture_records.append({"path": path, "sha256": FileAccess.get_sha256(path), "size": [view.size.x, view.size.y], "panel_open": panel_open, "mode": mode, "geometry": geometry, "phase": ui.game_state.state.phase, "actor": int(ui.game_state.state.current_player), "edition": ui._active_map_definition.get("source", {}).get("edition", ""), "core_snapshot": core_snapshot, "core_snapshot_sha256": snapshot_hash, "shop_visit_snapshot": visit_snapshot, "review_head": OS.get_environment("RICHMAN4_REVIEW_HEAD"), "input": "injected loaded-owner/component capture; not physical OS ordinary entry"})
+	capture_records.append({"path": path, "sha256": FileAccess.get_sha256(path), "size": [view.size.x, view.size.y], "panel_open": panel_open, "panel_view": panel_view, "mode": mode, "geometry": geometry, "phase": ui.game_state.state.phase, "actor": int(ui.game_state.state.current_player), "edition": ui._active_map_definition.get("source", {}).get("edition", ""), "core_snapshot": core_snapshot, "core_snapshot_sha256": snapshot_hash, "shop_visit_snapshot": visit_snapshot, "review_head": OS.get_environment("RICHMAN4_REVIEW_HEAD"), "input": "injected loaded-owner/component capture; not physical OS ordinary entry"})

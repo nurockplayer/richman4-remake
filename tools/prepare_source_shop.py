@@ -400,6 +400,17 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
             if target.exists() or target.is_symlink():
                 if not target.is_symlink() or not target.is_file() or target.resolve() != source:
                     raise AssetError(f"inherited image publication collision: {target}")
+        # Resolve only the inherited paths actually referenced by the frozen
+        # scene. Packaging accepts owned regular PNG leaves, while the S19
+        # inputs remain untouched canonical sources.
+        for source, relative in inherited:
+            staged_leaf = staged / relative
+            if staged_leaf.is_symlink():
+                staged_leaf.unlink()
+                staged_leaf.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, staged_leaf)
+            if not staged_leaf.is_file():
+                raise AssetError(f"staged inherited scene image is unavailable: {relative}")
         output.mkdir(parents=True, exist_ok=True)
         base_target = owned[base_index]
         metadata_targets = owned[base_index+1:]
@@ -407,7 +418,7 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         backups: list[tuple[Path, Path]] = []
         published: list[Path] = []
         try:
-            for index, target in enumerate([base_target, *metadata_targets]):
+            for index, target in enumerate([*inherited_targets, base_target, *metadata_targets]):
                 if target.exists() or target.is_symlink():
                     backup = staged / f"publication-backup-{index}"
                     os.replace(target, backup)
@@ -416,11 +427,9 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(source, target)
                 published.append(target)
-            for (source, _relative), target in zip(inherited, inherited_targets):
-                if target.is_symlink():
-                    continue
+            for (_source, relative), target in zip(inherited, inherited_targets):
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.symlink_to(source)
+                os.replace(staged / relative, target)
                 published.append(target)
             base_target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staged / "images" / "base", base_target)

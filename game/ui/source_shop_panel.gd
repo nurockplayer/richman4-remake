@@ -31,6 +31,7 @@ const EXIT_PRESSED_CHUNK := 36
 const CATALOG_ORIGIN := Vector2(5, 10)
 const POINTS_ORIGIN := Vector2(230, 246)
 const POINTS_ANCHOR := Vector2(310, 257)
+const FEEDBACK_RECT := Rect2(140, 466, 360, 14)
 const MERCHANT_CENTER := Vector2(320, 240)
 const SOURCE_TEXT := Color("#ffffff")
 const SOURCE_OUTLINE := Color("#101010")
@@ -125,7 +126,7 @@ func source_frames() -> Dictionary:
 	return _source_frames.duplicate(true)
 
 func source_geometry() -> Dictionary:
-	return {"canvas": CANVAS, "edition": _edition, "mode": _mode, "held_origin": HELD_ORIGIN, "held_grid_origin": GRID_ORIGIN, "held_cell": CELL, "columns": GRID_COLUMNS, "rows": GRID_ROWS, "tab": TAB_RECT, "exit": EXIT_RECT, "catalog_origin": CATALOG_ORIGIN, "points_origin": POINTS_ORIGIN, "points_anchor": POINTS_ANCHOR, "merchant_center": MERCHANT_CENTER, "card_offer": Rect2(14, 81, 202, 360), "tool_offer": Rect2(12, 80, 202, 384), "merchant_ready_chunk": _merchant_ready_chunk(), "merchant_closing_chunk": _merchant_closing_chunk(), "tab_normal_chunk": _tab_normal_chunk(), "tab_pressed_chunk": _tab_pressed_chunk(), "points_chunk": POINTS_CHUNK, "exit_chunk": EXIT_NORMAL_CHUNK, "exit_pressed_chunk": EXIT_PRESSED_CHUNK}
+	return {"canvas": CANVAS, "edition": _edition, "mode": _mode, "held_origin": HELD_ORIGIN, "held_grid_origin": GRID_ORIGIN, "held_cell": CELL, "columns": GRID_COLUMNS, "rows": GRID_ROWS, "tab": TAB_RECT, "exit": EXIT_RECT, "catalog_origin": CATALOG_ORIGIN, "points_origin": POINTS_ORIGIN, "points_anchor": POINTS_ANCHOR, "feedback": FEEDBACK_RECT, "merchant_center": MERCHANT_CENTER, "card_offer": Rect2(14, 81, 202, 360), "tool_offer": Rect2(12, 80, 202, 384), "merchant_ready_chunk": _merchant_ready_chunk(), "merchant_closing_chunk": _merchant_closing_chunk(), "tab_normal_chunk": _tab_normal_chunk(), "tab_pressed_chunk": _tab_pressed_chunk(), "points_chunk": POINTS_CHUNK, "exit_chunk": EXIT_NORMAL_CHUNK, "exit_pressed_chunk": EXIT_PRESSED_CHUNK}
 
 func _gui_input(event: InputEvent) -> void:
 	if not event is InputEventMouseButton: return
@@ -331,7 +332,7 @@ func _render() -> void:
 	if not _is_ready_state() and not str(_model.get("gift_message", "")).is_empty():
 		_make_centered_label("SourceShopGiftMessage", str(_model.get("gift_message", "")), Vector2(320, 440), Vector2(360, 26), 16, SOURCE_TEXT)
 	elif _is_ready_state() and not str(_model.get("feedback", "")).is_empty():
-		_make_centered_label("SourceShopFeedback", str(_model.get("feedback", "")), Vector2(320, 440), Vector2(360, 26), 16, SOURCE_TEXT)
+		_make_centered_label("SourceShopFeedback", str(_model.get("feedback", "")), FEEDBACK_RECT.get_center(), FEEDBACK_RECT.size, 12, SOURCE_TEXT)
 
 func _make_text(node_name: String, value: String, origin: Vector2, extent: Vector2, font_size: int) -> Label:
 	var label := Label.new()

@@ -222,10 +222,14 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	if not players is Array or not board is Array or not _integer(visit.get("visit_id"), 1, int(data.shop_sequence)) or not _integer(visit.get("player_id"), 0, players.size()-1) or not _integer(visit.get("node_id"), 0, board.size()-1): return ["invalid source shop identity"]
 	var player: Variant = players[int(visit.player_id)]
 	var tile: Variant = board[int(visit.node_id)]
-	if not player is Dictionary or not tile is Dictionary or not _integer(visit.get("turn"), 1, 1000000000) or not _integer(data.get("turn"), int(visit.turn), int(visit.turn)) or not _integer(data.get("current_player"), int(visit.player_id), int(visit.player_id)) or not bool(player.get("alive", false)) or not _integer(tile.get("event_code"), 15, 15): return ["stale source shop owner"]
+	if not player is Dictionary or not tile is Dictionary or not _integer(visit.get("turn"), 1, 1000000000) or not _integer(tile.get("event_code"), 15, 15): return ["stale source shop identity"]
 	for key in ["human", "closed", "gift_pending"]:
 		if typeof(visit.get(key)) != TYPE_BOOL: return ["invalid source shop flag"]
 	if bool(visit.closed) and data.get("phase") == "await_shop": return ["closed source shop in pending phase"]
+	# Historical records survive the owner dying or the game advancing. Keep
+	# active visit ownership checks below strict while validating closed records
+	# by their immutable visit/shop structure and accounting only.
+	if not bool(visit.closed) and (not _integer(data.get("turn"), int(visit.turn), int(visit.turn)) or not _integer(data.get("current_player"), int(visit.player_id), int(visit.player_id)) or not bool(player.get("alive", false))): return ["stale source shop owner"]
 	# A closed visit is immutable accounting/replay history. Ordinary actions
 	# after EXIT can move the actor or advance the phase without reopening it.
 	if not bool(visit.closed) and not _integer(player.get("position"), int(visit.node_id), int(visit.node_id)): return ["stale source shop owner"]

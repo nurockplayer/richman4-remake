@@ -218,6 +218,20 @@ func _test_lifetime_persistence() -> void:
 	Shop.admit(game,0)
 	check(game.to_dict() == before,"same-visit reopen cannot replenish offers or gift")
 	valid(game,"closed visit")
+	var historic: Dictionary = game.to_dict()
+	historic.turn = int(historic.turn) + 1
+	historic.current_player = 1
+	historic.phase = "game_over"
+	historic.action_options = []
+	historic.winner = -1
+	historic.last_event = {"type":"game_over", "reason":"company_dividend_no_survivors", "winner":-1}
+	for historic_player in historic.players:
+		historic_player.alive = false
+		historic_player.bankrupt = true
+	var historic_check: Dictionary = Core.validate_save(historic)
+	check(historic_check.get("ok", false), "closed visit validates after owner death, turn handoff, and terminal phase: " + str(historic_check.get("errors", [])))
+	var historic_restore: Object = Core.from_dict(JSON.parse_string(JSON.stringify(historic)))
+	check(historic_restore != null and historic_restore.state.shop_visit == historic.shop_visit, "closed visit history survives terminal JSON round trip")
 	var closed_await_shop: Dictionary = game.to_dict()
 	closed_await_shop.phase = "await_shop"
 	check(Core.from_dict(closed_await_shop) == null,"closed visit cannot restore into shop phase")

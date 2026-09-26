@@ -249,7 +249,7 @@ class SourceShopAssetTests(unittest.TestCase):
             self.assertEqual((output / "images" / "base" / "prior.png").read_bytes(), b"prior-base")
             self.assertFalse((output / "images" / "Game" / "ui" / "Panel" / "10" / "0.png").exists())
 
-    def test_public_prepare_publishes_inherited_overlay_links_and_rolls_back_late_fault(self):
+    def test_public_prepare_publishes_inherited_overlay_files_and_rolls_back_late_fault(self):
         from unittest.mock import patch
         import prepare_source_shop as producer
 
@@ -298,7 +298,7 @@ class SourceShopAssetTests(unittest.TestCase):
             def fail_after_inherited_publication(source, destination):
                 nonlocal fault_seen_links
                 if Path(source).name == "scene-manifest.json":
-                    fault_seen_links = all((output / f"images/{edition}/ui/Panel/11/0.png").is_symlink() for edition in EDITIONS)
+                    fault_seen_links = all((output / f"images/{edition}/ui/Panel/11/0.png").is_file() and not (output / f"images/{edition}/ui/Panel/11/0.png").is_symlink() for edition in EDITIONS)
                     raise OSError("synthetic late metadata fault")
                 return original_replace(source, destination)
 
@@ -311,6 +311,12 @@ class SourceShopAssetTests(unittest.TestCase):
                 edition: (edition + "-panel11").encode() for edition in EDITIONS
             })
 
+            # A retry may encounter a compatible old link. Replace the link
+            # entry with owned bytes without writing through to its target.
+            for edition, source in inherited.items():
+                target = output / f"images/{edition}/ui/Panel/11/0.png"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(source)
             with patch.object(producer, "_prepare_into", side_effect=stage):
                 result = producer.prepare(zip_path, output, identity, base_manifest)
             resolved_scene = json.loads((output / "scene-manifest.json").read_text(encoding="utf-8"))
@@ -318,9 +324,10 @@ class SourceShopAssetTests(unittest.TestCase):
             self.assertEqual(result["resources"].keys(), set(EDITIONS))
             for edition, source in inherited.items():
                 published = output / f"images/{edition}/ui/Panel/11/0.png"
-                self.assertTrue(published.is_symlink())
-                self.assertEqual(published.resolve(), source)
+                self.assertTrue(published.is_file())
+                self.assertFalse(published.is_symlink())
                 self.assertEqual(published.read_bytes(), source.read_bytes())
+                self.assertEqual(source.read_bytes(), (edition + "-panel11").encode())
 
 
 if __name__ == "__main__":

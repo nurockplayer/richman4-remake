@@ -70,9 +70,16 @@ func _run() -> void:
 	panel._gui_input(_event(Vector2(12,80), MOUSE_BUTTON_LEFT, true))
 	expect(actions.size() == 5, "closed panel ignores stale input")
 	for edition in ["Game", "MultiverseJourney"]:
-		panel.configure(_model("cards", edition))
-		panel.scale = Vector2(2, 2)
-		expect(panel.source_geometry().canvas == Vector2(640,480) and panel.source_geometry().held_grid_origin == Vector2(232,298), edition + " logical geometry survives 2x viewport scale")
+		var feedback_model := _model("cards", edition)
+		feedback_model.feedback = "餘額不足"
+		panel.configure(feedback_model)
+		var feedback: Control = panel.find_child("SourceShopFeedback", true, false)
+		var feedback_rect: Rect2 = panel.source_geometry().feedback
+		var held_rect := Rect2(232, 298, 400, 168)
+		expect(feedback != null and not feedback_rect.intersects(held_rect), edition + " feedback stays outside all fifteen held slots")
+		for scale_value in [1, 2]:
+			panel.scale = Vector2.ONE * scale_value
+			expect(panel.source_geometry().canvas == Vector2(640,480) and panel.source_geometry().held_grid_origin == Vector2(232,298) and panel.source_geometry().feedback == Rect2(140,466,360,14), edition + " logical geometry and safe feedback survive %dx viewport scale" % scale_value)
 		panel.scale = Vector2.ONE
 	panel.configure(_model("cards", "Game", false, "店主送你一件禮物"))
 	expect(panel.is_open() and panel.visible and panel.find_child("SourceShopGiftMessage", true, false) != null, "gift pending keeps source panel and message visible")

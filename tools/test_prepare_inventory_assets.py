@@ -49,6 +49,76 @@ def _png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 
 class InventoryAssetTests(unittest.TestCase):
+    def test_prepare_refuses_metadata_directories_and_retries_without_loss(self):
+        for name in ("manifest.json", "scene-manifest.json", "provenance.json"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory(prefix="fresh-metadata-directory-") as temporary:
+                fixture = self._prepare_fixture(Path(temporary))
+                output = fixture[0]
+                output.mkdir()
+                marker = output / name / "marker"
+                marker.parent.mkdir()
+                marker.write_bytes(b"keep directory contents")
+                marker.parent.chmod(0o751)
+                (output / "keep.txt").write_bytes(b"prior output")
+                before = self._snapshot(output)
+                mode = marker.parent.stat().st_mode & 0o777
+                with self.assertRaises(inventory.AssetError):
+                    self._run_prepare(fixture)
+                self.assertEqual(marker.read_bytes(), b"keep directory contents")
+                self.assertTrue(marker.parent.is_dir())
+                self.assertEqual(marker.parent.stat().st_mode & 0o777, mode)
+                self.assertEqual(self._snapshot(output), before)
+                marker.parent.rename(output / (name + ".saved"))
+                manifest = self._run_prepare(fixture)
+                self.assertEqual(len(manifest["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
+    def test_prepare_protects_base_manifest_inputs_from_publication(self):
+        # Exact metadata destination alias and input nested under the real base
+        # directory are refused before any publication rename.
+        for layout in ("metadata", "inside-base"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory(prefix="fresh-input-boundary-") as temporary:
+                root = Path(temporary)
+                fixture = self._prepare_fixture(root)
+                output, zip_path, identity_path, base_manifest = fixture[:4]
+                if layout == "metadata":
+                    base_manifest = output / "manifest.json"
+                    shutil.copytree(fixture[3].parent / "images", output / "images")
+                    external = root / "old-base"
+                    external.mkdir(exist_ok=True)
+                    (external / "marker").write_bytes(b"linked output survives")
+                    (output / "images" / "base").symlink_to(external, target_is_directory=True)
+                    base_manifest.write_text(json.dumps({"schema": "richman4.scene-images/v1", "maps": [], "characters": {}, "ui": {}}))
+                else:
+                    shutil.copytree(fixture[3].parent / "images", output / "images")
+                    (output / "images" / "base").mkdir()
+                    base_manifest = output / "images" / "base" / "input.json"
+                    base_manifest.write_text(json.dumps({"schema": "richman4.scene-images/v1", "maps": [], "characters": {}, "ui": {}}))
+                original = base_manifest.read_bytes()
+                (output / "scene-manifest.json").write_bytes(b"prior scene")
+                (output / "provenance.json").write_bytes(b"prior provenance")
+                before = self._snapshot(output)
+                with self.assertRaises(inventory.AssetError):
+                    self._run_prepare((output, zip_path, identity_path, base_manifest, *fixture[4:]))
+                self.assertEqual(self._snapshot(output), before)
+                self.assertEqual(base_manifest.read_bytes(), original)
+                self.assertEqual(json.loads(base_manifest.read_text())["schema"], "richman4.scene-images/v1")
+                # Moving the source away from the destructive boundary is valid.
+                safe = root / "safe-scene.json"
+                shutil.copytree(fixture[3].parent / "images", root / "images", dirs_exist_ok=True)
+                safe.write_bytes(original)
+                result = self._run_prepare((output, zip_path, identity_path, safe, *fixture[4:]))
+                self.assertEqual(len(result["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+
+    def test_prepare_allows_shared_parent_when_output_is_separate(self):
+        with tempfile.TemporaryDirectory(prefix="fresh-shared-parent-") as temporary:
+            root = Path(temporary)
+            fixture = self._prepare_fixture(root)
+            output, zip_path, identity_path, base_manifest = fixture[:4]
+            shared_output = root / "source" / "inventory-output"
+            result = self._run_prepare((shared_output, zip_path, identity_path, base_manifest, *fixture[4:]))
+            self.assertEqual(len(result["resources"]["Game"]["chunks"]), CHUNK_COUNT)
+            self.assertTrue(base_manifest.is_file())
+
     def test_main_reports_recovery_note_on_stderr(self):
         error = inventory.AssetError("injected producer failure")
         error.add_note("rollback incomplete; recovery material retained at /tmp/recovery-path")

@@ -75,6 +75,18 @@ def _preflight_write_set(output: Path, destinations: list[tuple[str | Path, bool
     return targets
 
 
+def _preflight_inputs(inputs: list[Path], targets: list[Path]) -> None:
+    """Refuse publication that would replace an input or a real tree holding it."""
+    canonical_inputs = {path.resolve(strict=False) for path in inputs}
+    for target in targets:
+        if target.resolve(strict=False) in canonical_inputs:
+            raise AssetError(f"publication destination is also an input: {target}")
+        if target.is_dir() and not target.is_symlink():
+            canonical_target = target.resolve()
+            if any(path != canonical_target and canonical_target in path.parents for path in canonical_inputs):
+                raise AssetError(f"publication would remove an input-containing directory: {target}")
+
+
 def _rewrite_base_paths(value):
     """Repoint existing scene image records through the private base link."""
 
@@ -292,6 +304,10 @@ def prepare(zip_path: Path, output: Path, identity_path: Path, base_manifest: Pa
         destinations.extend(Path(name) for name in ("images/base", "manifest.json", "scene-manifest.json", "provenance.json"))
         allow_leaf_links = {"images/base", "manifest.json", "scene-manifest.json", "provenance.json"}
         owned_targets = _preflight_write_set(output, [(path, path.as_posix() in allow_leaf_links) for path in destinations])
+        _preflight_inputs([zip_path, identity_path, base_manifest], [owned_targets[len(staged_pngs)], *owned_targets[len(staged_pngs) + 1:]])
+        for target in owned_targets[len(staged_pngs) + 1:]:
+            if target.exists() and not target.is_symlink() and not target.is_file():
+                raise AssetError(f"metadata publication destination is not a regular file or symlink: {target.name}")
         targets = list(zip(staged_pngs, owned_targets[:len(staged_pngs)]))
         collisions = [target for _, target in targets if target.exists() or target.is_symlink()]
         if collisions:

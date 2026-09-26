@@ -95,6 +95,19 @@ def _scene_image_inputs(scene: dict, manifest_path: Path) -> list[Path]:
 def _preflight_replacement_inputs(inputs: list[Path], targets: list[Path]) -> None:
     """Reject inputs whose canonical backing paths are removed by replacement."""
     canonical_inputs = {path.expanduser().resolve(strict=False) for path in inputs}
+
+    def existing_identities(path: Path) -> set[tuple[int, int]]:
+        identities = set()
+        for entry in (path, *path.parents):
+            try:
+                info = entry.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            identities.add((info.st_dev, info.st_ino))
+        return identities
+
+    input_identities = set().union(*(existing_identities(path.expanduser()) for path in inputs))
+
     for target in targets:
         # Replacing a symlink only removes the link entry; its referent is safe.
         if target.is_symlink():
@@ -104,6 +117,12 @@ def _preflight_replacement_inputs(inputs: list[Path], targets: list[Path]) -> No
             raise AssetError(f"publication destination is also an input: {target}")
         if target.is_dir() and any(canonical_target in path.parents for path in canonical_inputs):
             raise AssetError(f"publication would remove an input-containing directory: {target}")
+        try:
+            info = target.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if (info.st_dev, info.st_ino) in input_identities:
+            raise AssetError(f"publication destination overlaps an input by filesystem identity: {target}")
 
 
 def _rewrite_base_paths(value):

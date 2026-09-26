@@ -181,6 +181,30 @@ class InventoryAssetTests(unittest.TestCase):
                 accepted = self._run_real_cli(zip_path, output, identity_path, base_manifest, patch=True)
                 self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
+    def test_real_cli_refuses_case_aliased_metadata_input_and_retries(self):
+        with tempfile.TemporaryDirectory(prefix="case-aliased-metadata-") as temporary:
+            root = Path(temporary)
+            output = root / "out"
+            output.mkdir()
+            alternate = root / "OUT"
+            if not alternate.exists() or not os.path.samefile(output, alternate):
+                self.skipTest("filesystem is case sensitive; output path case alias is a distinct entry")
+            zip_path, identity_path = self._real_synthetic_inputs(root)
+            base_image = root / "images" / "base-map.png"
+            base_image.parent.mkdir()
+            base_manifest = write_scene_manifest(root, [png_record(base_image, "images/base-map.png")], filename="base.json")
+            aliased_zip = output / "MANIFEST.JSON"
+            shutil.copyfile(zip_path, aliased_zip)
+            original = aliased_zip.read_bytes()
+            result = self._run_real_cli(aliased_zip, output, identity_path, base_manifest)
+            self.assertNotEqual(result.returncode, 0, "CLI replaced ZIP input through case-aliased manifest destination")
+            self.assertIn("input", result.stderr.lower())
+            self.assertEqual(aliased_zip.read_bytes(), original)
+            safe_zip = root / "retry-owner.zip"
+            shutil.copyfile(zip_path, safe_zip)
+            result = self._run_real_cli(safe_zip, output, identity_path, base_manifest)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_patch_cli_refuses_vehicle_destination_zip_and_retries(self):
         with tempfile.TemporaryDirectory(prefix="patch-cli-vehicle-input-") as temporary:
             root = Path(temporary)

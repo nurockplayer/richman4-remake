@@ -196,6 +196,10 @@ func _test_lifetime_persistence() -> void:
 			"gift": bad.shop_visit.gift = {"item_kind":"card","item_id":"missing"}
 			"phase": bad.phase = "await_action"
 		check(Core.from_dict(bad) == null,"malformed visit rejected: " + mutate)
+	var mismatched_open_actor := before.duplicate(true)
+	mismatched_open_actor.players[0].is_ai = true
+	mismatched_open_actor.players[0].is_human = false
+	check(Core.from_dict(mismatched_open_actor) == null,"open human visit rejects malformed actor mismatch")
 	var company: Dictionary = game.get_company_at(node_id)
 	var monthly := int(company.monthly_profit)
 	var cumulative := int(company.cumulative_profit)
@@ -211,8 +215,34 @@ func _test_lifetime_persistence() -> void:
 	Shop.admit(game,0)
 	check(game.to_dict() == before,"same-visit reopen cannot replenish offers or gift")
 	valid(game,"closed visit")
+	_test_closed_visit_actor_history(game)
 	check(game.end_turn().ok,"closed visit returns to ordinary turn continuation")
 	valid(game,"after shop turn")
+
+func _test_closed_visit_actor_history(game: Object) -> void:
+	var visit: Dictionary = game.state.shop_visit.duplicate(true)
+	var company: Dictionary = game.get_company_at(node_id)
+	var completed_trades := int(visit.contribution)
+	var contribution := [int(company.monthly_profit),int(company.cumulative_profit)]
+	var inventory: Dictionary = game.state.inventory_supply.duplicate(true)
+	var held: Dictionary = game.state.players[0].duplicate(true)
+	var rng_state := int(game._rng.state)
+	check(game.set_player_ai(0,true),"closed human visit permits public human-to-AI mode change")
+	check(game.state.shop_visit == visit and int(company.monthly_profit) == contribution[0] and int(company.cumulative_profit) == contribution[1],"mode change retains closed visit offers, trades, and posted contribution")
+	check(int(game.state.shop_visit.contribution) == completed_trades and game.state.inventory_supply == inventory and game.state.players[0].cards == held.cards and game.state.players[0].tools == held.tools and game.state.players[0].points == held.points and int(game._rng.state) == rng_state,"mode change preserves completed trade inventory and RNG")
+	valid(game,"closed visit after AI toggle")
+	var toggled_json: String = game.to_json()
+	var toggled_restore: Object = Core.from_dict(JSON.parse_string(toggled_json))
+	check(toggled_restore != null and toggled_restore.state.players[0].is_ai and toggled_restore.state.shop_visit.human,"JSON restore retains new actor mode and historical closed human actor")
+	check(game.set_player_ai(0,false),"closed human visit permits public AI-to-human mode change")
+	check(game.state.shop_visit == visit and int(game._rng.state) == rng_state and game.state.inventory_supply == inventory,"reverse toggle retains closed visit and does not reroll or transact")
+	valid(game,"closed visit after reverse toggle")
+	var ai_game := game_at_shop(163,false,false)
+	ai_game._resolve_landing(0,false)
+	var ai_visit: Dictionary = ai_game.state.shop_visit.duplicate(true)
+	check(ai_visit.closed and not ai_visit.human and ai_game.set_player_ai(0,false),"closed AI visit permits public AI-to-human mode change")
+	check(ai_game.state.shop_visit == ai_visit,"AI-origin visit retains its historical actor flag")
+	valid(ai_game,"closed AI visit after human toggle")
 
 func _test_commercial_gift_ai() -> void:
 	var game := game_at_shop(22,true,false)

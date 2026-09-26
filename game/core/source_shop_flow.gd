@@ -225,7 +225,7 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	if not player is Dictionary or not tile is Dictionary or not _integer(visit.get("turn"), 1, 1000000000) or not _integer(data.get("turn"), int(visit.turn), int(visit.turn)) or not _integer(data.get("current_player"), int(visit.player_id), int(visit.player_id)) or not _integer(player.get("position"), int(visit.node_id), int(visit.node_id)) or not bool(player.get("alive", false)) or not _integer(tile.get("event_code"), 15, 15): return ["stale source shop owner"]
 	for key in ["human", "closed", "gift_pending"]:
 		if typeof(visit.get(key)) != TYPE_BOOL: return ["invalid source shop flag"]
-	if bool(visit.human) != (bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))): return ["source shop actor mismatch"]
+	if not bool(visit.closed) and bool(visit.human) != (bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))): return ["source shop actor mismatch"]
 	if data.get("phase") != ("await_action" if visit.closed else "await_shop"): return ["source shop phase mismatch"]
 	if not _integer(visit.get("contribution"), 0, LIMIT) or not visit.get("gift") is Dictionary: return ["invalid source shop contribution or gift"]
 	if not visit.gift.is_empty():

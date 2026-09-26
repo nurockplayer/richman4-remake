@@ -12,7 +12,9 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -325,7 +327,12 @@ def patch_existing(
         if set(chunks) != {str(index) for index in range(CHUNK_COUNT)}:
             raise AssetError(f"existing manifest has an unexpected Panel11 {edition} chunk set")
 
-    with zipfile.ZipFile(zip_path) as archive:
+    # Build all candidates and metadata before touching published files. The
+    # only staged image data is the four small vehicle PNGs.
+    staged_root = Path(tempfile.mkdtemp(prefix=".inventory-patch-", dir=output))
+    staged_pngs: list[tuple[Path, Path]] = []
+    try:
+      with zipfile.ZipFile(zip_path) as archive:
         for edition in EDITIONS:
             member = ARCHIVE_MEMBER.format(edition=edition)
             panel_data = archive.read(member)
@@ -351,52 +358,92 @@ def patch_existing(
                 target = output / record["path"]
                 if not target.is_file() or target.is_symlink():
                     raise AssetError(f"existing Panel11 output is unavailable: {record['path']}")
-                write_png(target, chunk, visual, pixel_format=PIXEL_FORMAT, transparent_word_zero=False)
-                record["sha256"] = _sha256(target)
+                staged = staged_root / f"{edition}-{index}.png"
+                write_png(staged, chunk, visual, pixel_format=PIXEL_FORMAT, transparent_word_zero=False)
+                record["sha256"] = _sha256(staged)
                 record["transparent_word_zero"] = False
                 panel_resources[edition]["chunks"][str(index)]["sha256"] = record["sha256"]
                 panel_resources[edition]["chunks"][str(index)]["transparent_word_zero"] = False
+                staged_pngs.append((staged, target))
 
-    _ensure_base_link(output, base_manifest)
-    scene = _rewrite_base_paths(scene_before)
-    for edition in EDITIONS:
-        scene["ui"][edition][ARCHIVE_KEY]["resources"][str(RESOURCE_INDEX)] = panel_resources[edition]
-    _write_json(manifest_path, manifest)
-    _write_json(scene_path, scene)
-    new_manifest_sha = _sha256(manifest_path)
-    new_scene_sha = _sha256(scene_path)
-    image_paths = []
-    def collect_paths(value):
-        if isinstance(value, dict):
-            for item in value.values():
-                collect_paths(item)
-        elif isinstance(value, list):
-            for item in value:
-                collect_paths(item)
-        elif isinstance(value, str) and value.startswith("images/"):
-            image_paths.append(value)
-    collect_paths(scene)
-    missing = [path for path in image_paths if not (output / path).exists()]
-    if missing:
-        raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
-    provenance["base_manifest"] = manifest["base_manifest"]
-    for edition in EDITIONS:
-        provenance.setdefault("resources", {}).setdefault(edition, {})["alpha_policy"] = {
-            "chunks_0_1_15_16": "opaque source/caller draw",
-            "chunks_2_14": "WORD 0 transparent per source icon caller",
-        }
-    provenance["manifest_sha256"] = new_manifest_sha
-    provenance["scene_manifest_sha256"] = new_scene_sha
-    provenance["metadata_rewrite"] = {
-        "manifest_sha256_before": old_manifest_sha,
-        "manifest_sha256_after": new_manifest_sha,
-        "scene_manifest_sha256_before": old_scene_sha,
-        "scene_manifest_sha256_after": new_scene_sha,
-        "rewritten_base_paths": True,
-        "rewritten_chunks": [f"{edition}:{index}" for edition in EDITIONS for index in (15, 16)],
-    }
-    _write_json(provenance_path, provenance)
-    return manifest
+      scene = _rewrite_base_paths(scene_before)
+      for edition in EDITIONS:
+          scene["ui"][edition][ARCHIVE_KEY]["resources"][str(RESOURCE_INDEX)] = panel_resources[edition]
+      provenance["base_manifest"] = manifest["base_manifest"]
+      for edition in EDITIONS:
+          provenance.setdefault("resources", {}).setdefault(edition, {})["alpha_policy"] = {
+              "chunks_0_1_15_16": "opaque source/caller draw",
+              "chunks_2_14": "WORD 0 transparent per source icon caller",
+          }
+      # Validate the prospective paths before publication. Existing base links
+      # may be stale, so validate base paths against the authoritative source.
+      image_paths: list[str] = []
+      def collect_paths(value):
+          if isinstance(value, dict):
+              for item in value.values(): collect_paths(item)
+          elif isinstance(value, list):
+              for item in value: collect_paths(item)
+          elif isinstance(value, str) and value.startswith("images/"):
+              image_paths.append(value)
+      collect_paths(scene)
+      staged_targets = {target.resolve() for _, target in staged_pngs}
+      source_images = base_manifest.parent / "images"
+      missing = []
+      for item in image_paths:
+          candidate = output / item
+          if candidate.exists() or candidate.is_symlink() or candidate.resolve() in staged_targets:
+              continue
+          if item.startswith("images/base/") and (source_images / item[len("images/base/"):]).exists():
+              continue
+          missing.append(item)
+      if missing:
+          raise AssetError(f"scene manifest has unresolved image paths: {missing[0]}")
+
+      manifest_payload = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+      scene_payload = json.dumps(scene, ensure_ascii=False, indent=2) + "\n"
+      manifest_sha = hashlib.sha256(manifest_payload.encode()).hexdigest()
+      scene_sha = hashlib.sha256(scene_payload.encode()).hexdigest()
+      provenance["manifest_sha256"] = manifest_sha
+      provenance["scene_manifest_sha256"] = scene_sha
+      provenance["metadata_rewrite"] = {
+          "manifest_sha256_before": old_manifest_sha,
+          "manifest_sha256_after": manifest_sha,
+          "scene_manifest_sha256_before": old_scene_sha,
+          "scene_manifest_sha256_after": scene_sha,
+          "rewritten_base_paths": True,
+          "rewritten_chunks": [f"{edition}:{index}" for edition in EDITIONS for index in (15, 16)],
+      }
+      metadata = [(manifest_path, manifest_payload), (scene_path, scene_payload),
+                  (provenance_path, json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")]
+      touched = [target for _, target in staged_pngs] + [path for path, _ in metadata]
+      original_bytes = {path: path.read_bytes() for path in touched}
+      base_link = output / "images" / "base"
+      backup_link = staged_root / "base-link-backup"
+      had_base_link = base_link.exists() or base_link.is_symlink()
+      if had_base_link:
+          base_link.rename(backup_link)
+      try:
+          _ensure_base_link(output, base_manifest)
+          for staged, target in staged_pngs:
+              staged.replace(target)
+          for path, payload in metadata:
+              _write_json(path, json.loads(payload))
+      except BaseException:
+          for path, data in original_bytes.items():
+              path.write_bytes(data)
+              temporary = path.with_suffix(path.suffix + ".tmp")
+              if temporary.exists():
+                  temporary.unlink()
+          if base_link.is_symlink():
+              base_link.unlink()
+          elif base_link.exists():
+              shutil.rmtree(base_link)
+          if had_base_link:
+              backup_link.rename(base_link)
+          raise
+      return manifest
+    finally:
+      shutil.rmtree(staged_root, ignore_errors=True)
 
 
 def main() -> int:

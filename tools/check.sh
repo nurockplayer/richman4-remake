@@ -24,13 +24,19 @@ run_checked() {
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd
 run_checked python3 tools/test_prepare_inventory_assets.py
+run_checked python3 -m unittest tests.test_source_shop_assets -v
 if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_ui.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_lifecycle.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_core.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_catalog.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_lifecycle.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_ui.gd
 else
-  echo "SKIP: source inventory catalog/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
+  echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd

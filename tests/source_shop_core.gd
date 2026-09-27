@@ -35,6 +35,7 @@ func run() -> void:
 		quit(2)
 		return
 	_test_sampling()
+	_test_settlement_headroom()
 	_test_public_trades()
 	_test_capacity_supply()
 	_test_lifetime_persistence()
@@ -45,6 +46,57 @@ func run() -> void:
 	await settle()
 	print("Source shop core checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
+
+func _test_settlement_headroom() -> void:
+	for field in ["monthly_profit", "cumulative_profit"]:
+		var game := game_at_shop(19852, true, true)
+		var company: Dictionary = game.get_company_at(node_id)
+		company[field] = Shop.LIMIT
+		game.state.shop_visit.contribution = 700
+		var pending: Dictionary = game.to_dict()
+		var admission := Core.validate_save(pending)
+		check(not admission.get("ok", false), "open visit rejects pending contribution beyond " + field + " headroom")
+		check(Core.from_dict(JSON.parse_string(JSON.stringify(pending))) == null, "JSON restore rejects pending contribution beyond " + field + " headroom")
+	var boundary := game_at_shop(19853, true, true)
+	var boundary_company: Dictionary = boundary.get_company_at(node_id)
+	boundary_company.monthly_profit = Shop.LIMIT - 700
+	boundary_company.cumulative_profit = Shop.LIMIT - 700
+	boundary.state.shop_visit.contribution = 700
+	var boundary_restored: Object = Core.from_dict(JSON.parse_string(boundary.to_json()))
+	check(boundary_restored != null, "exact settlement headroom boundary restores")
+	if boundary_restored != null:
+		var visit_id := int(boundary_restored.state.shop_visit.visit_id)
+		check(boundary_restored.leave_shop(visit_id).get("ok", false), "exact settlement headroom boundary leaves successfully")
+		var posted: Dictionary = boundary_restored.get_company_at(node_id)
+		check(int(posted.monthly_profit) == Shop.LIMIT and int(posted.cumulative_profit) == Shop.LIMIT, "boundary posts contribution exactly to LIMIT")
+	var zero := game_at_shop(19854, true, true)
+	var zero_company: Dictionary = zero.get_company_at(node_id)
+	zero_company.monthly_profit = Shop.LIMIT
+	zero_company.cumulative_profit = Shop.LIMIT
+	var zero_restored: Object = Core.from_dict(JSON.parse_string(zero.to_json()))
+	check(zero_restored != null, "zero contribution at LIMIT validates and restores")
+	var negative := game_at_shop(19855, true, true)
+	var negative_company: Dictionary = negative.get_company_at(node_id)
+	negative_company.monthly_profit = -Shop.LIMIT
+	negative_company.cumulative_profit = -Shop.LIMIT
+	negative.state.shop_visit.contribution = 700
+	check(Core.from_dict(JSON.parse_string(negative.to_json())) != null, "negative near-LIMIT profits permit positive pending contribution")
+	var float_values := game_at_shop(19856, true, true)
+	var float_company: Dictionary = float_values.get_company_at(node_id)
+	float_company.monthly_profit = float(Shop.LIMIT - 700)
+	float_company.cumulative_profit = float(Shop.LIMIT - 700)
+	float_values.state.shop_visit.contribution = 700.0
+	check(Core.from_dict(JSON.parse_string(float_values.to_json())) != null, "integer-valued JSON floats retain save contract at settlement boundary")
+	var closed := game_at_shop(19857, true, true)
+	closed.state.shop_visit.closed = true
+	closed.state.phase = "await_action"
+	closed._set_action_options(0)
+	var closed_company: Dictionary = closed.get_company_at(node_id)
+	closed_company.monthly_profit = Shop.LIMIT
+	closed_company.cumulative_profit = Shop.LIMIT
+	closed.state.shop_visit.contribution = 700
+	var closed_restored: Object = Core.from_dict(JSON.parse_string(closed.to_json()))
+	check(closed_restored != null and int(closed_restored.state.shop_visit.contribution) == 700, "closed positive-contribution history is not rechecked against later LIMIT profits")
 
 func _test_composed_poor_god_shop_closure() -> void:
 	var fixture_definition: Dictionary = GodCardFixture.definition()

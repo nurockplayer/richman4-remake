@@ -236,6 +236,30 @@ static func validate(data: Dictionary, supported: bool) -> Array:
 	if not bool(visit.closed) and bool(visit.human) != (bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))): return ["source shop actor mismatch"]
 	if not bool(visit.closed) and data.get("phase") != "await_shop": return ["source shop phase mismatch"]
 	if not _integer(visit.get("contribution"), 0, LIMIT) or not visit.get("gift") is Dictionary: return ["invalid source shop contribution or gift"]
+	# Open visits have not posted their contribution yet. Keep save admission
+	# consistent with leave()/trade() so every admitted visit can settle. Closed
+	# visits are immutable accounting history and must not be checked again.
+	if not bool(visit.closed):
+		var visit_board: Array = board
+		var visit_tile: Dictionary = visit_board[int(visit.node_id)]
+		var company_id := 0
+		var raw_source_id: Variant = visit_tile.get("source_company_id", 0)
+		if _integer(raw_source_id, 1, 1999): company_id = int(raw_source_id)
+		if company_id == 0:
+			var raw_type: Variant = visit_tile.get("type_and_idx", 0)
+			if _integer(raw_type, 6001, 7999): company_id = int(raw_type) - 6000
+		var companies: Variant = data.get("companies", [])
+		if company_id > 0 and companies is Array:
+			for company_value in companies:
+				if not company_value is Dictionary: continue
+				if not _integer(company_value.get("id"), company_id, company_id): continue
+				var monthly: Variant = company_value.get("monthly_profit")
+				var cumulative: Variant = company_value.get("cumulative_profit")
+				if _integer(monthly, -LIMIT, LIMIT) and _integer(cumulative, -LIMIT, LIMIT):
+					var contribution := int(visit.contribution)
+					if int(monthly) > LIMIT - contribution or int(cumulative) > LIMIT - contribution:
+						return ["pending source shop contribution exceeds company settlement headroom"]
+				break
 	if not visit.gift.is_empty():
 		if visit.gift.get("item_kind") not in ["card", "tool"] or typeof(visit.gift.get("item_id")) != TYPE_STRING: return ["invalid source shop gift"]
 		var gift_record: Dictionary = Catalogue.card(visit.gift.item_id) if visit.gift.item_kind == "card" else Catalogue.tool(visit.gift.item_id)

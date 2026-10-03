@@ -547,6 +547,9 @@ func _draw_help() -> void:
 	var pages := _current_pages()
 	var lines: Array = pages[_body_page] if _body_page >= 0 and _body_page < pages.size() else []
 	_frame_backdrop.visible = true
+	# Source text is dark. Keep it readable when the optional frame is absent,
+	# while preserving the original backing whenever its artwork is available.
+	_frame_backdrop.color = Color.BLACK if resolved["frame"].get("texture") != null else Color("#f3ead2")
 
 	# The opaque source frame stays inside the 400x400 window; the board remains
 	# visible everywhere else on the 640x480 canvas.

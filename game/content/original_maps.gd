@@ -21,7 +21,7 @@ static func default_catalog_path() -> String:
 	var configured := OS.get_environment("RICHMAN4_MAP_CATALOG")
 	if not configured.is_empty():
 		return configured
-	var packaged := OS.get_executable_path().get_base_dir().path_join("../Resources/Original/maps/catalog.json").simplify_path()
+	var packaged := preload("res://game/platform/original_paths.gd").packaged("maps/catalog.json")
 	for candidate in [packaged, "res://.local/runtime-original/maps/catalog.json", "res://.local/imported-original/maps/catalog.json"]:
 		if FileAccess.file_exists(candidate):
 			return candidate

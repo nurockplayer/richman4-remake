@@ -87,8 +87,15 @@ func run() -> void:
 			var held_index: int = game.state.players[actor].cards.find(held)
 			check(held_index >= 0, "purchased card is held before sale")
 			await capture(view, ui, "completed-hole-held")
+			# Cards are individual copies: selling a slot must preserve any duplicate.
+			var expected_cards: Array = game.state.players[actor].cards.duplicate()
+			if held_index >= 0: expected_cards.remove_at(held_index)
+			var points_before_sale := int(game.state.players[actor].points)
+			var supply_before_sale := int(game.state.inventory_supply.cards.get(held, 0))
+			var sale_value := preload("res://game/core/inventory_rules.gd").quote_sale("card", held, 1)
 			await _push_panel(view, panel, Vector2(233 + (held_index % 5) * 80 + 1, 299 + (held_index / 5) * 56 + 1), MOUSE_BUTTON_LEFT, true)
-			check(held_index >= 0 and game.state.players[actor].cards.find(held) < 0, "viewport input sells one held card")
+			check(held_index >= 0 and game.state.players[actor].cards == expected_cards, "viewport input sells exactly one held card and preserves other copies")
+			check(game.state.players[actor].points == points_before_sale + sale_value and game.state.inventory_supply.cards.get(held, 0) == supply_before_sale + 1, "viewport sale credits one card and returns one copy to supply")
 			var offers_before_tab: Array = game.state.shop_visit.card_offers.duplicate(true)
 			var rng_before_tab: int = game._rng.state
 			await _push_panel(view, panel, Vector2(542, 13), MOUSE_BUTTON_LEFT, true)

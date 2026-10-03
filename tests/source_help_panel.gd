@@ -532,6 +532,8 @@ func _test_edition_resolution(panel: Control) -> void:
 		expect(mj_chunks.has(chunk), "MultiverseJourney resolves help chunk %d" % chunk)
 	var frame_art := _find(panel, "SourceHelpFrame") as TextureRect
 	expect(frame_art != null and frame_art.texture != null and frame_art.texture.get_size() == Vector2(800, 800), "2x textures still use 400x400 logical geometry")
+	var backdrop := _find(panel, "SourceHelpFrameBackdrop") as ColorRect
+	expect(backdrop != null and backdrop.color == Color.BLACK, "available source frame preserves the original black backing")
 
 	visuals.calls.clear()
 	visuals.blocked_editions = ["MultiverseJourney"]
@@ -544,6 +546,14 @@ func _test_edition_resolution(panel: Control) -> void:
 	expect(not borrowed, "a missing edition never falls back to Game help art")
 	var fallback := _find(panel, "SourceHelpArtFallback") as Label
 	expect(fallback != null and fallback.visible, "missing source art shows an explicit fallback note")
+	var body := _find(panel, "SourceHelpBodyLine0") as Label
+	backdrop = _find(panel, "SourceHelpFrameBackdrop") as ColorRect
+	var contrast := 0.0
+	if body != null and backdrop != null:
+		var text_luminance := body.get_theme_color("font_color").srgb_to_linear().get_luminance()
+		var background_luminance := backdrop.color.srgb_to_linear().get_luminance()
+		contrast = (maxf(text_luminance, background_luminance) + 0.05) / (minf(text_luminance, background_luminance) + 0.05)
+	expect(contrast >= 7.0, "missing-frame fallback keeps source Help body text readable")
 
 
 func _test_native_input_ordering(source_script: Script) -> void:

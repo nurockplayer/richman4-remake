@@ -13,6 +13,7 @@
 | Panel / 1 | 439×40 工具列與圖示 | 官方 Game 商店截圖上方；排列由 UI reference 決定 |
 | Panel / 2 | 四季日曆與星期覆蓋 | 官方手冊 PDF 第 11 頁；實際狀態另外綁定 |
 | Panel / 75 | 六欄股票價格、七欄持股、公司資訊底圖 | Game 與資料片三張底圖逐張 byte-identical；資料片實際截圖只支援共用構圖，不能證明 Game 公司數值 |
+| help / 0 | 說明視窗、章節／主題選取與翻頁圖示（12 chunks） | #139／#192 的雙版別說明視窗來源合約；resource 1–99 的文字由獨立 Help exporter 處理 |
 
 來源：[官方手冊](https://cdn.akamai.steamstatic.com/steam/apps/2059810/manuals/%E5%A4%A7%E5%AF%8C%E7%BF%814%E8%AA%AA%E6%98%8E%E6%9B%B8.pdf)、[官方 Game 商店](https://store.steampowered.com/app/2059810/)、[Kenki 原版遊玩紀錄](https://kenki2515.pixnet.net/blog/posts/10353819854)。私有本機比較證據包含各圖 URL、SHA 與版別；沒有將原圖或擁有者截圖放入公開 Git。
 

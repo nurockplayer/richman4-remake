@@ -34,7 +34,7 @@ func _init(path := "") -> void:
 	if path.is_empty():
 		path = OS.get_environment("RICHMAN4_HELP_MANIFEST")
 	if path.is_empty():
-		var packaged := OS.get_executable_path().get_base_dir().path_join("../Resources/Original/help/manifest.json").simplify_path()
+		var packaged := preload("res://game/platform/original_paths.gd").packaged("help/manifest.json")
 		if FileAccess.file_exists(packaged):
 			path = packaged
 		else:

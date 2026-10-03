@@ -22,6 +22,8 @@ run_checked() {
   fi
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
+run_checked "$GODOT_BIN" --headless --path . --script tests/platform_paths.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/title_load_feedback.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd

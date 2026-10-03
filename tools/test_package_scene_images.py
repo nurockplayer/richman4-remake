@@ -1,6 +1,7 @@
 """Private packaging must not copy unrelated files or corrupt scene images."""
 import hashlib
 import json
+import struct
 from pathlib import Path
 import subprocess
 import sys
@@ -207,6 +208,46 @@ class PackageSceneTests(unittest.TestCase):
             (stage / group["Panel"]["resources"]["1"]["chunks"]["0"]["path"]).write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path)
+
+    def test_help_frame_is_exported_for_both_editions_and_packaged(self):
+        # Resource zero contains the twelve Help window pieces; subsequent
+        # resources are manual text and must not be sent to the image decoder.
+        chunk_count = 12
+        offset = 12 + 12 * chunk_count
+        payload = (b"SMP\0" + struct.pack("<II", chunk_count, offset)
+                   + b"".join(struct.pack("<hhhhI", 1, 1, 0, 0, 2)
+                              for _ in range(chunk_count))
+                   + struct.pack("<12H", *([0x03E0] * chunk_count)))
+        archive = make_mkf([(payload, len(payload), offset, chunk_count * 2),
+                            (b"manual text", 11, 0, 0)])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root / "stage"
+            ui = {}
+            for edition in ("Game", "MultiverseJourney"):
+                source = root / edition
+                source.mkdir()
+                (source / "HELP.MKF").write_bytes(archive)
+                ui[edition] = export_ui_resources(edition, source, stage)
+                self.assertEqual(set(ui[edition]), {"help"})
+                help_group = ui[edition]["help"]
+                self.assertEqual(help_group["archive_sha256"], hashlib.sha256(archive).hexdigest())
+                self.assertEqual(set(help_group["resources"]), {"0"})
+                resource = help_group["resources"]["0"]
+                self.assertEqual(resource["payload_sha256"], hashlib.sha256(payload).hexdigest())
+                self.assertEqual(set(resource["chunks"]), {str(i) for i in range(chunk_count)})
+            record = ui["Game"]["help"]["resources"]["0"]["chunks"]["0"]
+            manifest = {"schema": "richman4.scene-images/v1", "characters": {},
+                        "maps": [{"world_rect": {"x": 0, "y": 0, "width": 1, "height": 1}, "image": record}],
+                        "ui": ui}
+            path = stage / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(len(validate(path)[1]), 24)
+            destination = root / "package"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("package_scene_images.py")),
+                                     str(path), "--destination", str(destination)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(validate(destination / "manifest.json")[1]), 24)
 
     def test_referenced_png_integrity_and_escape(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -24,8 +24,9 @@ Usage: bash tools/bootstrap_private_assets.sh [--cache-root PATH]
        [--repo-url URL] [--revision SHA]
 
 By default the pinned private asset revision is materialized once below
-~/Library/Caches/richman4-remake/private-assets/<revision>/ and the current
-worktree receives only .local/private-assets -> that shared cache.
+the platform cache directory (~/Library/Caches on macOS,
+${XDG_CACHE_HOME:-~/.cache} on Linux) under richman4-remake/private-assets/
+<revision>/; the worktree receives only .local/private-assets -> that cache.
 
 --destination is primarily for an explicit isolated/test install. When it is
 used, no worktree link is created unless --link is also supplied. --repo-url is
@@ -117,7 +118,11 @@ config_revision="$(printf '%s\n' "$config_values" | sed -n '2p')"
 
 if [[ -z "$cache_root" && "$destination_explicit" -eq 0 ]]; then
   [[ -n "${HOME:-}" ]] || fail "HOME is required unless --cache-root or --destination is supplied"
-  cache_root="$HOME/Library/Caches/richman4-remake"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    cache_root="$HOME/Library/Caches/richman4-remake"
+  else
+    cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/richman4-remake"
+  fi
 fi
 if [[ -n "$cache_root" ]]; then
   case "$cache_root" in

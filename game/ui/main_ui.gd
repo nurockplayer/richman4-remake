@@ -2009,33 +2009,27 @@ func _load_game_from_path(path: String) -> void:
 		_reject_load_during_presentation()
 		return
 	if not FileAccess.file_exists(path):
-		_append_local_log("找不到存檔；先建立一局再儲存即可。")
-		_refresh_log_only()
+		_report_load_error("找不到存檔；先建立一局再儲存即可。")
 		return
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		_append_local_log("讀取失敗：無法開啟本機存檔。")
-		_refresh_log_only()
+		_report_load_error("讀取失敗：無法開啟本機存檔。")
 		return
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	file.close()
 	if not parsed is Dictionary:
-		_append_local_log("讀取失敗：存檔格式無效。")
-		_refresh_log_only()
+		_report_load_error("讀取失敗：存檔格式無效。")
 		return
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	if state_script == null:
-		_append_local_log("讀取失敗：模擬核心未載入，目前棋局保持不變。")
-		_refresh_log_only()
+		_report_load_error("讀取失敗：模擬核心未載入，目前棋局保持不變。")
 		return
 	if not state_script.has_method("from_dict"):
-		_append_local_log("讀取失敗：模擬核心缺少存檔介面，目前棋局保持不變。")
-		_refresh_log_only()
+		_report_load_error("讀取失敗：模擬核心缺少存檔介面，目前棋局保持不變。")
 		return
 	var restored: Variant = state_script.from_dict(parsed)
 	if restored == null:
-		_append_local_log("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
-		_refresh_log_only()
+		_report_load_error("讀取失敗：存檔驗證未通過，目前棋局保持不變。")
 		return
 	if _is_legacy_market_snapshot(parsed):
 		_pending_legacy_load_snapshot = parsed.duplicate(true)
@@ -2062,9 +2056,18 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	end_overlay.hide()
 	_ai_pending = false
 
-func _show_content_error(message: String) -> void:
+func _report_load_error(message: String) -> void:
+	_append_local_log(message)
+	_refresh_log_only()
+	# The ordinary title hides the board log. Keep failed LOAD visible without
+	# changing the game, save bytes, or in-game error/AI behavior.
+	if source_shell != null and source_shell.is_title_visible():
+		_show_content_error(message, "無法讀取存檔")
+
+func _show_content_error(message: String, title: String = "無法開始對局") -> void:
 	if content_error_dialog == null:
 		return
+	content_error_dialog.title = title
 	content_error_dialog.dialog_text = message
 	content_error_dialog.popup_centered(Vector2i(700, 220))
 

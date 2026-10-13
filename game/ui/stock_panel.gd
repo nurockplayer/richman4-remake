@@ -934,19 +934,19 @@ func _edition() -> String:
 
 
 func _input(event: InputEvent) -> void:
-	if not visible or not event is InputEventKey or not event.pressed or event.echo:
+	if not is_visible_in_tree():
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _quantity_pad.visible:
+		var pad_transform: Transform2D = _quantity_pad.get_global_transform_with_canvas()
+		var pad_point: Vector2 = pad_transform.affine_inverse() * event.position
+		if not Rect2(Vector2.ZERO, _quantity_pad.size).has_point(pad_point):
+			_quantity_pad.cancel()
+			get_viewport().set_input_as_handled()
+		return
+	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	if event.keycode == KEY_ESCAPE:
 		if _quantity_pad.visible:
 			_quantity_pad.cancel()
 		else:
 			close_panel()
-
-
-func _gui_input(event: InputEvent) -> void:
-	if not event is InputEventMouseButton or not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
-		return
-	var global_point: Vector2 = get_global_transform_with_canvas() * event.position
-	if _quantity_pad.visible and not _quantity_pad.get_global_rect().has_point(global_point):
-		_quantity_pad.cancel()
-		accept_event()

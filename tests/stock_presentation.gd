@@ -79,6 +79,7 @@ func run() -> void:
 	expect(panel.find_child("StockDeposit", true, false).text.contains("1,000"), "deposit is read-only projection")
 	expect(panel.find_child("StockRow_s01", true, false).get_children().size() > 2, "row contains projected source values")
 	var original_snapshot: Dictionary = snapshot.duplicate(true)
+	await _test_quantity_pad_viewport_input(original_snapshot)
 	panel.set_snapshot(snapshot, Fixture.definition())
 	snapshot.market.rows.s01.price = 9999.0
 	expect(panel.get_snapshot().market.rows.s01.price != 9999.0, "panel deep copies caller snapshot")
@@ -278,3 +279,87 @@ func run() -> void:
 	await process_frame
 	print("Stock presentation checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
+
+
+func _test_quantity_pad_viewport_input(snapshot_value: Dictionary) -> void:
+	var view := SubViewport.new()
+	view.size = Vector2i(960, 720)
+	view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(view)
+	var mount := Control.new()
+	mount.position = Vector2(24, 18)
+	mount.scale = Vector2(1.25, 1.25)
+	view.add_child(mount)
+	var panel := StockPanel.new()
+	mount.add_child(panel)
+	await process_frame
+	panel.set_snapshot(snapshot_value, Fixture.definition())
+	panel.open_for()
+	var trade_requests: Array = []
+	panel.trade_requested.connect(func(action: String, symbol: String, quantity: int) -> void: trade_requests.append([action, symbol, quantity]))
+	var unchanged_snapshot := JSON.stringify(panel.get_snapshot())
+	panel.select_symbol("s01")
+	var buy_button: Button = panel.find_child("StockBuy", true, false)
+	await _push_control_click(view, buy_button)
+	var pad: Control = panel.find_child("SourceQuantityPad", true, false)
+	expect(pad.visible, "viewport BUY opens quantity pad through transformed parent")
+	if not pad.visible:
+		view.queue_free()
+		await process_frame
+		return
+
+	var starting_selection := panel.selected_symbol()
+	var row_button: Button = panel.find_child("StockSelect_s02", true, false)
+	await _push_control_click(view, row_button)
+	expect(not pad.visible, "outside child-row click cancels quantity pad")
+	expect(panel.visible and panel.selected_symbol() == starting_selection and panel.current_screen() == "overview", "outside row cancellation consumes click without selection or close click-through")
+
+	await _push_control_click(view, buy_button)
+	expect(pad.visible, "BUY reopens quantity pad after outside cancellation")
+	var digit_one: Button = pad.find_child("QuantityDigit1", true, false)
+	await _push_control_click(view, digit_one)
+	var quantity_input: LineEdit = pad.find_child("QuantityInput", true, false)
+	expect(pad.visible and quantity_input.text == "1", "inside keypad click remains active")
+	await _push_control_click(view, pad.find_child("QuantityClear", true, false))
+	var digit_zero: Button = pad.find_child("QuantityDigit0", true, false)
+	await _push_control_click(view, digit_zero)
+	await _push_control_click(view, pad.find_child("QuantitySubmit", true, false))
+	expect(not pad.visible and panel.visible, "zero plus submit cancels without closing stock panel")
+	expect(trade_requests.is_empty(), "zero and cancellation paths emit no trade request")
+
+	await _push_control_click(view, buy_button)
+	await _push_control_click(view, digit_one)
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	view.push_input(escape, true)
+	await process_frame
+	expect(not pad.visible and panel.visible, "Escape cancels pad without closing stock panel")
+
+	await _push_control_click(view, buy_button)
+	var exit_button: Button = panel.find_child("StockExit", true, false)
+	await _push_control_click(view, exit_button)
+	expect(not pad.visible and panel.visible, "outside EXIT click cancels pad and is consumed")
+
+	await _push_control_click(view, buy_button)
+	await _push_viewport_click(view, panel.get_global_transform_with_canvas() * Vector2(630, 455))
+	expect(not pad.visible and panel.visible, "blank table-margin click cancels pad without closing panel")
+	expect(trade_requests.is_empty() and JSON.stringify(panel.get_snapshot()) == unchanged_snapshot, "outside and cancel inputs preserve trade requests and projected account/holdings state")
+	view.queue_free()
+	await process_frame
+
+
+func _push_control_click(view: SubViewport, control: Control) -> void:
+	var point: Vector2 = control.get_global_transform_with_canvas() * (control.size / 2.0)
+	await _push_viewport_click(view, point)
+
+
+func _push_viewport_click(view: SubViewport, point: Vector2) -> void:
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.position = point
+		event.global_position = point
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = pressed
+		view.push_input(event, true)
+		await process_frame

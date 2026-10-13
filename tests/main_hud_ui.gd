@@ -349,6 +349,57 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	shell.toggle_map_view()
 
 
+func _test_calendar_minimap_viewport_input(viewport_size: Vector2i) -> void:
+	var viewport := SubViewport.new()
+	viewport.size = viewport_size
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(viewport)
+	var ui: Control = MainScene.instantiate()
+	viewport.add_child(ui)
+	await process_frame
+	await process_frame
+	ui.set_process(false)
+	var game: Object = _set_human_graph_game(ui)
+	await process_frame
+	await process_frame
+	var shell: Control = ui.source_shell
+	var toggle: Button = shell.calendar_toggle_button
+	var point: Vector2 = toggle.get_global_transform_with_canvas() * (toggle.size / 2.0)
+	var before_state: String = game.to_json()
+	var board_view: Control = shell.board_host.get_child(0)
+	var before_pan: Vector2 = board_view.map_pan if board_view.get("map_pan") is Vector2 else Vector2.ZERO
+	var minimap_selections: Array[int] = []
+	shell.minimap.node_selected.connect(func(index: int) -> void: minimap_selections.append(index))
+	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "calendar starts visible in %s viewport" % viewport_size)
+	for round_trip in range(2):
+		await _push_viewport_click(viewport, point)
+		_expect(shell.minimap.visible and not shell.calendar_panel.visible, "calendar toggle opens minimap on %s round %d" % [viewport_size, round_trip + 1])
+		_expect(toggle.is_visible_in_tree(), "calendar toggle remains visible over minimap on %s round %d" % [viewport_size, round_trip + 1])
+		await _push_viewport_click(viewport, point)
+		_expect(shell.calendar_panel.visible and not shell.minimap.visible, "same visible control returns to calendar on %s round %d" % [viewport_size, round_trip + 1])
+	_expect(minimap_selections.is_empty(), "calendar toggle clicks do not reach minimap on %s" % viewport_size)
+	_expect(board_view.get("map_pan") == before_pan, "calendar toggle clicks do not pan board on %s" % viewport_size)
+	_expect(game.to_json() == before_state, "calendar/minimap round trips preserve simulation on %s" % viewport_size)
+	viewport.queue_free()
+	await process_frame
+
+
+func _push_viewport_click(viewport: SubViewport, point: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	motion.global_position = point
+	viewport.push_input(motion, true)
+	await process_frame
+	for pressed in [true, false]:
+		var button := InputEventMouseButton.new()
+		button.position = point
+		button.global_position = point
+		button.button_index = MOUSE_BUTTON_LEFT
+		button.pressed = pressed
+		viewport.push_input(button, true)
+		await process_frame
+
+
 func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
 	var definition: Dictionary = normalized.get("definition", {})
@@ -540,6 +591,8 @@ func _run() -> void:
 	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)
 	await _test_settlement_overlay_input(ui, shell)
+	await _test_calendar_minimap_viewport_input(Vector2i(640, 480))
+	await _test_calendar_minimap_viewport_input(Vector2i(1280, 800))
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	print("Main HUD checks: %d, failures: %d" % [checks, failures])

@@ -431,14 +431,6 @@ func _build_calendar_and_minimap() -> void:
 	calendar_mode_label.size = Vector2(176.0, 20.0)
 	calendar_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	calendar_panel.add_child(calendar_mode_label)
-	calendar_toggle_button = Button.new()
-	calendar_toggle_button.name = "CalendarToggle"
-	calendar_toggle_button.text = "月曆／地圖"
-	calendar_toggle_button.position = Vector2(47.0, 166.0)
-	calendar_toggle_button.size = Vector2(106.0, 26.0)
-	calendar_toggle_button.add_theme_font_size_override("font_size", 10)
-	calendar_toggle_button.pressed.connect(_toggle_calendar_mode)
-	calendar_panel.add_child(calendar_toggle_button)
 	minimap = SourceMinimap.new()
 	minimap.name = "SourceMinimap"
 	minimap.position = CALENDAR_RECT.position
@@ -447,6 +439,15 @@ func _build_calendar_and_minimap() -> void:
 	minimap.pan_requested.connect(func(delta: Vector2) -> void: minimap_pan_requested.emit(delta))
 	minimap.node_selected.connect(func(index: int) -> void: minimap_node_requested.emit(index))
 	game_screen.add_child(minimap)
+	calendar_toggle_button = Button.new()
+	calendar_toggle_button.name = "CalendarToggle"
+	calendar_toggle_button.text = "月曆／地圖"
+	calendar_toggle_button.position = CALENDAR_RECT.position + Vector2(47.0, 166.0)
+	calendar_toggle_button.size = Vector2(106.0, 26.0)
+	calendar_toggle_button.z_index = 1
+	calendar_toggle_button.add_theme_font_size_override("font_size", 10)
+	calendar_toggle_button.pressed.connect(_toggle_calendar_mode)
+	game_screen.add_child(calendar_toggle_button)
 	full_map_view = SourceMinimap.new()
 	full_map_view.name = "SourceFullMap"
 	full_map_view.position = BOARD_RECT.position

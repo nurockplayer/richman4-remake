@@ -48,3 +48,11 @@ jobs:
           corepack prepare pnpm@11.21.0 --activate
           pnpm --version
           node .github/poc-godot-mcp.mjs
+
+      - name: Agent Loop 3.0.1 live click UI and screenshot (Xvfb, scratch only)
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          command -v xvfb-run
+          xvfb-run -a -s "-screen 0 1280x720x24" node .github/poc-agent-loop.mjs

@@ -92,7 +92,9 @@ try{
  await tool('run_project',{projectPath:scratch},180000);
  const before=await tool('game_get_ui',{});
  assert.match(JSON.stringify(before),/BEFORE_CLICK/,'missing initial label');
- await tool('game_screenshot',{retainArtifact:false});
+ const beforeFrame=await tool('game_screenshot',{retainArtifact:false});
+ assert.equal(beforeFrame.structuredContent?.data?.width,400,'expected rendered viewport width');
+ assert.equal(beforeFrame.structuredContent?.data?.height,300,'expected rendered viewport height');
  await tool('game_scenario',{
   projectPath:scratch,
   name:'click visible button and observe changed rendered UI',
@@ -106,6 +108,11 @@ try{
  });
  const after=await tool('game_get_ui',{});
  assert.match(JSON.stringify(after),/AFTER_CLICK/,'did not reach changed visible UI');
+ const afterFrame=await tool('game_screenshot',{retainArtifact:false});
+ assert.ok(beforeFrame.structuredContent?.data?.sha256,'missing pre-click pixel digest');
+ assert.ok(afterFrame.structuredContent?.data?.sha256,'missing post-click pixel digest');
+ assert.notEqual(beforeFrame.structuredContent.data.sha256,afterFrame.structuredContent.data.sha256,'clicked UI had no rendered pixel change');
+ console.log('SCREENSHOT before='+beforeFrame.structuredContent.data.sha256+' after='+afterFrame.structuredContent.data.sha256);
  verdict='PASS';
  console.log('RESULT: PASS temp game live input/UI change/rendered screenshot (Xvfb/Linux). NOT RUN: Richman4 title-to-save, OS-native/macOS, actual player perception.');
 }catch(err){console.error('RESULT: FAIL '+(err?.stack??err));process.exitCode=1}

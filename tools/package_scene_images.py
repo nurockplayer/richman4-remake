@@ -41,6 +41,9 @@ def _validate_bank_ui(manifest, required):
             for chunk, record in chunks.items():
                 if not isinstance(record, dict) or "path" not in record:
                     raise ValueError(f"invalid bank UI image record: {label}/{chunk}")
+                expected = f"{edition}/ui/Panel/{index}/{chunk}.png"
+                if record["path"] not in (f"images/{expected}", f"images/base/{expected}"):
+                    raise ValueError(f"bank UI image path does not match {label}/{chunk}")
                 if not _valid_logical_bounds(record.get("logical")):
                     raise ValueError(f"invalid bank UI logical bounds: {label}/{chunk}")
 

@@ -350,6 +350,83 @@ class PackageSceneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path, require_bank_ui=True)
 
+    def test_bank_ui_rejects_wrong_image_bindings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, complete = write_bank_scene(root)
+            self.assertEqual(len(validate(path, require_bank_ui=True)[1]), 161)
+            aliases = {
+                "edition": "images/MultiverseJourney/ui/Panel/21/0.png",
+                "resource": "images/Game/ui/Panel/23/0.png",
+                "chunk": "images/Game/ui/Panel/21/1.png",
+                "archive": "images/Game/ui/Data/21/0.png",
+                "background": "images/background.png",
+                "repeated-base": "images/base/base/Game/ui/Panel/21/0.png",
+            }
+            for relative in (aliases["archive"], aliases["repeated-base"]):
+                png_record(root / relative, relative)
+            for fault, relative in aliases.items():
+                for required in (False, True):
+                    with self.subTest(fault=fault, required=required):
+                        manifest = json.loads(json.dumps(complete))
+                        record = manifest["ui"]["Game"]["Panel"]["resources"]["21"]["chunks"]["0"]
+                        record["path"] = relative
+                        data = (root / relative).read_bytes()
+                        self.assertEqual(hashlib.sha256(data).hexdigest(), record["sha256"])
+                        self.assertEqual(struct.unpack_from(">II", data, 16),
+                                         (record["width"], record["height"]))
+                        path.write_text(json.dumps(manifest))
+                        with self.assertRaisesRegex(ValueError,
+                                "bank UI image path does not match Game/Panel/21/0"):
+                            validate(path, require_bank_ui=required)
+
+    def test_bank_ui_rejects_malformed_image_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path, complete = write_bank_scene(Path(temp))
+            for relative in (None, False, 7, [], {}, "", "images/../0.png", "images\\0.png"):
+                with self.subTest(path=relative):
+                    manifest = json.loads(json.dumps(complete))
+                    manifest["ui"]["Game"]["Panel"]["resources"]["21"]["chunks"]["0"]["path"] = relative
+                    path.write_text(json.dumps(manifest))
+                    with self.assertRaisesRegex(ValueError, "path"):
+                        validate(path, require_bank_ui=True)
+
+    def test_required_cli_rejects_wrong_image_binding_before_copying(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, manifest = write_bank_scene(root / "stage")
+            game_chunks = manifest["ui"]["Game"]["Panel"]["resources"]["21"]["chunks"]
+            game_chunks["0"] = manifest["ui"]["MultiverseJourney"]["Panel"]["resources"]["21"]["chunks"]["0"]
+            path.write_text(json.dumps(manifest))
+            destination = root / "package"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("package_scene_images.py")),
+                                     str(path), "--require-bank-ui", "--destination", str(destination)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("bank UI image path does not match Game/Panel/21/0", result.stderr)
+            self.assertFalse(destination.exists())
+
+    def test_required_bank_ui_allows_already_inherited_base_records(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            base_manifest, manifest = write_bank_scene(base)
+            (base / "images").rename(base / "original-images")
+            (base / "images").mkdir()
+            (base / "images/base").symlink_to(base / "original-images", target_is_directory=True)
+            for record in package_scene_images._image_records(manifest):
+                record["path"] = "images/base/" + record["path"][len("images/"):]
+            base_manifest.write_text(json.dumps(manifest))
+            self.assertEqual(len(validate(base_manifest, require_bank_ui=True)[1]), 161)
+            overlay = root / "overlay"
+            (overlay / "images").mkdir(parents=True)
+            (overlay / "images/base").symlink_to(base / "images/base", target_is_directory=True)
+            path = overlay / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(len(validate(path, base_manifest=base_manifest, require_bank_ui=True)[1]), 161)
+            with self.assertRaisesRegex(ValueError, "escapes|base"):
+                validate(path, require_bank_ui=True)
+
     def test_present_bank_atlas_rejects_malformed_resource_containers(self):
         with tempfile.TemporaryDirectory() as temp:
             path, complete = write_bank_scene(Path(temp))

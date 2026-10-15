@@ -372,7 +372,7 @@ class PackageSceneTests(unittest.TestCase):
                                      str(path), "--require-bank-ui", "--destination", str(destination)],
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("bank", result.stderr.lower())
+            self.assertIn("missing bank UI resource: MultiverseJourney/Panel/23", result.stderr)
             self.assertFalse(destination.exists())
 
     def test_required_bank_ui_allows_exact_inherited_base_records(self):

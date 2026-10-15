@@ -9,7 +9,7 @@ func _init(path := "") -> void:
 	if path.is_empty():
 		path = OS.get_environment("RICHMAN4_SCENE_MANIFEST")
 	if path.is_empty():
-		path = OS.get_executable_path().get_base_dir().path_join("../Resources/Original/scenes/manifest.json").simplify_path()
+		path = preload("res://game/platform/original_paths.gd").packaged("scenes/manifest.json")
 		if not FileAccess.file_exists(path):
 			path = ProjectSettings.globalize_path("res://.local/original-scenes/manifest.json")
 	if not FileAccess.file_exists(path):

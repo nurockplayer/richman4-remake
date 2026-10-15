@@ -9,7 +9,7 @@ python3 tools/install_templates.py
 bash tools/package_macos.sh
 ```
 
-`install_templates.py` 下載官方匯出模板並核對固定 SHA-512，僅安裝 macOS 模板。Godot 可由 [官方 4.7.2 發行頁](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable) 取得。`GODOT_BIN` 可指定執行檔。
+`install_templates.py` 下載官方匯出模板並核對固定 SHA-512，預設依主機安裝 macOS 或 Linux x86_64 模板；可用 `--platform` 選擇目標。Godot 可由 [官方 4.7.2 發行頁](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable) 取得。`GODOT_BIN` 可指定執行檔。
 
 macOS 打包輸出 `build/Richman4.zip` 與新的 `build/package.XXXXXX/*.app`，採本機 ad-hoc 簽章。打包腳本先執行驗證，再匯出並驗證簽章。這是私人本機版本，尚無 Developer ID 公證。
 
@@ -41,7 +41,8 @@ asset_source="$PWD/.local/private-assets/source/dfw4cskzl_136622"
 bootstrap 不再把 Git LFS checkout 複製到每個 worktree。預設 canonical 本機 cache 是：
 
 ```text
-~/Library/Caches/richman4-remake/private-assets/<pinned-revision>/
+macOS: ~/Library/Caches/richman4-remake/private-assets/<pinned-revision>/
+Linux: ${XDG_CACHE_HOME:-~/.cache}/richman4-remake/private-assets/<pinned-revision>/
 ```
 
 目前 worktree 的 `.local/private-assets` 只是一個指向該 verified cache 的 symlink。同一部機器上的其他 worktree 執行相同 bootstrap 時會重新驗證並直接 reuse；只有該 pinned revision 尚未 materialize 時才會執行 LFS download，且下載前會通過 `tools/disk_guard.sh`。
@@ -79,3 +80,5 @@ RICHMAN4_MAP_CATALOG="$PWD/.local/imported-original/maps/catalog.json" bash tool
 ```
 
 腳本會先驗證 catalog，再將它放入 `.app/Contents/Resources/Original/maps/catalog.json`，重新簽章並輸出 `build/Richman4-private.zip`。這個私人套件含衍生地圖資料，只留本機。未指定 catalog 的 `build/Richman4.zip` 仍不含原版資料。遊戲可從封裝路徑自行載入地圖，不必保留開發工作樹。
+
+Linux 獨立套件與執行環境說明見 [linux.md](linux.md)。

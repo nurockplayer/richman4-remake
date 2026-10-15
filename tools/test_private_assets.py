@@ -124,6 +124,22 @@ class PrivateAssetBootstrapTests(unittest.TestCase):
             self.assertIn("Worktree private asset link", result.stdout)
             self.assertEqual((expected / "source/dfw4cskzl_136622/Game/map.mkf").read_bytes(), b"fixture original asset\n")
 
+    @unittest.skipUnless(os.uname().sysname == "Linux", "Linux XDG cache convention")
+    def test_linux_default_cache_honors_xdg_cache_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, config, revision = self._make_fixture(temporary)
+            cache_home = Path(temporary) / "xdg-cache"
+            environment = bootstrap_env()
+            environment["XDG_CACHE_HOME"] = str(cache_home)
+            link = Path(temporary) / "worktree/private-assets"
+            run([
+                "bash", str(BOOTSTRAP), "--config", str(config),
+                "--repo-url", str(repository), "--revision", revision,
+                "--link", str(link),
+            ], cwd=ROOT, env=environment)
+            self.assertEqual(link.resolve(), cache_home / "richman4-remake/private-assets" / revision)
+            self.assertEqual((link / "source/dfw4cskzl_136622/Game/map.mkf").read_bytes(), b"fixture original asset\n")
+
     def test_default_cache_adopts_verified_legacy_worktree_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, config, revision = self._make_fixture(temporary)

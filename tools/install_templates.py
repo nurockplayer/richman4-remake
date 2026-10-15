@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Install the checksum-pinned Godot macOS export template using Python stdlib."""
+"""Install checksum-pinned Godot desktop export templates using Python stdlib."""
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -14,8 +15,19 @@ URL = f"https://github.com/godotengine/godot-builds/releases/download/{VERSION}-
 
 
 def main():
-    if sys.platform != "darwin":
-        raise SystemExit("This installer targets macOS only.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--platform", choices=("macos", "linux"),
+                        default="macos" if sys.platform == "darwin" else "linux")
+    parser.add_argument("--template-dir", type=Path,
+                        help="Godot export-template directory override")
+    args = parser.parse_args()
+    if args.template_dir:
+        target = args.template_dir
+    elif sys.platform == "darwin":
+        target = Path.home() / f"Library/Application Support/Godot/export_templates/{VERSION}.stable"
+    else:
+        data_home = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+        target = data_home / f"godot/export_templates/{VERSION}.stable"
     root = Path(__file__).resolve().parent.parent
     download = root / ".local/downloads/export_templates.tpz"
     download.parent.mkdir(parents=True, exist_ok=True)
@@ -31,15 +43,18 @@ def main():
             digest.update(block)
     if digest.hexdigest() != SHA512:
         raise SystemExit(f"Template checksum mismatch: remove {download} and retry.")
-    target = Path.home() / f"Library/Application Support/Godot/export_templates/{VERSION}.stable"
     target.mkdir(parents=True, exist_ok=True)
-    output = target / "macos.zip"
-    temporary = target / "macos.zip.tmp"
+    names = ["macos.zip"] if args.platform == "macos" else ["linux_debug.x86_64", "linux_release.x86_64"]
     with zipfile.ZipFile(download) as archive:
-        with archive.open("templates/macos.zip") as source, temporary.open("wb") as out:
-            shutil.copyfileobj(source, out)
-    os.replace(temporary, output)
-    print(f"Verified template installed: {output}")
+        for name in names:
+            output = target / name
+            temporary = target / (name + ".tmp")
+            with archive.open("templates/" + name) as source, temporary.open("wb") as out:
+                shutil.copyfileobj(source, out)
+            if args.platform == "linux":
+                temporary.chmod(0o755)
+            os.replace(temporary, output)
+            print(f"Verified template installed: {output}")
 
 
 if __name__ == "__main__":

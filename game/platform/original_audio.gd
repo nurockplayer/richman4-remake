@@ -53,7 +53,7 @@ func _default_source_paths() -> Array[String]:
 	var paths: Array[String] = []
 	var executable_dir := OS.get_executable_path().get_base_dir()
 	if not executable_dir.is_empty():
-		paths.append(executable_dir.path_join("../Resources/Original/audio").simplify_path())
+		paths.append(preload("res://game/platform/original_paths.gd").packaged("audio"))
 	var project_root := ProjectSettings.globalize_path("res://")
 	paths.append(project_root.path_join(".local/private-assets/source/dfw4cskzl_136622"))
 	return paths

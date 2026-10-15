@@ -7,6 +7,43 @@ from pathlib import Path
 import shutil
 import struct
 
+from original_ui_assets import BANK_UI_CHUNK_COUNTS
+
+
+def _valid_logical_bounds(logical):
+    return isinstance(logical, dict) and all(
+        type(logical.get(key)) is int
+        and (1 if key in ("width", "height") else -65535) <= logical[key] <= 65535
+        for key in ("width", "height", "anchor_x", "anchor_y")
+    )
+
+
+def _validate_bank_ui(manifest, required):
+    ui = manifest.get("ui")
+    for edition in ("Game", "MultiverseJourney"):
+        group = ui.get(edition) if isinstance(ui, dict) else None
+        panel = group.get("Panel") if isinstance(group, dict) else None
+        resources = panel.get("resources") if isinstance(panel, dict) else None
+        if not isinstance(resources, dict):
+            if required:
+                raise ValueError(f"missing or invalid bank UI resources: {edition}/Panel")
+            continue
+        for index, count in BANK_UI_CHUNK_COUNTS.items():
+            label = f"{edition}/Panel/{index}"
+            if str(index) not in resources:
+                if required:
+                    raise ValueError(f"missing bank UI resource: {label}")
+                continue
+            resource = resources[str(index)]
+            chunks = resource.get("chunks") if isinstance(resource, dict) else None
+            if not isinstance(chunks, dict) or set(chunks) != {str(i) for i in range(count)}:
+                raise ValueError(f"bank UI {label} must contain chunks 0..{count - 1}")
+            for chunk, record in chunks.items():
+                if not isinstance(record, dict) or "path" not in record:
+                    raise ValueError(f"invalid bank UI image record: {label}/{chunk}")
+                if not _valid_logical_bounds(record.get("logical")):
+                    raise ValueError(f"invalid bank UI logical bounds: {label}/{chunk}")
+
 
 def _image_records(value):
     if isinstance(value, dict):
@@ -64,7 +101,8 @@ def _base_allowlist(path: Path) -> dict[str, tuple[Path, str, int, int]]:
     return allowed
 
 
-def validate(path: Path, base_manifest: Path | None = None) -> tuple[dict, list[Path]]:
+def validate(path: Path, base_manifest: Path | None = None, *,
+             require_bank_ui: bool = False) -> tuple[dict, list[Path]]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict) or manifest.get("schema") != "richman4.scene-images/v1":
         raise ValueError("unsupported scene manifest")
@@ -72,6 +110,7 @@ def validate(path: Path, base_manifest: Path | None = None) -> tuple[dict, list[
         raise ValueError("scene manifest has no maps")
     if not isinstance(manifest.get("characters"), dict):
         raise ValueError("invalid scene characters")
+    _validate_bank_ui(manifest, require_bank_ui)
     base = path.resolve().parent
     allowed_base = _base_allowlist(Path(base_manifest)) if base_manifest is not None else {}
     paths = set()
@@ -85,10 +124,7 @@ def validate(path: Path, base_manifest: Path | None = None) -> tuple[dict, list[
                     raise ValueError("invalid sprite frames")
                 for frame in value["frames"]:
                     logical = frame.get("logical") if isinstance(frame, dict) else None
-                    if not isinstance(logical, dict) or any(
-                        type(logical.get(key)) is not int or not (1 if key in ("width", "height") else -65535) <= logical[key] <= 65535
-                        for key in ("width", "height", "anchor_x", "anchor_y")
-                    ):
+                    if not _valid_logical_bounds(logical):
                         raise ValueError("invalid sprite logical bounds")
             if "path" in value:
                 relative = value["path"]
@@ -133,9 +169,12 @@ def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--base-manifest", type=Path)
+    parser.add_argument("--require-bank-ui", action="store_true",
+                        help="require complete Panel21/23/24 bank UI for both editions")
     args = parser.parse_args()
     args.manifest = args.manifest.resolve()
-    _, paths = validate(args.manifest, base_manifest=args.base_manifest)
+    _, paths = validate(args.manifest, base_manifest=args.base_manifest,
+                        require_bank_ui=args.require_bank_ui)
     if args.destination:
         args.destination.mkdir(parents=True, exist_ok=False)
         for relative in paths:
@@ -143,7 +182,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile((args.manifest.parent / relative).resolve(), target)
         shutil.copyfile(args.manifest, args.destination / "manifest.json")
-        validate(args.destination / "manifest.json")
+        validate(args.destination / "manifest.json", require_bank_ui=args.require_bank_ui)
     print(f"Validated {len(paths)} private scene images")
 
 

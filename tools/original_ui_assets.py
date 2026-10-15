@@ -11,7 +11,8 @@ from decode_original_images import (
 
 # Source identity is kept separate from presentation coordinates.  These are
 # archive indices, not screen positions; see docs/original-ui-assets.md.
-UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
+BANK_UI_CHUNK_COUNTS = {21: 26, 23: 24, 24: 30}
+UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 21, 23, 24, 75)}
 
 
 def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
@@ -30,6 +31,11 @@ def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
             visual = parse_visual_resource(payload, entry)
             if visual is None or visual.signature not in ("SMP", "SPR"):
                 raise FormatError(f"unsupported UI image at {path}:{index}")
+            if name == "Panel" and index in BANK_UI_CHUNK_COUNTS:
+                count = BANK_UI_CHUNK_COUNTS[index]
+                if (visual.chunk_count != count
+                        or tuple(chunk.index for chunk in visual.chunks) != tuple(range(count))):
+                    raise FormatError(f"bank UI {path}:{index} must contain chunks 0..{count - 1}")
             chunks = {}
             for chunk in visual.chunks:
                 relative = Path("images") / edition / "ui" / name / str(index) / f"{chunk.index}.png"

@@ -18,7 +18,7 @@ if [[ -n "$scene_path" ]]; then
   if [[ -n "$scene_base_manifest" ]]; then
     scene_base_args+=(--base-manifest "$scene_base_manifest")
   fi
-  python3 tools/package_scene_images.py "$scene_path" "${scene_base_args[@]}"
+  python3 tools/package_scene_images.py "$scene_path" "${scene_base_args[@]}" --require-bank-ui
 fi
 audio_assets="${RICHMAN4_AUDIO_ASSETS:-}"
 help_path="${RICHMAN4_HELP_MANIFEST:-}"
@@ -38,7 +38,7 @@ if [[ -n "$catalog_path" ]]; then
   cp "$catalog_path" "$app_path/Contents/Resources/Original/maps/catalog.json"
 fi
 if [[ -n "$scene_path" ]]; then
-  python3 tools/package_scene_images.py "$scene_path" "${scene_base_args[@]}" --destination "$app_path/Contents/Resources/Original/scenes"
+  python3 tools/package_scene_images.py "$scene_path" "${scene_base_args[@]}" --require-bank-ui --destination "$app_path/Contents/Resources/Original/scenes"
 fi
 if [[ -n "$help_path" ]]; then
   python3 tools/package_help.py "$help_path" --destination "$app_path/Contents/Resources/Original/help"

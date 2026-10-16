@@ -350,6 +350,56 @@ class PackageSceneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path, require_bank_ui=True)
 
+    def test_present_bank_ui_rejects_invalid_archive_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path, complete = write_bank_scene(Path(temp))
+            for required in (False, True):
+                self.assertEqual(len(validate(path, require_bank_ui=required)[1]), 161)
+            for edition in ("Game", "MultiverseJourney"):
+                for fault, value in (("missing", None), ("null", None),
+                                     ("non-string", ["2"] * 64),
+                                     ("short", "2" * 63), ("long", "2" * 65)):
+                    for required in (False, True):
+                        with self.subTest(edition=edition, fault=fault, required=required):
+                            manifest = json.loads(json.dumps(complete))
+                            panel = manifest["ui"][edition]["Panel"]
+                            if fault == "missing":
+                                del panel["archive_sha256"]
+                            else:
+                                panel["archive_sha256"] = value
+                            path.write_text(json.dumps(manifest))
+                            with self.assertRaisesRegex(ValueError,
+                                    f"invalid bank UI archive_sha256: {edition}/Panel"):
+                                validate(path, require_bank_ui=required)
+
+    def test_required_cli_rejects_missing_archive_metadata_before_copying(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, manifest = write_bank_scene(root / "stage")
+            del manifest["ui"]["Game"]["Panel"]["archive_sha256"]
+            path.write_text(json.dumps(manifest))
+            destination = root / "package"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("package_scene_images.py")),
+                                     str(path), "--require-bank-ui", "--destination", str(destination)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("invalid bank UI archive_sha256: Game/Panel", result.stderr)
+            self.assertFalse(destination.exists())
+
+    def test_nonbank_partial_panel_does_not_require_archive_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            background = png_record(root / "images/background.png", "images/background.png")
+            path = write_scene_manifest(root, [background])
+            manifest = json.loads(path.read_text())
+            manifest["ui"] = {edition: {"Panel": {"resources": {
+                "0": {"chunks": {"0": background}}}}}
+                for edition in ("Game", "MultiverseJourney")}
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(validate(path)[1], [Path("images/background.png")])
+            with self.assertRaisesRegex(ValueError, "missing bank UI resource: Game/Panel/21"):
+                validate(path, require_bank_ui=True)
+
     def test_bank_ui_rejects_wrong_image_bindings(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

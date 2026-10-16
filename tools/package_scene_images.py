@@ -34,6 +34,9 @@ def _validate_bank_ui(manifest, required):
                 if required:
                     raise ValueError(f"missing bank UI resource: {label}")
                 continue
+            archive_sha256 = panel.get("archive_sha256")
+            if not isinstance(archive_sha256, str) or len(archive_sha256) != 64:
+                raise ValueError(f"invalid bank UI archive_sha256: {edition}/Panel")
             resource = resources[str(index)]
             chunks = resource.get("chunks") if isinstance(resource, dict) else None
             if not isinstance(chunks, dict) or set(chunks) != {str(i) for i in range(count)}:

@@ -26,3 +26,5 @@ UI 圖以 RGB555 解碼，word zero 作透明背景，使不規則圖示能疊�
 `OriginalVisuals.ui(edition, archive, resource, chunk)` 回傳帶 logical bounds 的 frame，再由既有 `texture()` 驗證檔案雜湊及尺寸。`package_scene_images.py` 遞迴收集並檢查 UI PNG，只攜帶 manifest 實際引用的檔案。此變更只建立來源、載入與打包邊界，不表示畫面已通過 #99。
 
 銀行圖集一旦存在，匯出及打包驗證均拒絕缺漏或多餘的 chunk。每個銀行 chunk 的路徑須精確對應 `images/{edition}/ui/Panel/{resource}/{chunk}.png` 或單層 `images/base/{edition}/ui/Panel/{resource}/{chunk}.png`，拒絕其他版別、archive、resource、chunk 或背景圖的路徑代用；繼承 base 的目錄外檔案仍須符合明確 base manifest 的完整記錄。一般 scene 驗證仍接受 inventory/shop 所用的部分 UI manifest；`--require-bank-ui` 額外要求 Game 與 MultiverseJourney 的 Panel / 21、23、24 全部存在，並驗證每個 chunk 的影像記錄及 logical bounds。`tools/package_macos.sh` 在提供 `RICHMAN4_SCENE_MANIFEST` 時，於驗證、複製及複製後檢查均啟用此要求；未提供私有 scene manifest 的公開建置流程不變。
+
+存在銀行圖集時，打包驗證另要求該版 Panel 的 `archive_sha256` 為 64 字元字串，以符合既有 `OriginalVisuals.ui()` 載入條件；此 metadata 型別與長度檢查不驗證 archive 來源真實性。

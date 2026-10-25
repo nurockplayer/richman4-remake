@@ -27,6 +27,8 @@ const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
+const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
+const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -75,6 +77,7 @@ var source_stock_panel: Control
 var source_save_menu: Control
 var source_help_controller: Control
 var source_bank_controller: Control
+var source_monthly_controller: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -221,6 +224,13 @@ var _inventory_close_callback := Callable()
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
+var source_trustee_controller: Control
+var _trustee_owner: Object
+var _trustee_generation := -1
+var _trustee_window: Window
+var _trustee_close_callback := Callable()
+var _trustee_quit_policy_held := false
+var _trustee_prior_auto_quit := true
 
 func _ready() -> void:
 	# A debug/editor launch is the explicit development lane for the synthetic
@@ -259,6 +269,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _presentation_busy:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
+		return
+	var trustee_cancel: bool = (event is InputEventKey and not event.pressed and not event.echo and event.keycode == KEY_ESCAPE) or (event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT)
+	if trustee_cancel and source_shell != null and game_state != null and game_state.has_method("request_trustee_recovery") and _source_save_operation_allowed() and game_state.request_trustee_recovery():
+		get_viewport().set_input_as_handled()
+		_refresh_from_state()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_SPACE:
@@ -355,6 +370,8 @@ func _build_source_shell() -> void:
 	_build_source_shop_controller()
 	_build_source_help_controller()
 	_build_source_bank_controller()
+	_build_source_monthly_controller()
+	_build_source_trustee_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
 
@@ -417,6 +434,37 @@ func _sync_source_bank() -> void:
 		blocked = blocked or (popup != null and popup.visible)
 	source_bank_controller.sync(game_state, state, _source_bank_edition(), source_shell.get("_visuals"), blocked)
 
+func _build_source_monthly_controller() -> void:
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceMonthlyController.new()
+	# Below the source bank visit (z 40): a queued report never covers it.
+	controller.z_index = 30
+	controller.finished.connect(func() -> void:
+		_ai_pending = false
+		_refresh_from_state())
+	canvas.add_child(controller)
+	source_monthly_controller = controller
+
+func _source_monthly_modal_open() -> bool:
+	return source_monthly_controller != null and source_monthly_controller.is_open()
+
+func _sync_source_monthly() -> void:
+	if source_monthly_controller == null or source_shell == null:
+		return
+	# A queued report waits until every other modal, including the source bank
+	# visit, has closed; it must never cover the bank modal.
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open()
+	blocked = blocked or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open()
+	blocked = blocked or (source_stock_panel != null and source_stock_panel.visible)
+	blocked = blocked or (source_shell.has_method("is_title_visible") and source_shell.is_title_visible())
+	blocked = blocked or (source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible())
+	for popup in [news_popup, fate_popup, auction_popup]:
+		blocked = blocked or (popup != null and popup.visible)
+	source_monthly_controller.set_visuals(source_shell.get("_visuals"))
+	source_monthly_controller.sync(game_state, blocked)
+
 func _build_source_stock_panel() -> void:
 	if source_shell == null:
 		return
@@ -450,7 +498,7 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
@@ -545,14 +593,106 @@ func _update_source_help_gate() -> void:
 func _source_help_operation_allowed() -> bool:
 	return game_state != null and source_shell != null and not _source_modal_open() and not _presentation_busy
 
-func _on_source_ai_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+func _build_source_trustee_controller() -> void:
+	if source_shell == null:
 		return
-	_append_local_log("託管功能將在後續原版指令頁接入。")
-	_refresh_log_only()
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceTrusteeController.new()
+	controller.z_index = 70
+	controller.accepted.connect(_on_trustee_accepted.bind(controller))
+	controller.cancelled.connect(_on_trustee_cancelled.bind(controller))
+	canvas.add_child(controller)
+	source_trustee_controller = controller
+
+func _source_trustee_modal_open() -> bool:
+	return source_trustee_controller != null and source_trustee_controller.is_open()
+
+func _source_trustee_operation_allowed() -> bool:
+	if source_trustee_controller == null or game_state == null or not game_state.has_method("trustee_rows") or not game_state.has_method("apply_trustee_settings") or source_shell == null or _source_modal_open() or not _source_save_operation_allowed() or not _is_human_turn():
+		return false
+	return state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0 and not game_state.trustee_rows().is_empty()
+
+func _on_source_ai_requested() -> void:
+	if not _source_trustee_operation_allowed():
+		return
+	# Each modal owns its callbacks; a queued signal from an earlier opening
+	# cannot apply a draft to a replacement owner or newer dialog.
+	source_trustee_controller.queue_free()
+	_build_source_trustee_controller()
+	_presentation_generation += 1
+	_ai_pending = false
+	_trustee_owner = game_state
+	_trustee_generation = _presentation_generation
+	var character_ids: Dictionary = {}
+	for player in state.get("players", []):
+		character_ids[int(player.get("id", -1))] = int(player.get("character_id", -1))
+	source_trustee_controller.set_character_ids(character_ids)
+	if not source_trustee_controller.configure(game_state.trustee_rows(), int(state.get("current_player", -1)), str(source_shell.get("_source_edition")), source_shell.get("_visuals")):
+		_trustee_owner = null
+		_trustee_generation = -1
+		return
+	_hold_trustee_window_policy()
+	_update_all()
+
+func _on_trustee_accepted(rows: Array, controller: Control) -> void:
+	if controller != source_trustee_controller:
+		return
+	_release_trustee_window_policy()
+	var owner := _trustee_owner
+	var generation := _trustee_generation
+	_trustee_owner = null
+	_trustee_generation = -1
+	if owner == null or owner != game_state or generation != _presentation_generation:
+		return
+	if not game_state.apply_trustee_settings(rows):
+		_append_local_log("託管設定未套用；棋局目前有待完成操作。")
+	_presentation_generation += 1
+	_ai_pending = false
+	_refresh_from_state()
+
+func _on_trustee_cancelled(controller: Control) -> void:
+	if controller != source_trustee_controller:
+		return
+	_release_trustee_window_policy()
+	var owner := _trustee_owner
+	_trustee_owner = null
+	_trustee_generation = -1
+	if owner == null or owner != game_state:
+		return
+	_ai_pending = false
+	_update_all()
+
+func _hold_trustee_window_policy() -> void:
+	if not _trustee_quit_policy_held:
+		_trustee_prior_auto_quit = get_tree().auto_accept_quit
+		_trustee_quit_policy_held = true
+	get_tree().auto_accept_quit = false
+	_trustee_window = get_window()
+	var controller := source_trustee_controller
+	_trustee_close_callback = func() -> void:
+		if controller == source_trustee_controller and is_instance_valid(controller):
+			controller.cancel()
+	_trustee_window.close_requested.connect(_trustee_close_callback)
+
+func _release_trustee_window_policy() -> void:
+	if is_instance_valid(_trustee_window) and _trustee_close_callback.is_valid() and _trustee_window.close_requested.is_connected(_trustee_close_callback):
+		_trustee_window.close_requested.disconnect(_trustee_close_callback)
+	_trustee_window = null
+	_trustee_close_callback = Callable()
+	if _trustee_quit_policy_held:
+		# Keep the current OS close notification suppressed for this event;
+		# restoring the policy must not accept the same close as an app quit.
+		call_deferred("_restore_trustee_window_policy")
+
+func _restore_trustee_window_policy() -> void:
+	if _trustee_quit_policy_held and not _source_trustee_modal_open():
+		get_tree().auto_accept_quit = _trustee_prior_auto_quit
+		_trustee_quit_policy_held = false
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -562,7 +702,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -579,7 +719,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -617,13 +757,13 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_inventory_modal_open(): return
+	if _source_inventory_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open(): return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_inventory_modal_open(): return
+	if _source_inventory_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open(): return
 	if board_view == null:
 		return
 	if board_view.has_method("select_tile"):
@@ -1881,7 +2021,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2049,7 +2189,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2116,10 +2256,10 @@ func _source_modal_open() -> bool:
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open()
+	return title_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2498,9 +2638,9 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_bank_modal_open():
+	if _source_bank_modal_open() or _source_monthly_modal_open():
 		return
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_trustee_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2576,6 +2716,8 @@ func _update_bank_popup() -> void:
 	bank_loan_button.disabled = loan_blocked or not _has_action_option(options, "take_loan") or int(state.get("bank", {}).get("cash", 0)) < 10000
 
 func _on_tile_selected(index: int) -> void:
+	if _source_trustee_modal_open():
+		return
 	_selected_tile = index
 	var tile := _tile_for_index(index)
 	if not tile.is_empty():
@@ -2629,13 +2771,21 @@ func _close_end_overlay() -> void:
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
-	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
+	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _source_trustee_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
-	if _source_bank_modal_open():
-		var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
-		if method not in ["resume_bank_visit", "complete_bank_visit"] and not bank_action:
-			return {"ok": false, "message": "請先完成銀行操作。"}
+	# A pending bank visit outranks a queued report: the report is withheld
+	# until the bank closes, so the bank must be able to finish even while the
+	# report queue is non-empty.
+	var bank_open := _source_bank_modal_open()
+	var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
+	var bank_allowed := bank_open and (method in ["resume_bank_visit", "complete_bank_visit"] or bank_action)
+	if bank_open and not bank_allowed:
+		return {"ok": false, "message": "請先完成銀行操作。"}
+	if _source_trustee_modal_open():
+		return {"ok": false, "message": "請先完成託管設定。"}
+	if _source_monthly_modal_open() and not bank_allowed:
+		return {"ok": false, "message": "請先看完本期報表。"}
 	if _source_inventory_modal_open() and not _inventory_applying:
 		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_help_modal_open():
@@ -2658,6 +2808,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		var before := _read_snapshot().duplicate(true)
 		var result: Variant = game_state.callv(method, args)
 		if result is Dictionary:
+			if source_monthly_controller != null:
+				source_monthly_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
 			result["_presentation_before"] = before
 			result["_presentation_generation"] = _presentation_generation
 			result["_presentation_owner"] = game_state
@@ -2688,6 +2840,13 @@ func _handle_result(result: Dictionary) -> void:
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	_release_trustee_window_policy()
+	_trustee_owner = null
+	_trustee_generation = -1
+	if source_trustee_controller != null:
+		source_trustee_controller.cancel()
+	if source_monthly_controller != null:
+		source_monthly_controller.cancel()
 	if _source_inventory_modal_open():
 		_close_source_inventory(false)
 	if source_help_controller != null:
@@ -2736,6 +2895,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 		_sync_source_bank()
+		_sync_source_monthly()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2778,11 +2938,14 @@ func _update_all() -> void:
 	_sync_source_shop()
 	_sync_source_shell(phase, current_index)
 	_sync_source_bank()
+	_sync_source_monthly()
 	_last_rendered_phase = phase
 
 func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell == null:
 		return
+	if _source_trustee_modal_open() and _trustee_owner != game_state:
+		source_trustee_controller.cancel()
 	if source_help_controller != null:
 		source_help_controller.sync(game_state)
 	if source_shell.has_method("sync_snapshot"):
@@ -2792,7 +2955,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell.has_method("set_toolbar_enabled"):
 		_update_source_help_gate()
 		source_shell.call("set_toolbar_enabled", "options", false)
-		source_shell.call("set_toolbar_enabled", "ai", false)
+		source_shell.call("set_toolbar_enabled", "ai", _source_trustee_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
 		source_shell.call("set_toolbar_enabled", "save", game_state != null and _source_save_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
@@ -2810,6 +2973,11 @@ func _update_load_gate() -> void:
 		load_button.disabled = not enabled
 	if source_shell != null and source_shell.has_method("set_toolbar_enabled"):
 		source_shell.call("set_toolbar_enabled", "load", enabled)
+	# News/fate/auction visibility changes reach this hook. A queued monthly
+	# report blocks new actions, so it must resume when that overlay closes.
+	# Defer until any enclosing snapshot refresh has finished its other gates.
+	if _source_monthly_modal_open():
+		_sync_source_monthly.call_deferred()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -3006,7 +3174,7 @@ func _update_property_card(tile: Dictionary) -> void:
 func _update_actions(phase: String, current_index: int) -> void:
 	var player := _current_player()
 	var game_over := phase == "game_over"
-	var human_turn := not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
+	var human_turn := not _source_trustee_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and not game_over
 	var action_options: Array = _as_array(state.get("action_options", []))
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
@@ -3126,7 +3294,7 @@ func _refresh_log_only() -> void:
 	_update_event_log()
 
 func _update_end_overlay(phase: String) -> void:
-	if phase != "game_over":
+	if phase != "game_over" or _source_monthly_modal_open():
 		end_overlay.hide()
 		return
 	var winner_index := int(state.get("winner", -1))
@@ -4828,6 +4996,9 @@ func _exit_tree() -> void:
 	if _inventory_quit_policy_held:
 		get_tree().auto_accept_quit = _inventory_prior_auto_quit
 		_inventory_quit_policy_held = false
+	if _trustee_quit_policy_held:
+		get_tree().auto_accept_quit = _trustee_prior_auto_quit
+		_trustee_quit_policy_held = false
 
 func _restore_inventory_quit_policy() -> void:
 	if _inventory_quit_policy_held and not _source_inventory_modal_open():

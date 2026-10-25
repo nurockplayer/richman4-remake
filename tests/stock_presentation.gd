@@ -273,6 +273,16 @@ func run() -> void:
 	expect(pad == null or not pad.visible, "closing the market dismisses the pending quantity pad")
 	panel._on_quantity_accepted(1)
 	expect(closed_requests.is_empty(), "closed market rejects a pending quantity submission")
+	# Open the pad while the market is closed, then submit it: the gate must
+	# refuse the quantity instead of emitting a trade request.
+	panel.clear_selection()
+	panel.select_symbol("s01")
+	panel._open_quantity_pad("buy_stock")
+	var closed_pad: Control = panel.find_child("SourceQuantityPad", true, false)
+	expect(closed_pad != null and closed_pad.visible, "closed market still opens the gated quantity pad")
+	panel._on_quantity_accepted(1)
+	expect(closed_requests.is_empty(), "closed market rejects a fresh quantity submission")
+	panel._on_quantity_cancelled()
 	panel.clear_selection()
 	panel.select_symbol("s01")
 	expect(panel.trade_limit("buy_stock").error == "本日休市", "closed market is a visible domain gate")

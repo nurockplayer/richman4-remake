@@ -51,6 +51,7 @@ func _run() -> void:
 	await _test_rear_special_gate(panel)
 	await _test_hidden_input_guard(panel)
 	await _test_visual_layering_and_source_chunks(panel)
+	await _test_source_art_keypad_rects(panel)
 	await _test_amount_pad_source_layering()
 	_test_cancel_paths(panel)
 
@@ -442,6 +443,47 @@ func _test_visual_layering_and_source_chunks(panel: Node) -> void:
 	var summary: TextureRect = input_panel.find_child("SourceSpecialSummary", true, false) as TextureRect
 	expect(summary != null and summary.texture == summary_texture, "rear scene assembles the source summary chunk20")
 	input_panel.queue_free()
+	viewport.queue_free()
+	await process_frame
+
+
+## With the real bank art bound, every ATM keypad hit target must keep the
+## exact source Panel24 rectangle, so the keypad drawn in the art and the
+## clickable keys never drift apart.
+func _test_source_art_keypad_rects(panel: Node) -> void:
+	var viewport := _new_viewport(Vector2i(320, 338))
+	var art_panel: Node = panel.get_script().new()
+	viewport.add_child(art_panel)
+	art_panel.call("set_view_model", _base_model())
+	art_panel.call("set_visuals", {
+		"Game.Panel21": _solid_texture(Vector2i(128, 192), Color("#e63f7f")),
+		"Game.Panel23.front": _solid_texture(Vector2i(640, 480), Color("#d83b87")),
+		"Game.Panel24": _solid_texture(Vector2i(320, 338), Color("#3c6f8a")),
+	})
+	await process_frame
+	var source_visual: TextureRect = art_panel.find_child("SourceVisual", true, false) as TextureRect
+	expect(source_visual != null and source_visual.texture != null, "bank art binds the Panel24 ATM background")
+	var expected := {
+		"ATMDigit7": Rect2(58, 211, 33, 17),
+		"ATMDigit8": Rect2(97, 211, 33, 17),
+		"ATMDigit9": Rect2(136, 211, 33, 17),
+		"ATMDigit4": Rect2(58, 230, 33, 17),
+		"ATMDigit5": Rect2(97, 230, 33, 17),
+		"ATMDigit6": Rect2(136, 230, 33, 17),
+		"ATMDigit1": Rect2(58, 249, 33, 17),
+		"ATMDigit2": Rect2(97, 249, 33, 17),
+		"ATMDigit3": Rect2(136, 249, 33, 17),
+		"ATMClear": Rect2(58, 268, 33, 17),
+		"ATMDigit0": Rect2(97, 268, 33, 17),
+		"ATMBackspace": Rect2(136, 268, 33, 17),
+		"ATMMax": Rect2(183, 233, 49, 25),
+		"ATMEnter": Rect2(175, 260, 57, 25),
+	}
+	for node_name in expected:
+		var button: Button = art_panel.find_child(str(node_name), true, false) as Button
+		var rect: Rect2 = expected[node_name]
+		expect(button != null and button.position == rect.position and button.size == rect.size, "art-present %s keeps the source rect %s" % [node_name, rect])
+	art_panel.queue_free()
 	viewport.queue_free()
 	await process_frame
 

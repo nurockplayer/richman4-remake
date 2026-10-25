@@ -11,6 +11,7 @@ const OriginalGods = preload("res://game/content/original_gods.gd")
 const SourceMinimap = preload("res://game/ui/source_minimap.gd")
 const SourceCalendar = preload("res://game/ui/source_calendar_panel.gd")
 const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
+const SourceTitlePanel = preload("res://game/ui/source_title_panel.gd")
 const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const REFERENCE_SIZE := Vector2(640.0, 480.0)
 const TOOLBAR_WIDTH := 440.0
@@ -28,8 +29,32 @@ const SOURCE_TEXT_MUTED := Color("#263b3d")
 const SOURCE_TEXT_MONEY := Color("#10191b")
 const SOURCE_TAB_TEXT := Color("#152428")
 const ROUTE_CARDINAL_DOMINANCE_RATIO := 3.0
+# Source board prompt: the publisher screenshot shows a brown, gold-trimmed
+# event box over the upper board and a separate small horizontal YES/NO picker
+# lower on the board (manual p.13: pink YES, green NO).  The remake draws both
+# instead of a permanent command strip.
+const SOURCE_DIALOG_FILL := Color("#4a3524")
+const SOURCE_DIALOG_BORDER := Color("#d9b45f")
+const SOURCE_DIALOG_TEXT := Color("#f4e7ae")
+const SOURCE_YES_FILL := Color("#c9698f")
+const SOURCE_YES_BORDER := Color("#f0c4d6")
+const SOURCE_YES_TEXT := Color("#2a0d16")
+const SOURCE_NO_FILL := Color("#5f9e63")
+const SOURCE_NO_BORDER := Color("#c2e4b8")
+const SOURCE_NO_TEXT := Color("#0f2410")
+const SOURCE_GO_FILL := Color("#4a3524")
+const SOURCE_GO_BORDER := Color("#d9b45f")
+const SOURCE_GO_TEXT := Color("#f4e7ae")
+const TURN_DIALOG_RECT := Rect2(68.0, 54.0, 304.0, 66.0)
+const CHOICE_SELECTOR_RECT := Rect2(146.0, 372.0, 148.0, 26.0)
+const ROUTE_CHOICES_RECT := Rect2(24.0, 372.0, 392.0, 26.0)
+const ROLL_COMMAND_RECT := Rect2(382.0, 444.0, 52.0, 26.0)
+const DEV_HINT_RECT := Rect2(6.0, 446.0, 368.0, 26.0)
+
 
 signal start_requested
+signal new_stage_requested
+signal quit_requested
 signal load_requested
 signal save_requested
 signal option_requested
@@ -76,7 +101,10 @@ var roll_button: Button
 var buy_button: Button
 var upgrade_button: Button
 var end_turn_button: Button
-var action_strip: Control
+var turn_dialog: Control
+var dialog_text: Label
+var choice_selector: Control
+var choice_divider: ColorRect
 var action_hint_label: Label
 var portrait: TextureRect
 var player_name_label: Label
@@ -102,9 +130,12 @@ var _player_wealth := -1
 var _visuals = OriginalVisuals.new()
 var _source_edition := "Game"
 var _source_title_texture: Texture2D
+var _dev_mode := false
+var _action_state: Dictionary = {}
 var _source_panel_texture: Texture2D
 var _source_hud_texture: Texture2D
 var _title_art: TextureRect
+var _toolbar_art: TextureRect
 var _hud_art: TextureRect
 var _last_camera_signature := ""
 
@@ -165,64 +196,23 @@ func _layout_reference_canvas() -> void:
 
 
 func _build_title_screen() -> void:
-	title_screen = Control.new()
+	title_screen = SourceTitlePanel.new()
 	title_screen.name = "SourceTitleScreen"
-	title_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	reference_canvas.add_child(title_screen)
-	_source_title_texture = _source_texture(_visuals.ui(_source_edition, "Data", 1, 0))
-	if _source_title_texture != null:
-		_title_art = TextureRect.new()
-		_title_art.name = "SourceTitleArt"
-		_title_art.texture = _source_title_texture
-		_title_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		_title_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		_title_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		_title_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(_title_art)
-	else:
-		var background := ColorRect.new()
-		background.color = Color("#0d2630")
-		background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(background)
-		var glow := ColorRect.new()
-		glow.color = Color("#1a5360")
-		glow.position = Vector2(80.0, 95.0)
-		glow.size = Vector2(480.0, 210.0)
-		glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_screen.add_child(glow)
-		var title := _label("大富翁 4", 44, Color("#f5d98d"))
-		title.position = Vector2(0.0, 130.0)
-		title.size = Vector2(640.0, 56.0)
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title_screen.add_child(title)
-		var subtitle := _label("城市棋局", 18, Color("#c1e0d6"))
-		subtitle.position = Vector2(0.0, 190.0)
-		subtitle.size = Vector2(640.0, 28.0)
-		subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title_screen.add_child(subtitle)
-	var menu := Control.new()
-	menu.name = "TitleMenu"
-	menu.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if _source_title_texture != null:
-		menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	else:
-		menu.position = Vector2(248.0, 300.0)
-		menu.size = Vector2(144.0, 132.0)
-	title_screen.add_child(menu)
-	title_start_button = _title_button("START", "開始新局")
-	_configure_title_hit_area(title_start_button, "start", Rect2(129.0, 322.0, 118.0, 112.0))
-	title_start_button.pressed.connect(func() -> void: start_requested.emit())
-	menu.add_child(title_start_button)
-	title_load_button = _title_button("LOAD", "讀取存檔")
-	_configure_title_hit_area(title_load_button, "load", Rect2(269.0, 322.0, 118.0, 112.0))
-	title_load_button.pressed.connect(func() -> void: load_requested.emit())
-	menu.add_child(title_load_button)
-	title_option_button = _title_button("OPTION", "選項")
-	_configure_title_hit_area(title_option_button, "option", Rect2(408.0, 322.0, 118.0, 112.0))
-	title_option_button.disabled = true
-	title_option_button.pressed.connect(func() -> void: option_requested.emit())
-	menu.add_child(title_option_button)
+	title_screen.configure(_source_edition, _visuals)
+	title_start_button = title_screen.buttons.start
+	title_load_button = title_screen.buttons.load
+	title_option_button = title_screen.buttons.option
+	_title_art = title_screen.background_art
+	_source_title_texture = _title_art.texture
+	title_screen.start_requested.connect(func(stage: int) -> void:
+		if stage == 1:
+			new_stage_requested.emit()
+		else:
+			start_requested.emit())
+	title_screen.load_requested.connect(func() -> void: load_requested.emit())
+	title_screen.option_requested.connect(func() -> void: option_requested.emit())
+	title_screen.quit_requested.connect(func() -> void: quit_requested.emit())
 
 
 func _build_game_screen() -> void:
@@ -248,15 +238,13 @@ func _build_toolbar() -> void:
 	toolbar.position = Vector2.ZERO
 	toolbar.size = Vector2(TOOLBAR_WIDTH, 40.0)
 	game_screen.add_child(toolbar)
-	_source_panel_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 1, 0))
-	if _source_panel_texture != null:
-		var panel_art := TextureRect.new()
-		panel_art.texture = _source_panel_texture
-		panel_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		panel_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-		panel_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		panel_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		toolbar.add_child(panel_art)
+	_toolbar_art = TextureRect.new()
+	_toolbar_art.name = "SourceToolbarArt"
+	_toolbar_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_toolbar_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	_toolbar_art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_toolbar_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toolbar.add_child(_toolbar_art)
 	var entries := [
 		["help", "說", 1], ["options", "系", 2], ["ai", "託", 3],
 		["load", "載", 4], ["save", "存", 5], ["map", "圖", 6],
@@ -270,6 +258,7 @@ func _build_toolbar() -> void:
 		button.position = Vector2(float(index) * 40.0, 0.0)
 		button.size = Vector2(40.0, 40.0)
 		button.set_meta("source_chunk", int(entry[2]))
+		button.set_meta("fallback_text", str(entry[1]))
 		var icon := _source_texture(_visuals.ui(_source_edition, "Panel", 1, int(entry[2])))
 		if icon != null:
 			button.icon = icon
@@ -278,6 +267,7 @@ func _build_toolbar() -> void:
 		button.pressed.connect(_emit_toolbar.bind(key))
 		toolbar.add_child(button)
 		toolbar_buttons[key] = button
+	_refresh_toolbar_art()
 
 
 func _build_board_host() -> void:
@@ -369,46 +359,92 @@ func _build_hud() -> void:
 		tab.pressed.connect(_select_tab.bind(key))
 		hud_panel.add_child(tab)
 		tab_buttons[key] = tab
-	action_strip = Control.new()
-	action_strip.name = "SourceActionStrip"
-	action_strip.position = Vector2(14.0, 350.0)
-	action_strip.size = Vector2(412.0, 116.0)
-	action_strip.mouse_filter = Control.MOUSE_FILTER_STOP
-	action_strip.hide()
-	game_screen.add_child(action_strip)
-	roll_button = _action_button("GO", "roll")
-	roll_button.position = Vector2(154.0, 9.0)
-	roll_button.size = Vector2(104.0, 34.0)
-	roll_button.pressed.connect(func() -> void: roll_requested.emit())
-	action_strip.add_child(roll_button)
-	buy_button = _action_button("YES", "buy")
-	buy_button.position = Vector2(92.0, 9.0)
-	buy_button.size = Vector2(104.0, 34.0)
+	_build_source_turn_controls()
+
+
+## Source turn presentation: a brown event box over the upper board, a separate
+## YES/NO picker lower on the board, the GO advance command, and the dev-only
+## hint line.  There is no permanent command strip.
+func _build_source_turn_controls() -> void:
+	turn_dialog = Control.new()
+	turn_dialog.name = "SourceTurnDialog"
+	turn_dialog.position = TURN_DIALOG_RECT.position
+	turn_dialog.size = TURN_DIALOG_RECT.size
+	# The event box is a text frame; board clicks (route branches) pass through.
+	turn_dialog.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	turn_dialog.hide()
+	game_screen.add_child(turn_dialog)
+	var box := Panel.new()
+	box.name = "SourceTurnDialogBox"
+	box.position = Vector2.ZERO
+	box.size = TURN_DIALOG_RECT.size
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_stylebox_override("panel", _style(SOURCE_DIALOG_FILL, SOURCE_DIALOG_BORDER, 2, 2))
+	turn_dialog.add_child(box)
+	dialog_text = _label("", 11, SOURCE_DIALOG_TEXT)
+	dialog_text.name = "SourceTurnDialogText"
+	dialog_text.position = Vector2(8.0, 4.0)
+	dialog_text.size = TURN_DIALOG_RECT.size - Vector2(16.0, 8.0)
+	dialog_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dialog_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	dialog_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	turn_dialog.add_child(dialog_text)
+
+	choice_selector = Control.new()
+	choice_selector.name = "SourceChoiceSelector"
+	choice_selector.position = CHOICE_SELECTOR_RECT.position
+	choice_selector.size = CHOICE_SELECTOR_RECT.size
+	choice_selector.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	choice_selector.hide()
+	game_screen.add_child(choice_selector)
+	buy_button = _choice_button("YES", "buy", SOURCE_YES_FILL, SOURCE_YES_BORDER, SOURCE_YES_TEXT)
+	buy_button.position = Vector2(0.0, 0.0)
+	buy_button.size = Vector2(62.0, 26.0)
 	buy_button.pressed.connect(func() -> void: buy_requested.emit())
-	action_strip.add_child(buy_button)
-	upgrade_button = _action_button("YES", "upgrade")
-	upgrade_button.position = Vector2(92.0, 9.0)
-	upgrade_button.size = Vector2(104.0, 34.0)
+	choice_selector.add_child(buy_button)
+	upgrade_button = _choice_button("YES", "upgrade", SOURCE_YES_FILL, SOURCE_YES_BORDER, SOURCE_YES_TEXT)
+	upgrade_button.position = Vector2(0.0, 0.0)
+	upgrade_button.size = Vector2(62.0, 26.0)
 	upgrade_button.pressed.connect(func() -> void: upgrade_requested.emit())
-	action_strip.add_child(upgrade_button)
-	end_turn_button = _action_button("NO", "end_turn")
-	end_turn_button.position = Vector2(216.0, 9.0)
-	end_turn_button.size = Vector2(104.0, 34.0)
+	choice_selector.add_child(upgrade_button)
+	end_turn_button = _choice_button("NO", "end_turn", SOURCE_NO_FILL, SOURCE_NO_BORDER, SOURCE_NO_TEXT)
+	end_turn_button.position = Vector2(86.0, 0.0)
+	end_turn_button.size = Vector2(62.0, 26.0)
 	end_turn_button.pressed.connect(func() -> void: end_turn_requested.emit())
-	action_strip.add_child(end_turn_button)
-	action_hint_label = _label("等待棋局", 11, TEXT_MAIN)
-	action_hint_label.name = "SourceActionHint"
-	action_hint_label.position = Vector2(8.0, 52.0)
-	action_hint_label.size = Vector2(396.0, 50.0)
-	action_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	action_strip.add_child(action_hint_label)
+	choice_selector.add_child(end_turn_button)
+	choice_divider = ColorRect.new()
+	choice_divider.name = "SourceChoiceDivider"
+	choice_divider.color = SOURCE_DIALOG_BORDER
+	choice_divider.position = Vector2(71.0, 4.0)
+	choice_divider.size = Vector2(6.0, 18.0)
+	choice_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	choice_selector.add_child(choice_divider)
+
+	roll_button = _choice_button("GO", "roll", SOURCE_GO_FILL, SOURCE_GO_BORDER, SOURCE_GO_TEXT)
+	roll_button.name = "SourceAdvanceCommand"
+	roll_button.position = ROLL_COMMAND_RECT.position
+	roll_button.size = ROLL_COMMAND_RECT.size
+	roll_button.add_theme_font_size_override("font_size", 12)
+	roll_button.pressed.connect(func() -> void: roll_requested.emit())
+	roll_button.hide()
+	game_screen.add_child(roll_button)
+
 	route_buttons = HBoxContainer.new()
 	route_buttons.name = "SourceRouteChoices"
-	route_buttons.position = Vector2(8.0, 9.0)
-	route_buttons.size = Vector2(396.0, 34.0)
-	route_buttons.add_theme_constant_override("separation", 3)
+	route_buttons.position = ROUTE_CHOICES_RECT.position
+	route_buttons.size = ROUTE_CHOICES_RECT.size
+	route_buttons.add_theme_constant_override("separation", 4)
 	route_buttons.hide()
-	action_strip.add_child(route_buttons)
+	game_screen.add_child(route_buttons)
+
+	action_hint_label = _label("等待棋局", 9, TEXT_MUTED)
+	action_hint_label.name = "SourceActionHint"
+	action_hint_label.position = DEV_HINT_RECT.position
+	action_hint_label.size = DEV_HINT_RECT.size
+	action_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	action_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	action_hint_label.visible = _dev_mode
+	game_screen.add_child(action_hint_label)
 
 
 func _build_calendar_and_minimap() -> void:
@@ -542,12 +578,10 @@ func toggle_full_map_view() -> void:
 	full_map_visible = not full_map_visible
 	full_map_view.visible = full_map_visible
 	if full_map_visible:
-		if action_strip != null:
-			action_strip.hide()
+		_hide_turn_controls()
 		full_map_view.refresh_viewport()
 	else:
-		if action_strip != null:
-			action_strip.show()
+		_render_turn_controls()
 
 
 func is_full_map_visible() -> bool:
@@ -622,6 +656,7 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 	snapshot = next_snapshot.duplicate(true)
 	map_definition = next_definition.duplicate(true)
 	_player_wealth = player_wealth
+	_sync_source_edition()
 	_render_hud()
 	_render_calendar()
 	if minimap != null and minimap.has_method("set_snapshot"):
@@ -630,38 +665,86 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 		full_map_view.call("set_snapshot", snapshot, map_definition)
 
 
+func _sync_source_edition() -> void:
+	# Only the snapshot's own map source may change the edition. Old saves carry
+	# no edition, and following the current catalog definition there would
+	# silently reset the title and toolbar from the expansion back to Game.
+	var source: Variant = snapshot.get("map_source", {})
+	if not source is Dictionary:
+		return
+	var edition := str(source.get("edition", ""))
+	if edition not in ["Game", "MultiverseJourney"] or edition == _source_edition:
+		return
+	_source_edition = edition
+	title_screen.configure(_source_edition, _visuals)
+	_source_title_texture = _title_art.texture
+	_refresh_toolbar_art()
+
+
+func _refresh_toolbar_art() -> void:
+	_source_panel_texture = _source_texture(_visuals.ui(_source_edition, "Panel", 1, 0))
+	if _toolbar_art != null:
+		_toolbar_art.texture = _source_panel_texture
+		_toolbar_art.visible = _source_panel_texture != null
+	for button: Button in toolbar_buttons.values():
+		var icon := _source_texture(_visuals.ui(_source_edition, "Panel", 1, int(button.get_meta("source_chunk", 0))))
+		button.icon = icon
+		button.text = "" if icon != null else str(button.get_meta("fallback_text", ""))
+		button.set_meta("source_icon", icon)
+
+
 func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String, buy_disabled: bool, upgrade_text: String, upgrade_disabled: bool, end_disabled: bool, hint: String, routes: Array = [], phase: String = "", action_options: Array = []) -> void:
 	if roll_button == null:
 		return
-	roll_button.text = roll_text
-	roll_button.tooltip_text = roll_text
-	roll_button.disabled = roll_disabled
-	buy_button.text = buy_text
-	buy_button.disabled = buy_disabled
-	upgrade_button.text = upgrade_text
-	upgrade_button.disabled = upgrade_disabled
-	end_turn_button.disabled = end_disabled
-	action_hint_label.text = hint
-	if phase.is_empty():
-		phase = "await_route" if not routes.is_empty() else "await_roll"
+	_action_state = {
+		"roll_text": roll_text, "roll_disabled": roll_disabled,
+		"buy_text": buy_text, "buy_disabled": buy_disabled,
+		"upgrade_text": upgrade_text, "upgrade_disabled": upgrade_disabled,
+		"end_disabled": end_disabled, "hint": hint,
+		"routes": routes.duplicate(true), "phase": phase,
+		"action_options": action_options.duplicate(true),
+	}
+	if str(phase).is_empty():
+		_action_state["phase"] = "await_route" if not routes.is_empty() else "await_roll"
+	_render_turn_controls()
+
+
+## Applies the stored action state to the source turn controls.  Dev mode keeps
+## the raw hint line; the player only sees the event box and picker.
+func _render_turn_controls() -> void:
+	if roll_button == null or turn_dialog == null:
+		return
+	var roll_text := str(_action_state.get("roll_text", ""))
+	var buy_text := str(_action_state.get("buy_text", ""))
+	var upgrade_text := str(_action_state.get("upgrade_text", ""))
+	var hint := str(_action_state.get("hint", ""))
+	var routes: Array = _action_state.get("routes", [])
+	var phase := str(_action_state.get("phase", "await_roll"))
+	var action_options: Array = _action_state.get("action_options", [])
 	var can_buy := action_options.has("buy") or action_options.has("buy_company")
 	var can_upgrade := action_options.has("upgrade") or action_options.has("build_facility") or action_options.has("company_upgrade")
 	var can_end := action_options.has("end_turn")
+	# The source advance command is its GO icon; a detained turn keeps its own
+	# source wording (休養／服刑／出獄擲骰) instead of the generic label.
+	roll_button.text = "GO" if roll_text in ["", "擲骰", "GO"] else roll_text
+	roll_button.tooltip_text = roll_text
+	roll_button.disabled = bool(_action_state.get("roll_disabled", true))
 	roll_button.visible = phase == "await_roll"
+	buy_button.disabled = bool(_action_state.get("buy_disabled", true))
+	buy_button.tooltip_text = buy_text
+	upgrade_button.disabled = bool(_action_state.get("upgrade_disabled", true))
+	upgrade_button.tooltip_text = upgrade_text
+	end_turn_button.disabled = bool(_action_state.get("end_disabled", true))
+	end_turn_button.tooltip_text = "結束回合"
 	buy_button.visible = phase == "await_action" and can_buy
 	upgrade_button.visible = phase == "await_action" and can_upgrade and not can_buy
 	end_turn_button.visible = phase == "await_action" and can_end
-	if roll_button.visible:
-		# The source GO control is the ordinary roll.  Rest, jail and sleep turns
-		# carry their own labels (服刑/休養/出獄擲骰/醒來) and the action hint
-		# quotes the button, so GO would contradict "按服刑推進回合".
-		roll_button.text = "GO" if roll_text == "擲骰" else roll_text
-	if buy_button.visible or upgrade_button.visible:
-		buy_button.text = "YES" if buy_button.visible else buy_text
-		upgrade_button.text = "YES" if upgrade_button.visible else upgrade_text
-		end_turn_button.text = "NO"
-	else:
-		end_turn_button.text = "結束"
+	# A lone decline control keeps the source row but sits centred on it.
+	var paired_choice := buy_button.visible or upgrade_button.visible
+	end_turn_button.text = "NO" if paired_choice else "結束"
+	end_turn_button.position = Vector2(86.0, 0.0) if paired_choice else Vector2(43.0, 0.0)
+	if choice_divider != null:
+		choice_divider.visible = paired_choice
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()
@@ -670,13 +753,40 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 		var next_index := int(routes[route_index])
 		var route := _action_button(route_labels[route_index], "route")
 		route.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		route.add_theme_color_override("font_color", SOURCE_DIALOG_TEXT)
+		route.add_theme_color_override("font_disabled_color", Color("#8b7f62"))
+		route.add_theme_stylebox_override("normal", _style(SOURCE_DIALOG_FILL, SOURCE_DIALOG_BORDER, 2, 1))
+		route.add_theme_stylebox_override("hover", _style(Color("#66492f"), Color("#f0d488"), 2, 1))
+		route.add_theme_stylebox_override("disabled", _style(Color("#3b2c1f"), Color("#6d5a3c"), 2, 1))
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
 	route_buttons.visible = phase == "await_route" and not routes.is_empty()
-	action_hint_label.visible = phase in ["await_roll", "await_action", "await_route"] and (roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible)
-	action_strip.visible = roll_button.visible or buy_button.visible or upgrade_button.visible or end_turn_button.visible or route_buttons.visible
+	choice_selector.visible = buy_button.visible or upgrade_button.visible or end_turn_button.visible
+	# Only a real decision reaches the player; generic turn hints stay on the
+	# development line instead of becoming a permanent board message.
+	turn_dialog.visible = buy_button.visible or upgrade_button.visible or route_buttons.visible
+	dialog_text.text = hint
+	action_hint_label.text = hint
+	action_hint_label.visible = _dev_mode
 	if full_map_visible:
-		action_strip.hide()
+		_hide_turn_controls()
+
+
+func _hide_turn_controls() -> void:
+	if turn_dialog != null:
+		turn_dialog.hide()
+	if choice_selector != null:
+		choice_selector.hide()
+	if route_buttons != null:
+		route_buttons.hide()
+	if roll_button != null:
+		roll_button.hide()
+
+
+func set_dev_mode(enabled: bool) -> void:
+	_dev_mode = enabled
+	if action_hint_label != null:
+		action_hint_label.visible = enabled
 
 
 func _route_destination_label(next_index: int) -> String:
@@ -864,8 +974,6 @@ func set_toolbar_enabled(key: String, enabled: bool) -> void:
 		(toolbar_buttons[key] as Button).disabled = not enabled
 	if key == "load" and title_load_button != null:
 		title_load_button.disabled = not enabled
-	if key == "options" and title_option_button != null:
-		title_option_button.disabled = not enabled
 
 
 func _render_hud() -> void:
@@ -1129,42 +1237,6 @@ func _hud_label(text: String, font_size: int, position: Vector2, label_size: Vec
 	return result
 
 
-func _title_button(text: String, tooltip: String) -> Button:
-	var result := Button.new()
-	result.text = text
-	result.tooltip_text = tooltip
-	result.custom_minimum_size = Vector2(144.0, 38.0)
-	result.add_theme_font_size_override("font_size", 16)
-	result.add_theme_color_override("font_color", Color("#fff2bd"))
-	result.add_theme_stylebox_override("normal", _style(Color(0.06, 0.16, 0.2, 0.82), Color("#d8b45f"), 5, 1))
-	result.add_theme_stylebox_override("hover", _style(Color(0.17, 0.34, 0.37, 0.92), Color("#fff0a5"), 5, 2))
-	return result
-
-
-func _configure_title_hit_area(button: Button, key: String, rect: Rect2) -> void:
-	button.set_meta("source_key", key)
-	if _source_title_texture == null:
-		var index := ["start", "load", "option"].find(key)
-		button.position = Vector2(0.0, float(maxi(0, index)) * 46.0)
-		button.size = Vector2(144.0, 38.0)
-		return
-	button.position = rect.position
-	button.size = rect.size
-	button.text = ""
-	button.flat = true
-	button.focus_mode = Control.FOCUS_ALL
-	button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
-	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	var hover_chunk: int = int({"start": 2, "load": 4, "option": 6}.get(key, -1))
-	if hover_chunk >= 0:
-		var hover_texture := _source_texture(_visuals.ui(_source_edition, "Data", 1, hover_chunk))
-		if hover_texture != null:
-			button.mouse_entered.connect(func() -> void: button.icon = hover_texture)
-			button.mouse_exited.connect(func() -> void: button.icon = null)
-
-
 func _toolbar_button(text: String, key: String) -> Button:
 	var result := Button.new()
 	result.name = "Toolbar_%s" % key
@@ -1184,6 +1256,26 @@ func _tab_button(text: String, key: String) -> Button:
 	var result := _toolbar_button(text, "tab_" + key)
 	result.name = "Tab_%s" % key
 	result.add_theme_font_size_override("font_size", 13)
+	return result
+
+
+## Source YES/NO picker block: flat pink or green tile with a light trim and
+## dark ink, matching the manual's Yes/No icon pair.
+func _choice_button(text: String, key: String, fill: Color, border: Color, ink: Color) -> Button:
+	var result := Button.new()
+	result.name = "Action_%s" % key
+	result.text = text
+	result.focus_mode = Control.FOCUS_ALL
+	result.add_theme_font_size_override("font_size", 11)
+	result.add_theme_color_override("font_color", ink)
+	result.add_theme_color_override("font_hover_color", ink)
+	result.add_theme_color_override("font_pressed_color", ink)
+	result.add_theme_color_override("font_focus_color", ink)
+	result.add_theme_color_override("font_disabled_color", Color(ink, 0.45))
+	result.add_theme_stylebox_override("normal", _style(fill, border, 2, 1))
+	result.add_theme_stylebox_override("hover", _style(fill.lightened(0.18), border.lightened(0.25), 2, 1))
+	result.add_theme_stylebox_override("pressed", _style(fill.darkened(0.18), border, 2, 1))
+	result.add_theme_stylebox_override("disabled", _style(fill.darkened(0.35), border.darkened(0.35), 2, 1))
 	return result
 
 

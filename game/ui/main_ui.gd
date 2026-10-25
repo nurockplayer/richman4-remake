@@ -347,6 +347,15 @@ func _source_binding_matches(key: InputEventKey, word: int) -> bool:
 	return pressed_word == (word & 0xff)
 
 
+func _source_advance_ready() -> bool:
+	# The source GO control is the only visible advance command; when the shell
+	# hides it (full-map view, decision phase) the keyboard must not roll.
+	if source_shell == null:
+		return true
+	var go := source_shell.get("roll_button") as Button
+	return go != null and go.visible and not go.disabled
+
+
 func _source_view_binding() -> int:
 	if system_hotkeys == null:
 		return int(SystemHotkeys.DEFAULTS[7])
@@ -392,6 +401,11 @@ func _unhandled_input(event: InputEvent) -> void:
 					command = "save"
 				elif event.keycode == KEY_L and source_hotkeys_bindings[23] == 0x4c:
 					command = "load"
+			elif not event.ctrl_pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and _source_advance_ready():
+				# Manual p.7: ENTER is the source confirm command, so it confirms
+				# the pending advance command when nothing else owns the key.  A
+				# hidden GO control (full-map view, pending event) stays inert.
+				command = "roll"
 			elif not event.ctrl_pressed and event.keycode == KEY_N:
 				if state.get("phase", "") == "game_over":
 					_restart_game()
@@ -470,6 +484,8 @@ func _build_source_shell() -> void:
 	shell.presentation_input_guard = Callable(self, "_source_view_operation_allowed")
 	if shell.has_signal("start_requested"):
 		shell.start_requested.connect(_on_source_start_requested)
+		shell.new_stage_requested.connect(_on_source_new_stage_requested)
+		shell.quit_requested.connect(_on_source_quit_requested)
 		shell.load_requested.connect(_on_source_load_requested)
 		shell.save_requested.connect(_on_source_save_requested)
 		shell.option_requested.connect(_on_source_option_requested)
@@ -686,7 +702,17 @@ func _on_source_stock_closed() -> void:
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 
-func _on_source_start_requested() -> void:
+## The source title keeps keyboard focus while an overlay owns input, so every
+## title entry shares the option presenter's rejection set.
+func _source_title_entry_blocked() -> bool:
+	if _source_options_modal_open() or _source_autosave.pending():
+		return true
+	return source_save_menu != null and source_save_menu.visible
+
+
+func _on_source_start_requested(stage: int = 0) -> void:
+	if _source_title_entry_blocked():
+		return
 	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open():
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_sale_modal_open() or _source_minigame_modal_open():
@@ -706,7 +732,10 @@ func _on_source_start_requested() -> void:
 	var selected := _active_map_definition.duplicate(true)
 	if selected.is_empty():
 		selected = _selected_map_definition.duplicate(true)
-	selected = _source_setup_definition(selected)
+	selected = _source_setup_entry_definition(stage, selected)
+	if selected.is_empty():
+		_show_content_error("所選版本或關卡的地圖尚未備妥，無法開始新局。")
+		return
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		player_count = PLAYER_COUNT
@@ -716,6 +745,37 @@ func _on_source_start_requested() -> void:
 	defaults["player_count"] = player_count
 	var catalog: Array = _map_catalog.duplicate(true)
 	source_shell.call("show_setup", catalog, selected, defaults)
+
+
+func _on_source_new_stage_requested() -> void:
+	_on_source_start_requested(1)
+
+
+func _on_source_quit_requested() -> void:
+	if _source_title_entry_blocked() or source_shell == null or not source_shell.is_title_visible():
+		return
+	get_tree().quit()
+
+
+func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
+	var edition := str(source_shell.get("_source_edition"))
+	if edition not in ["Game", "MultiverseJourney"] or stage not in [0, 1] or (edition == "Game" and stage != 0):
+		return {}
+	var first := stage * 4 + 1
+	var candidates: Array = []
+	for value in _map_catalog:
+		if not value is Dictionary:
+			continue
+		var source: Dictionary = value.get("source", {})
+		var number := int(source.get("map_number", 0))
+		if str(source.get("edition", "")) == edition and number >= first and number < first + 4 and _map_is_startable(value):
+			if str(value.get("id", "")) == str(preferred.get("id", "")):
+				return value.duplicate(true)
+			candidates.append(value)
+	if candidates.is_empty():
+		return {}
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.source.map_number) < int(b.source.map_number))
+	return candidates[0].duplicate(true)
 
 
 func _source_setup_definition(identity: Dictionary) -> Dictionary:
@@ -810,7 +870,7 @@ func _on_source_slot_load_ready(snapshot: Dictionary) -> void:
 	_consider_loaded_snapshot(restored, snapshot)
 
 func _on_source_load_requested() -> void:
-	if _source_inventory_modal_open() or _source_shop_modal_open() or _source_sale_modal_open(): return
+	if _source_title_entry_blocked() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_sale_modal_open(): return
 	_open_source_save_menu("load")
 
 func _on_source_save_requested() -> void:
@@ -3632,6 +3692,9 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_help_controller.sync(game_state)
 	if source_shell.has_method("sync_snapshot"):
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
+	if source_shell.has_method("set_dev_mode"):
+		# The board keeps the raw hint/log text only on the development path.
+		source_shell.call("set_dev_mode", _is_development_path())
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):

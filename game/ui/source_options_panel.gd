@@ -107,6 +107,7 @@ const FALLBACK_LOGICAL := {
 }
 
 const SOURCE_TEXT := Color("#101010")
+const SOURCE_TEXT_DISABLED := Color("#8a8a8a")
 const UNAVAILABLE_TEXT := "選項資料無法顯示"
 const ART_FALLBACK_TEXT := "來源畫面素材未載入"
 
@@ -121,6 +122,9 @@ signal preview_requested(track: int)
 var field_labels: Array = []
 var track_labels: Array = []
 var command_labels: Array = []
+## Host-owned command gates (for example a settled match cannot surrender).
+## They stay outside the six-field settings model the source validates.
+var disabled_commands: Array = []
 
 var _model: Dictionary = {}
 var _committed_settings: Dictionary = {}
@@ -306,6 +310,25 @@ func get_source_geometry() -> Dictionary:
 	return source_geometry()
 
 
+## Parent-owned command availability. A disabled row stays visible but muted and
+## never reaches the host, so a settled match cannot emit surrender.
+func set_disabled_commands(values: Array) -> void:
+	var normalized: Array = []
+	for value in values:
+		var command := str(value).strip_edges()
+		if not command.is_empty() and not normalized.has(command):
+			normalized.append(command)
+	if normalized == disabled_commands:
+		return
+	disabled_commands = normalized
+	if _built:
+		_render()
+
+
+func is_command_disabled(command: String) -> bool:
+	return disabled_commands.has(command)
+
+
 ## Parent calls this while a child source window or confirmation owns input.
 ## The local draft remains intact while suspended.
 func suspend_input(suspended: bool) -> void:
@@ -448,6 +471,10 @@ func _handle_left_down(local: Vector2) -> void:
 		return
 	for command_index in range(3):
 		if _hitbox("modecmd%d" % command_index).has_point(local):
+			if _command_disabled(command_index):
+				_pressed_action = ""
+				_render()
+				return
 			_pressed_action = "command:%d" % command_index
 			_render()
 			return
@@ -473,8 +500,17 @@ func _handle_left_up(_local: Vector2) -> void:
 				var commands: Array = TITLE_COMMANDS if _mode == "title" else GAME_COMMANDS
 				if command_index >= 0 and command_index < commands.size():
 					_render()
+					if _command_disabled(command_index):
+						return
 					# No code after this signal may dereference the presenter.
 					command_requested.emit(str(commands[command_index]))
+
+
+func _command_disabled(command_index: int) -> bool:
+	var commands: Array = TITLE_COMMANDS if _mode == "title" else GAME_COMMANDS
+	if command_index < 0 or command_index >= commands.size():
+		return true
+	return disabled_commands.has(str(commands[command_index]))
 
 
 func _accept() -> bool:
@@ -686,14 +722,17 @@ func _draw_commands(resolved: Dictionary) -> void:
 				_logical_for(resolved["command_pressed"], Vector2(101.0, 36.0)),
 				int(CHUNKS["command_pressed"]),
 			)
+		var disabled := _command_disabled(index)
 		var label := _make_centered_label(
 			"SourceOptionsCommand%d" % index,
 			str(labels[index]),
 			label_centers[index],
 			rect.size,
 			20,
+			SOURCE_TEXT_DISABLED if disabled else SOURCE_TEXT,
 		)
 		label.set_meta("source_command", (TITLE_COMMANDS if _mode == "title" else GAME_COMMANDS)[index])
+		label.set_meta("source_command_disabled", disabled)
 		label.set_meta("source_hitbox", rect)
 		command_labels.append(label)
 

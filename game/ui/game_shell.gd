@@ -50,6 +50,11 @@ const CHOICE_SELECTOR_RECT := Rect2(146.0, 372.0, 148.0, 26.0)
 const ROUTE_CHOICES_RECT := Rect2(24.0, 372.0, 392.0, 26.0)
 const ROLL_COMMAND_RECT := Rect2(382.0, 444.0, 52.0, 26.0)
 const DEV_HINT_RECT := Rect2(6.0, 446.0, 368.0, 26.0)
+# Player-facing status/toast over the lower board: a rejected action or a
+# waiting turn (AI, rest, response card, autosave) answers here in release
+# builds, where the dev hint row is absent.
+const STATUS_TOAST_RECT := Rect2(60.0, 330.0, 320.0, 30.0)
+const STATUS_TOAST_SECONDS := 2.0
 
 
 signal start_requested
@@ -106,6 +111,8 @@ var dialog_text: Label
 var choice_selector: Control
 var choice_divider: ColorRect
 var action_hint_label: Label
+var status_toast: Control
+var status_toast_text: Label
 var portrait: TextureRect
 var player_name_label: Label
 var cash_caption: Label
@@ -132,6 +139,9 @@ var _source_edition := "Game"
 var _source_title_texture: Texture2D
 var _dev_mode := false
 var _action_state: Dictionary = {}
+var _waiting_status := ""
+var _toast_text := ""
+var _toast_remaining := 0.0
 var _source_panel_texture: Texture2D
 var _source_hud_texture: Texture2D
 var _title_art: TextureRect
@@ -153,7 +163,8 @@ func _notification(what: int) -> void:
 		_layout_reference_canvas()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	advance_status_toast(delta)
 	_refresh_minimap_if_camera_changed()
 
 
@@ -445,6 +456,29 @@ func _build_source_turn_controls() -> void:
 	action_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	action_hint_label.visible = _dev_mode
 	game_screen.add_child(action_hint_label)
+
+	status_toast = Control.new()
+	status_toast.name = "SourceStatusToast"
+	status_toast.position = STATUS_TOAST_RECT.position
+	status_toast.size = STATUS_TOAST_RECT.size
+	status_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_toast.hide()
+	game_screen.add_child(status_toast)
+	var toast_box := Panel.new()
+	toast_box.name = "SourceStatusToastBox"
+	toast_box.position = Vector2.ZERO
+	toast_box.size = STATUS_TOAST_RECT.size
+	toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_box.add_theme_stylebox_override("panel", _style(SOURCE_DIALOG_FILL, SOURCE_DIALOG_BORDER, 2, 2))
+	status_toast.add_child(toast_box)
+	status_toast_text = _label("", 11, SOURCE_DIALOG_TEXT)
+	status_toast_text.name = "SourceStatusToastText"
+	status_toast_text.position = Vector2(8.0, 2.0)
+	status_toast_text.size = STATUS_TOAST_RECT.size - Vector2(16.0, 4.0)
+	status_toast_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_toast_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_toast_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_toast.add_child(status_toast_text)
 
 
 func _build_calendar_and_minimap() -> void:
@@ -757,6 +791,8 @@ func _render_turn_controls() -> void:
 		route.add_theme_color_override("font_disabled_color", Color("#8b7f62"))
 		route.add_theme_stylebox_override("normal", _style(SOURCE_DIALOG_FILL, SOURCE_DIALOG_BORDER, 2, 1))
 		route.add_theme_stylebox_override("hover", _style(Color("#66492f"), Color("#f0d488"), 2, 1))
+		# Keyboard selection lands here; the brighter gold frame marks the choice.
+		route.add_theme_stylebox_override("focus", _style(Color("#66492f"), Color("#f0d488"), 2, 2))
 		route.add_theme_stylebox_override("disabled", _style(Color("#3b2c1f"), Color("#6d5a3c"), 2, 1))
 		route.pressed.connect(route_requested.emit.bind(next_index))
 		route_buttons.add_child(route)
@@ -768,6 +804,7 @@ func _render_turn_controls() -> void:
 	dialog_text.text = hint
 	action_hint_label.text = hint
 	action_hint_label.visible = _dev_mode
+	_render_status_toast()
 	if full_map_visible:
 		_hide_turn_controls()
 
@@ -781,12 +818,62 @@ func _hide_turn_controls() -> void:
 		route_buttons.hide()
 	if roll_button != null:
 		roll_button.hide()
+	if status_toast != null:
+		status_toast.hide()
 
 
 func set_dev_mode(enabled: bool) -> void:
 	_dev_mode = enabled
 	if action_hint_label != null:
 		action_hint_label.visible = enabled
+
+
+## Persistent board status for a waiting turn (AI, rest, pending response,
+## daily checkpoint).  An active transient toast stays on top of it.
+func set_waiting_status(text: String) -> void:
+	_waiting_status = text
+	_render_status_toast()
+
+
+## Transient board status for a rejected action: the same source paper/gold
+## frame, cleared after a short interval.
+func show_status_toast(text: String, seconds: float = STATUS_TOAST_SECONDS) -> void:
+	if text.is_empty():
+		return
+	_toast_text = text
+	_toast_remaining = max(0.0, seconds)
+	_render_status_toast()
+
+
+func advance_status_toast(delta: float) -> void:
+	if _toast_remaining <= 0.0:
+		return
+	_toast_remaining = max(0.0, _toast_remaining - delta)
+	if _toast_remaining == 0.0:
+		_toast_text = ""
+		_render_status_toast()
+
+
+func _render_status_toast() -> void:
+	if status_toast == null:
+		return
+	var text := _toast_text if _toast_remaining > 0.0 and not _toast_text.is_empty() else _waiting_status
+	status_toast_text.text = text
+	status_toast.visible = not text.is_empty() and not full_map_visible and title_visible == false and game_screen != null and game_screen.visible
+
+
+## Keyboard route selection: moves focus to the matching source route tile.
+func focus_route_option(index: int) -> bool:
+	if route_buttons == null:
+		return false
+	var children := route_buttons.get_children()
+	if index < 0 or index >= children.size():
+		return false
+	var button := children[index] as Button
+	if button == null or button.disabled or not button.visible:
+		return false
+	button.grab_focus()
+	return true
 
 
 func _route_destination_label(next_index: int) -> String:

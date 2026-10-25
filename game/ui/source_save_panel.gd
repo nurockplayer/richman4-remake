@@ -641,7 +641,7 @@ func _create_row(slot_id: int, preview: Dictionary, rect: Rect2) -> void:
 	row_visuals[slot_id] = {}
 	_render_slot_label_background(content, slot_id)
 	if mode == MODE_LOAD and slot_id == 0:
-		var legacy := _source_label("原有存檔", 9, SOURCE_TEXT)
+		var legacy := _source_label("AUTO" if preview.get("source_identity", "legacy") == "automatic" else "原有存檔", 9, SOURCE_TEXT)
 		legacy.name = "OriginalSaveLabel"
 		# Keep the four-character existing-save marker above the source date even
 		# when the theme's line box is taller than the requested font size.

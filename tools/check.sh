@@ -90,6 +90,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_active_
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_popup_mode_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_bootstrap.gd
+# Issue #141 source general-options presenter and isolated settings boundary.
+RICHMAN4_SETTINGS_TEST_ROOT="$PWD/.local/system-settings-$BASHPID" run_checked "$GODOT_BIN" --headless --path . --script tests/system_settings.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_audio_selection.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_main_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_runtime.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_effects.gd

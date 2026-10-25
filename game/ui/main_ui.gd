@@ -26,6 +26,8 @@ const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
+const SourceOptionsPanel = preload("res://game/ui/source_options_panel.gd")
+const SystemSettings = preload("res://game/platform/system_settings.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -73,6 +75,10 @@ var source_shell: Control
 var source_stock_panel: Control
 var source_help_controller: Control
 var source_bank_controller: Control
+var source_options_panel: Control
+var system_settings: RefCounted
+## Explicit so tests and previews never touch the owner's real settings file.
+var settings_path := SystemSettings.DEFAULT_PATH
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -351,6 +357,7 @@ func _build_source_shell() -> void:
 	_build_source_inventory_panel()
 	_build_source_shop_controller()
 	_build_source_help_controller()
+	_build_source_options()
 	_build_source_bank_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
@@ -371,6 +378,25 @@ func _build_source_help_controller() -> void:
 	var game_screen: Variant = source_shell.get("game_screen")
 	if game_screen is Control:
 		(game_screen as Control).visibility_changed.connect(_update_source_help_gate)
+
+func _build_source_options() -> void:
+	if source_shell == null:
+		return
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	system_settings = SystemSettings.new()
+	var panel := SourceOptionsPanel.new()
+	panel.name = "SourceOptionsPanelHost"
+	panel.z_index = 70
+	panel.hide()
+	panel.accepted.connect(_on_source_options_accepted)
+	panel.cancelled.connect(_on_source_options_cancelled)
+	panel.command_requested.connect(_on_source_options_command)
+	panel.preview_requested.connect(_on_source_options_preview)
+	canvas.add_child(panel)
+	source_options_panel = panel
+
 
 func _build_source_bank_controller() -> void:
 	if source_shell == null:
@@ -463,8 +489,87 @@ func _on_source_save_requested() -> void:
 	_save_game()
 
 func _on_source_option_requested() -> void:
-	if _source_shop_modal_open(): return
-	_append_local_log("選項畫面尚未接入；目前保留來源版面。")
+	if source_options_panel == null:
+		_append_local_log("選項畫面尚未接入；目前保留來源版面。")
+		_refresh_log_only()
+		return
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+		return
+	var mode := "game"
+	if source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible():
+		mode = "title"
+	_open_source_options(mode)
+
+
+func _open_source_options(mode: String) -> void:
+	var settings: Dictionary = system_settings.defaults()
+	var loaded: Dictionary = system_settings.read_settings(settings_path)
+	if bool(loaded.get("ok", false)):
+		settings = loaded.get("settings", settings)
+	source_options_panel.set_visuals(source_shell.get("_visuals"))
+	source_options_panel.set_current_track(_source_audio_track())
+	var opened: bool = source_options_panel.set_view_model({
+		"edition": _source_bank_edition(),
+		"mode": mode,
+		"settings": settings,
+	})
+	if not opened:
+		_append_local_log("選項資料無法顯示。")
+		_refresh_log_only()
+
+
+func _source_options_modal_open() -> bool:
+	return source_options_panel != null and source_options_panel.is_open()
+
+
+func _source_options_operation_allowed() -> bool:
+	return source_shell != null and not _presentation_busy
+
+
+func _on_source_options_accepted(settings: Dictionary) -> void:
+	var result: Dictionary = system_settings.write_settings(settings_path, settings)
+	if bool(result.get("ok", false)):
+		_append_local_log("選項已儲存。")
+	else:
+		_append_local_log("選項儲存失敗；變更只在目前執行中生效。")
+	_apply_source_settings(settings)
+	_refresh_log_only()
+
+
+func _on_source_options_cancelled() -> void:
+	_refresh_log_only()
+
+
+func _apply_source_settings(settings: Dictionary) -> void:
+	# Only the music switch has a runtime consumer so far; the remaining source
+	# fields persist for later hosts.  Runtime-only calls never rewrite audio.cfg.
+	if audio_controller == null:
+		return
+	audio_controller.call("set_enabled", int(settings.get("music_level", 0)) > 0, false)
+	_update_audio_button()
+
+
+func _source_audio_track() -> int:
+	if audio_controller == null:
+		return -1
+	return int(audio_controller.get("current_track"))
+
+
+func _on_source_options_preview(track: int) -> void:
+	if audio_controller == null:
+		return
+	if bool(audio_controller.call("play_track", track)):
+		source_options_panel.set_current_track(track)
+
+
+func _on_source_options_command(command: String) -> void:
+	if command == "help":
+		# The source keeps the parent draft for child windows; the current help
+		# host owns the whole source surface, so close before handing over.
+		source_options_panel.close_options()
+		_on_source_help_requested()
+		return
+	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
 	_refresh_log_only()
 
 func _on_source_help_requested() -> void:
@@ -2044,7 +2149,7 @@ func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open()
+	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_options_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
 	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
@@ -2710,7 +2815,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):
 		_update_source_help_gate()
-		source_shell.call("set_toolbar_enabled", "options", false)
+		source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
 		source_shell.call("set_toolbar_enabled", "save", _source_save_operation_allowed())

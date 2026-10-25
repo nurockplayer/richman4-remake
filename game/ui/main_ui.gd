@@ -777,11 +777,13 @@ func _open_source_hotkeys_child() -> void:
 	var bindings: Array = source_hotkeys_bindings.duplicate(true)
 	if bindings.is_empty():
 		var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
-		if not bool(loaded.get("ok", false)):
-			_append_local_log("熱鍵資料無法顯示。")
-			_refresh_log_only()
-			return
-		bindings = loaded.get("bindings", system_hotkeys.defaults())
+		bindings = system_hotkeys.defaults()
+		if bool(loaded.get("ok", false)):
+			bindings = loaded.get("bindings", bindings)
+		else:
+			# A damaged file must stay repairable: show the source defaults and
+			# let confirmation replace it.
+			_append_local_log("熱鍵設定檔無法讀取，已改用原始設定。")
 	source_hotkeys_panel.set_visuals(source_shell.get("_visuals"))
 	var opened: bool = source_hotkeys_panel.set_view_model({
 		"edition": _source_bank_edition(),
@@ -1897,8 +1899,11 @@ func _populate_setup_controls() -> void:
 	if not SETUP_WEALTH_MULTIPLIERS.has(wealth_multiplier):
 		wealth_multiplier = 0
 	_select_option_id(wealth_multiplier_option, wealth_multiplier)
+	# A date confirmed in the options date child outranks the running game's.
 	var date_value: Variant = state.get("start_date", null)
-	var date: Dictionary = date_value.duplicate(true) if date_value is Dictionary and GameCalendar.is_valid(date_value) else _system_start_date()
+	var date: Dictionary = _system_start_date()
+	if not GameCalendar.is_valid(_source_start_date_override) and date_value is Dictionary and GameCalendar.is_valid(date_value):
+		date = date_value.duplicate(true)
 	if date.is_empty():
 		date = {"year": MIN_START_YEAR, "month": 1, "day": 1}
 	start_year_input.value = int(date.get("year", MIN_START_YEAR))

@@ -156,6 +156,16 @@ func _run() -> void:
 	panel.call("close_options")
 	await _settle()
 	_expect_equal(ui._system_start_date(), expected_date, "outer options cancel keeps the committed date")
+	# The ordinary New Game dialog must start on the confirmed date, not the
+	# running game's start date.
+	ui._on_new_game_pressed()
+	await _settle()
+	ui._on_new_game_confirm()
+	await _settle()
+	_expect_equal(ui.state.get("start_date"), expected_date, "New Game starts on the confirmed options date")
+	if ui.new_game_popup != null:
+		ui.new_game_popup.hide()
+	_expect_equal(ui._default_setup_options(4).get("start_date"), expected_date, "default setup options honour the confirmed date")
 	# Reopen in title mode directly: help may have left the title screen.
 	ui._open_source_options("title")
 	await _settle()
@@ -164,11 +174,17 @@ func _run() -> void:
 	# Issue #143 hotkey child: confirmation persists through its own injected
 	# path and survives the outer options cancel.
 	var hotkeys_panel: Control = ui.source_hotkeys_panel
+	# A corrupt file must not lock the player out: the child opens on the
+	# source defaults and confirmation repairs the file.
+	var corrupt := FileAccess.open(hotkeys_file, FileAccess.WRITE)
+	corrupt.store_string("not json")
+	corrupt.close()
 	_click(panel, Vector2(227 + 10, 68 + 10))
 	await _settle()
 	_expect(hotkeys_panel != null and hotkeys_panel.call("is_open"), "hotkey command opens the 28-slot child")
 	_expect(bool(panel.call("is_input_suspended")), "hotkey child suspends the options input")
-	_expect(not FileAccess.file_exists(hotkeys_file), "opening hotkeys writes no file")
+	_expect_equal(FileAccess.get_file_as_string(hotkeys_file), "not json", "opening hotkeys leaves the corrupt file untouched")
+	_expect_equal(hotkeys_panel.call("draft_bindings"), SystemHotkeys.new().defaults(), "corrupt hotkeys file opens on the source defaults")
 	await _click_hotkeys(hotkeys_panel, Vector2(242 + 10, 281 + 10))
 	_expect(not hotkeys_panel.call("is_open"), "hotkey OK closes the child")
 	_expect(FileAccess.file_exists(hotkeys_file), "hotkey OK writes the injected bindings file")

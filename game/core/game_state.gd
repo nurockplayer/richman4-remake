@@ -24,6 +24,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
+const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
 const GRAPH_BOARD_MODE = "graph"
@@ -1196,6 +1197,7 @@ func _initialize_original_companies(definition: Dictionary) -> void:
 	state["company_service_pending"] = 0
 	state["company_months"] = 0
 	state["jackpot"] = 0
+	LotteryFlow.initialize(state)
 	for company in state.companies:
 		company["owner"] = -1
 		company["treasury"] = 10000 - int(state.market.rows[OriginalStockMarket.symbol(int(company.stock_index))].market_supply)
@@ -2293,7 +2295,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_shop"]:
+	if phase in ["game_over", "await_shop", "await_lottery"]:
 		state["action_options"] = []
 		return
 	var options: Array = []

@@ -125,6 +125,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
+# Native RC smoke 2026-10-26 JST defects: fallback bank keypad geometry and
+# status line, setup frame stray node and preview clipping, jail action label.
+run_checked "$GODOT_BIN" --headless --path . --script tests/native_smoke_fixes.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd

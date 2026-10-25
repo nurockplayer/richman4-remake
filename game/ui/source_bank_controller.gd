@@ -120,6 +120,8 @@ func sync(
 		_panel_mode = "atm"
 		_open = true
 		_generation += 1
+		if bank_panel != null and bank_panel.has_method("reset_status"):
+			bank_panel.call("reset_status")
 		show()
 
 	var model := _build_model(token, _snapshot, _panel_mode == "loan")
@@ -391,7 +393,9 @@ func _configure_panel(model: Dictionary) -> void:
 		bank_panel.size = BANK_SIZE
 		bank_panel.custom_minimum_size = BANK_SIZE
 	if not previous_action.is_empty() and bank_panel.has_method("action_allowed") and bool(bank_panel.call("action_allowed", previous_action)):
-		bank_panel.call("select_action", previous_action)
+		# Restoring the action after a settled transaction is not a new choice,
+		# so it must not replace the outcome line ("已提款 $N").
+		bank_panel.call("select_action", previous_action, true)
 		if previous_amount > 0:
 			bank_panel.call("set_amount_text", str(previous_amount))
 	bank_panel.show()
@@ -419,9 +423,16 @@ func _finish_action(result: Dictionary, generation: int) -> void:
 			handle_result.call(result)
 		if generation != _generation:
 			return
-		_show_error(str(result.get("message", "銀行操作未完成。")))
+		var failure := str(result.get("message", "銀行操作未完成。"))
+		_show_error(failure)
+		if bank_panel != null and bank_panel.has_method("reject_status"):
+			bank_panel.call("reject_status", failure)
 		return
 	_clear_error()
+	if bank_panel != null and bank_panel.has_method("settle_status"):
+		# The core accepted the transaction, so the panel may read the amount
+		# back; a rejected action must never show an "已提款" line.
+		bank_panel.call("settle_status")
 	if handle_result.is_valid():
 		handle_result.call(result)
 	var latest: Variant = result.get("state", null)

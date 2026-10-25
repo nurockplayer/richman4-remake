@@ -425,6 +425,7 @@ func _build_interface() -> void:
 	add_child(background)
 
 	var backdrop_glow := ColorRect.new()
+	backdrop_glow.name = "LegacyBackdropGlow"
 	backdrop_glow.color = Color("#11283a")
 	backdrop_glow.position = Vector2(0.0, 0.0)
 	backdrop_glow.size = Vector2(520.0, 180.0)
@@ -506,6 +507,11 @@ func _build_source_shell() -> void:
 	_build_source_trustee_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
+	# The legacy backdrop glow sits outside legacy_interface_root and would show
+	# as a stray lighter rectangle at the top-left of the source title/setup.
+	var legacy_glow := find_child("LegacyBackdropGlow", false, false) as CanvasItem
+	if legacy_glow != null:
+		legacy_glow.hide()
 
 func _build_source_help_controller() -> void:
 	if source_shell == null:

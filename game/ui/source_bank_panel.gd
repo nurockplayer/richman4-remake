@@ -26,6 +26,8 @@ var _bank_scene := "front"
 var _has_source_visual := false
 var _selected_action := ""
 var _amount_text := ""
+var _status_text := ""
+var _settled_pending := ""
 var _amount_pad: Node = null
 var _amount_modal: Control = null
 var _feedback: Label
@@ -42,6 +44,10 @@ func _init() -> void:
 	size = ATM_SIZE
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	focus_mode = Control.FOCUS_ALL
+
+
+func _ready() -> void:
+	_apply_button_rects()
 
 
 ## Replace the displayed snapshot.  The caller's dictionary is copied deeply
@@ -112,11 +118,36 @@ func cancel_amount() -> void:
 		return
 	_selected_action = ""
 	_amount_text = ""
+	_status_text = ""
 	_refresh_amount_display()
 
 
-func select_action(action: String) -> bool:
-	return _select_action(action)
+func select_action(action: String, silent: bool = false) -> bool:
+	return _select_action(action, silent)
+
+
+## A new bank encounter starts with no choice and no settled amount, so the
+## status line returns to its "please choose" prompt.
+func reset_status() -> void:
+	_status_text = ""
+	_settled_pending = ""
+
+
+## The host accepted the confirmed transaction, so its amount is now a fact and
+## can be read back on the status line.
+func settle_status() -> void:
+	if _settled_pending.is_empty():
+		return
+	_status_text = _settled_pending
+	_settled_pending = ""
+	_apply_status()
+
+
+## The host rejected the confirmed transaction: never claim it happened.
+func reject_status(message: String) -> void:
+	_settled_pending = ""
+	_status_text = ""
+	_show_feedback(message)
 
 
 func _input(event: InputEvent) -> void:
@@ -195,6 +226,7 @@ func _build_screen() -> void:
 		_build_bank_scene()
 	if not _has_source_visual:
 		add_child(_make_label("來源銀行畫面未載入；可安全操作或 EXIT 返回。", Rect2(4, screen_size.y - 23, screen_size.x - 8, 20), 10, Color("#ffcf7c"), HORIZONTAL_ALIGNMENT_CENTER, "BankSourceUnavailable"))
+	_apply_button_rects()
 
 
 func _build_atm() -> void:
@@ -271,7 +303,7 @@ func _build_atm() -> void:
 	enter.pressed.connect(func() -> void: _confirm_current_amount())
 	add_child(enter)
 
-	_feedback = _make_label("請先選擇提款或存款", Rect2(18, 296, 285, 24), 10, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "ATMFeedback")
+	_feedback = _make_label(_status_message(), Rect2(18, 296, 285, 24), 10, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "ATMFeedback")
 	add_child(_feedback)
 	_refresh_action_buttons()
 	_refresh_amount_display()
@@ -307,7 +339,7 @@ func _build_loan_scene() -> void:
 		_centered_label("償還貸款", "LoanRepayLabel", Vector2(530, 345), Vector2(160, 40), 26, Color("#101010"))
 		if _can_enter_rear():
 			_centered_label("特別融資", "BankRearEntryLabel", Vector2(492, 245), Vector2(150, 24), 14, Color("#808080"))
-	_feedback = _make_label("請選擇銀行操作", Rect2(250, 252, 270, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "BankFeedback")
+	_feedback = _make_label(_status_message(), Rect2(250, 252, 270, 28), 12, Color("#e8dca1"), HORIZONTAL_ALIGNMENT_CENTER, "BankFeedback")
 	add_child(_feedback)
 	_refresh_action_buttons()
 
@@ -522,7 +554,7 @@ func _canonical_edition(value: Variant) -> String:
 	return ""
 
 
-func _select_action(action: String) -> bool:
+func _select_action(action: String, silent: bool = false) -> bool:
 	if _amount_pad != null:
 		return false
 	var canonical := _canonical_action(action)
@@ -534,6 +566,8 @@ func _select_action(action: String) -> bool:
 		return false
 	_selected_action = canonical
 	_amount_text = ""
+	if not silent:
+		_status_text = "%s：選擇金額後按 ENTER" % _action_label(canonical)
 	if _mode == "loan":
 		_open_amount_pad(canonical)
 	else:
@@ -579,19 +613,19 @@ func _on_pad_confirmed(amount: int) -> void:
 	var submitted_action := _selected_action
 	_close_amount_pad()
 	_selected_action = ""
+	_settled_pending = _settled_message(submitted_action, amount)
 	_refresh_action_buttons()
 	action_requested.emit(submitted_action, amount)
-	if _feedback != null:
-		_feedback.text = "已送出 %s：%d" % [_action_label(submitted_action), amount]
+	_apply_status()
 
 
 func _on_pad_cancelled() -> void:
 	_close_amount_pad()
 	_selected_action = ""
 	_amount_text = ""
-	if _feedback != null:
-		_feedback.text = "請選擇銀行操作"
+	_status_text = ""
 	_refresh_action_buttons()
+	_apply_status()
 	grab_focus()
 
 
@@ -611,8 +645,10 @@ func _confirm_current_amount() -> bool:
 	if not bool(result.get("ok", false)):
 		_show_feedback(str(result.get("reason", "金額無效")))
 		return false
-	action_requested.emit(_selected_action, int(result.get("amount", 0)))
-	_show_feedback("已送出 %s：%d" % [_action_label(_selected_action), int(result.get("amount", 0))])
+	var amount := int(result.get("amount", 0))
+	_settled_pending = _settled_message(_selected_action, amount)
+	action_requested.emit(_selected_action, amount)
+	_apply_status()
 	return true
 
 
@@ -782,18 +818,20 @@ func _refresh_action_buttons() -> void:
 				_set_button_transparent(button as Button)
 				_refresh_source_button(button)
 			else:
-				(button as Button).add_theme_stylebox_override("normal", _style(Color("#3a5d57"), Color("#c5c889"), 1))
+				(button as Button).add_theme_stylebox_override("normal", _button_style(Color("#3a5d57"), Color("#c5c889"), 1))
 				if action == _selected_action:
-					(button as Button).add_theme_stylebox_override("normal", _style(Color("#695f32"), Color("#fff4bc"), 2))
+					(button as Button).add_theme_stylebox_override("normal", _button_style(Color("#695f32"), Color("#fff4bc"), 2))
 
 
 func _on_amount_bar_changed(value: float) -> void:
 	var amount := clampi(roundi(value), 0, _current_limit())
 	_amount_text = str(amount) if amount > 0 else ""
+	_clear_settled_status()
 	_refresh_amount_display()
 
 
 func _append_digit(digit: String) -> void:
+	_clear_settled_status()
 	_amount_text = AmountPadScript.append_source_digit(_amount_text, digit, _current_limit())
 	if _amount_bar != null:
 		var parsed: Dictionary = AmountPadScript.parse_amount(_amount_text, _current_limit())
@@ -802,6 +840,7 @@ func _append_digit(digit: String) -> void:
 
 
 func _fill_maximum() -> void:
+	_clear_settled_status()
 	var maximum := _current_limit()
 	_amount_text = str(maximum) if maximum > 0 else ""
 	if _amount_bar != null:
@@ -810,6 +849,7 @@ func _fill_maximum() -> void:
 
 
 func _clear_amount() -> void:
+	_clear_settled_status()
 	_amount_text = ""
 	if _amount_bar != null:
 		_amount_bar.set_value_no_signal(0.0)
@@ -817,6 +857,7 @@ func _clear_amount() -> void:
 
 
 func _backspace_amount() -> void:
+	_clear_settled_status()
 	if not _amount_text.is_empty():
 		_amount_text = _amount_text.left(_amount_text.length() - 1)
 	if _amount_bar != null:
@@ -839,9 +880,38 @@ func _refresh_amount_display() -> void:
 		enter_button.disabled = not can_enter
 	if _amount_bar != null:
 		_amount_bar.editable = can_enter
-	if _feedback != null and _selected_action.is_empty():
-		_feedback.text = "請先選擇提款或存款"
+	_apply_status()
 	_refresh_atm_source_art()
+
+
+## The status line follows the source flow: choose an operation, enter an
+## amount, then read back the settled amount for this encounter.
+func _status_message() -> String:
+	if not _status_text.is_empty():
+		return _status_text
+	if _selected_action.is_empty():
+		return "請先選擇提款或存款" if _mode == "atm" else "請選擇銀行操作"
+	return "%s：選擇金額後按 ENTER" % _action_label(_selected_action)
+
+
+func _apply_status() -> void:
+	if _feedback != null:
+		_feedback.text = _status_message()
+
+
+func _settled_message(action: String, amount: int) -> String:
+	if action == "withdraw":
+		return "已提款 $%d" % amount
+	if action == "deposit":
+		return "已存款 $%d" % amount
+	return "已送出 %s：%d" % [_action_label(action), amount]
+
+
+## Typing a new amount starts a new entry, so a settled amount stops being the
+## current status.
+func _clear_settled_status() -> void:
+	if _status_text.begins_with("已"):
+		_status_text = ""
 
 
 func _show_feedback(message: String) -> void:
@@ -880,19 +950,30 @@ func _make_source_button(text_value: String, node_name: String, button_rect: Rec
 	button.text = "" if _has_source_visual else text_value
 	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.position = button_rect.position
-	button.size = button_rect.size
 	button.custom_minimum_size = button_rect.size
 	button.focus_mode = Control.FOCUS_ALL
 	button.add_theme_font_size_override("font_size", 12)
 	button.add_theme_color_override("font_color", Color("#f4e7ae"))
-	button.add_theme_stylebox_override("normal", _style(Color("#3a5d57"), Color("#c5c889"), 1))
-	button.add_theme_stylebox_override("hover", _style(Color("#557b6c"), Color("#fff0b2"), 1))
-	button.add_theme_stylebox_override("pressed", _style(Color("#263f3c"), Color("#fff4c8"), 2))
-	button.add_theme_stylebox_override("disabled", _style(Color("#2a3736"), Color("#657469"), 1))
+	button.add_theme_stylebox_override("normal", _button_style(Color("#3a5d57"), Color("#c5c889"), 1))
+	button.add_theme_stylebox_override("hover", _button_style(Color("#557b6c"), Color("#fff0b2"), 1))
+	button.add_theme_stylebox_override("pressed", _button_style(Color("#263f3c"), Color("#fff4c8"), 2))
+	button.add_theme_stylebox_override("disabled", _button_style(Color("#2a3736"), Color("#657469"), 1))
+	button.set_meta("source_rect", button_rect)
+	button.size = button_rect.size
 	if _has_source_visual:
 		_set_button_transparent(button)
 		_bind_source_button(button)
 	return button
+
+
+## A Button outside the tree sizes itself from the process default theme, which
+## pads the source's 17px keypad rows into 31px slabs that cover each other.
+## Re-apply the source rectangles once the real theme is in effect.
+func _apply_button_rects() -> void:
+	for child in get_children():
+		if child is Button and child.has_meta("source_rect"):
+			var rect: Rect2 = child.get_meta("source_rect")
+			(child as Button).size = rect.size
 
 
 func _make_source_hit_target(node_name: String, target_rect: Rect2) -> Button:
@@ -943,6 +1024,15 @@ func _style(background: Color, border: Color, width: int) -> StyleBoxFlat:
 	style.border_color = border
 	style.set_border_width_all(width)
 	style.set_corner_radius_all(1)
+	return style
+
+
+## Keypad and action buttons keep the source's 17-25px rectangles.  A themed
+## button pads its text by default, which would grow every hit area past its
+## neighbour and stack the keypad rows; the source surface has no such margin.
+func _button_style(background: Color, border: Color, width: int) -> StyleBoxFlat:
+	var style := _style(background, border, width)
+	style.set_content_margin_all(0)
 	return style
 
 

@@ -73,6 +73,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_r
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_main_ui.gd
 # Native render gates need an actual display and the private source scene.
 if [[ "${RICHMAN4_MINIGAME_NATIVE_CHECKS:-0}" == "1" ]]; then
   run_checked "$GODOT_BIN" --path . --script tests/source_minigame_bomb_mapping_native.gd

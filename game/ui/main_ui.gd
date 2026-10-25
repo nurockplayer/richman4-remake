@@ -2686,6 +2686,8 @@ func _update_all() -> void:
 	var board: Array = state.get("board", [])
 	if board_view != null and board_view.has_method("set_game_data"):
 		board_view.call("set_game_data", board, players, current_index, _active_map_definition, _as_array(state.get("route_options", [])), state.get("roadblocks", {}), (_as_array(state.get("god_objects", [])) if _has_original_gods() else []), (state.get("ground_hazards", {}) if _has_original_hazards() else {}))
+	# Release a returned minigame before the gates below read its modal state.
+	_sync_source_minigame()
 	_update_header(phase, current_index)
 	_update_players(players, current_index)
 	_update_property_card(_current_tile())

@@ -4,6 +4,7 @@ const GameState = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const Maps = preload("res://game/content/original_maps.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 var checks := 0
 var failures := 0
@@ -126,7 +127,7 @@ func _run() -> void:
 	var valid_game := GameState.new_game(61200, 2)
 	var valid_snapshot: Dictionary = valid_game.to_dict()
 	_expect(GameState.validate_save(valid_snapshot).get("ok", false), "active presentation load fixture is a valid public save")
-	var load_path := "user://issue110-active-presentation.json"
+	var load_path := UserPaths.resolve("user://issue110-active-presentation.json")
 	_write_snapshot(load_path, valid_snapshot)
 	_test_movement_load_guard(ui, load_path)
 	_test_news_and_fate_load_guards(ui, load_path)

@@ -7,7 +7,7 @@ extends Control
 ## lane.  Once present, GameState is the authority for every displayed value.
 
 const OriginalGods = preload("res://game/content/original_gods.gd")
-const SAVE_PATH := "user://richman4_save.json"
+const UserPaths = preload("res://game/platform/user_paths.gd")
 const OriginalMaps = preload("res://game/content/original_maps.gd")
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const InventoryCatalogue = preload("res://game/content/original_inventory.gd")
@@ -98,12 +98,13 @@ var source_hotkeys_panel: Control
 var system_settings: RefCounted
 var system_hotkeys: RefCounted
 ## Explicit so tests and previews never touch the owner's real settings file.
-var settings_path := SystemSettings.DEFAULT_PATH
-var hotkeys_path := SystemHotkeys.DEFAULT_PATH
+## The defaults honour RICHMAN4_USER_ROOT for headless test runs.
+var settings_path := SystemSettings.default_path()
+var hotkeys_path := SystemHotkeys.default_path()
 ## Committed 28-slot bindings consumed by the ordinary key dispatch.
 var source_hotkeys_bindings: Array = []
-var source_save_directory := "user://richman4-save-slots"
-var source_legacy_save_path := SAVE_PATH
+var source_save_directory := UserPaths.path("richman4-save-slots")
+var source_legacy_save_path := UserPaths.path("richman4_save.json")
 var _source_autosave := SourceAutosave.new()
 var _autosave_failure_dialog: ConfirmationDialog
 ## Runtime consumer for the source options values (Issue #148).
@@ -429,6 +430,7 @@ func _build_interface() -> void:
 	add_child(background)
 
 	var backdrop_glow := ColorRect.new()
+	backdrop_glow.name = "LegacyBackdropGlow"
 	backdrop_glow.color = Color("#11283a")
 	backdrop_glow.position = Vector2(0.0, 0.0)
 	backdrop_glow.size = Vector2(520.0, 180.0)
@@ -510,6 +512,11 @@ func _build_source_shell() -> void:
 	_build_source_trustee_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
+	# The legacy backdrop glow sits outside legacy_interface_root and would show
+	# as a stray lighter rectangle at the top-left of the source title/setup.
+	var legacy_glow := find_child("LegacyBackdropGlow", false, false) as CanvasItem
+	if legacy_glow != null:
+		legacy_glow.hide()
 
 func _build_source_help_controller() -> void:
 	if source_shell == null:
@@ -2844,7 +2851,7 @@ func _save_game() -> void:
 		_append_local_log("儲存失敗：快照驗證未通過，原有存檔保持不變。")
 		_refresh_log_only()
 		return
-	var temporary_path := SAVE_PATH + ".tmp"
+	var temporary_path := source_legacy_save_path + ".tmp"
 	var file := FileAccess.open(temporary_path, FileAccess.WRITE)
 	if file == null:
 		_append_local_log("儲存失敗：無法建立暫存檔。")
@@ -2862,7 +2869,7 @@ func _save_game() -> void:
 		_append_local_log("儲存失敗：暫存檔驗證未通過，原有存檔保持不變。")
 		_refresh_log_only()
 		return
-	if DirAccess.rename_absolute(temporary_path, SAVE_PATH) != OK:
+	if DirAccess.rename_absolute(temporary_path, source_legacy_save_path) != OK:
 		DirAccess.remove_absolute(temporary_path)
 		_append_local_log("儲存失敗：無法安全替換存檔，原有存檔保持不變。")
 		_refresh_log_only()
@@ -2871,7 +2878,7 @@ func _save_game() -> void:
 	_refresh_log_only()
 
 func _load_game() -> void:
-	_load_game_from_path(SAVE_PATH)
+	_load_game_from_path(source_legacy_save_path)
 
 func _source_save_operation_allowed() -> bool:
 	# LOAD can reconstruct a game from a validated snapshot, so this guard must

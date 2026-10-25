@@ -1,6 +1,7 @@
 extends SceneTree
 
 const OriginalAudio = preload("res://game/platform/original_audio.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 class AudioFixture extends OriginalAudio:
 	var settings_path_override := ""
@@ -23,7 +24,7 @@ class AudioFixture extends OriginalAudio:
 
 
 var failures := 0
-var temporary_root := "user://audio-bootstrap-regression"
+var temporary_root := UserPaths.resolve("user://audio-bootstrap-regression")
 
 
 func _initialize() -> void:

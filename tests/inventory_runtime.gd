@@ -4,6 +4,7 @@ const GameState = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 const Maps = preload("res://game/content/original_maps.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 var _checks: int = 0
 var _failures: int = 0
@@ -91,7 +92,7 @@ func _test_inventory_setup_and_round_trip() -> void:
 	_expect(restored != null, "inventory JSON round trips")
 	if restored != null:
 		_expect_equal(restored.to_json(), game.to_json(), "inventory JSON round trip is deterministic")
-	var path := "user://inventory-runtime-round-trip.json"
+	var path := UserPaths.resolve("user://inventory-runtime-round-trip.json")
 	_expect(game.save_to_path(path), "inventory save writes to disk")
 	var disk_restored: Object = GameState.load_from_path(path)
 	_expect(disk_restored != null, "inventory save reloads from disk")

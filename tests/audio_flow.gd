@@ -1,5 +1,6 @@
 extends SceneTree
 const OriginalAudio = preload("res://game/platform/original_audio.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 class AudioFixture extends OriginalAudio:
 	var selected_path := ""
 	func _save_settings() -> void:
@@ -14,7 +15,7 @@ func run() -> void:
 	root.add_child(audio)
 	audio.enabled = false
 	audio.player.stream = AudioStreamGenerator.new()
-	var source := "user://audio-library-regression"
+	var source := UserPaths.resolve("user://audio-library-regression")
 	DirAccess.make_dir_recursive_absolute(source.path_join("Media/Music"))
 	var track := source.path_join("Media/Music/synthetic.ogg")
 	var file := FileAccess.open(track, FileAccess.WRITE)

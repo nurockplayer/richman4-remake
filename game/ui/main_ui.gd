@@ -268,6 +268,9 @@ var _inventory_close_callback := Callable()
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
+# Keyboard focus over the source route tiles: -1 until an arrow or number key
+# selects one; ENTER then confirms it.
+var _route_keyboard_index := -1
 var _source_setup_return_to_game := false
 var source_trustee_controller: Control
 var _trustee_owner: Object
@@ -307,11 +310,63 @@ func _process(_delta: float) -> void:
 ## through the same command resolver, so tab and the other slots can never
 ## disagree about bindings, modifiers or gates.
 func _input(event: InputEvent) -> void:
+	# Route choices are reachable by keyboard: arrows or 1-9 select a destination
+	# and ENTER confirms it.  This cannot shadow ENTER→GO, because the GO control
+	# is hidden while a route decision owns the turn.
+	if _route_keyboard_active() and _handle_route_key(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _source_hotkey_command(event) != "view":
 		return
 	if _source_view_operation_allowed():
 		_on_source_view_requested()
 		get_viewport().set_input_as_handled()
+
+
+func _route_keyboard_active() -> bool:
+	if _legacy_save_modal_open() or _source_modal_open() or _presentation_busy:
+		return false
+	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
+		return false
+	if str(state.get("phase", "")) != "await_route" or source_shell == null:
+		return false
+	var routes: Variant = source_shell.get("route_buttons")
+	if not (routes is Control) or not (routes as Control).visible:
+		return false
+	return _is_human_turn() and not _as_array(state.get("route_options", [])).is_empty()
+
+
+func _handle_route_key(event: InputEvent) -> bool:
+	if not (event is InputEventKey):
+		return false
+	var key := event as InputEventKey
+	if not key.pressed or key.echo or key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
+		return false
+	var options := _as_array(state.get("route_options", []))
+	var count := options.size()
+	if count == 0:
+		return false
+	match key.keycode:
+		KEY_LEFT, KEY_UP:
+			_route_keyboard_index = (count - 1) if _route_keyboard_index <= 0 else _route_keyboard_index - 1
+		KEY_RIGHT, KEY_DOWN:
+			_route_keyboard_index = 0 if _route_keyboard_index < 0 or _route_keyboard_index >= count - 1 else _route_keyboard_index + 1
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
+			_route_keyboard_index = int(key.keycode) - int(KEY_1)
+			if _route_keyboard_index >= count:
+				_route_keyboard_index = -1
+				return false
+		KEY_ENTER, KEY_KP_ENTER:
+			_route_keyboard_index = clampi(_route_keyboard_index, 0, count - 1)
+			var next_index := int(options[_route_keyboard_index])
+			_route_keyboard_index = -1
+			_on_route_selected(next_index)
+			return true
+		_:
+			return false
+	if source_shell != null and source_shell.has_method("focus_route_option"):
+		source_shell.call("focus_route_option", _route_keyboard_index)
+	return true
 
 
 ## Shared acceptance rules for ordinary source keys: a single key press (not
@@ -3480,7 +3535,7 @@ func _is_human_turn() -> bool:
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	_source_autosave.sync_owner(game_state)
 	if _source_autosave.pending():
-		return {"ok": false, "message": "請先完成每日自動存檔。"}
+		return _reject("請先完成每日自動存檔。")
 	# A pending bank visit outranks a queued report: the report is withheld
 	# until the bank closes, so the bank must be able to finish even while the
 	# report queue is non-empty.
@@ -3488,37 +3543,37 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
 	var bank_allowed := bank_open and (method in ["resume_bank_visit", "complete_bank_visit"] or bank_action)
 	if bank_open and not bank_allowed:
-		return {"ok": false, "message": "請先完成銀行操作。"}
+		return _reject("請先完成銀行操作。")
 	if _source_trustee_modal_open():
-		return {"ok": false, "message": "請先完成託管設定。"}
+		return _reject("請先完成託管設定。")
 	if _source_monthly_modal_open() and not bank_allowed:
-		return {"ok": false, "message": "請先看完本期報表。"}
+		return _reject("請先看完本期報表。")
 	if _source_inventory_modal_open() and not _inventory_applying:
-		return {"ok": false, "message": "請先完成卡片／道具操作。"}
+		return _reject("請先完成卡片／道具操作。")
 	if _source_help_modal_open():
-		return {"ok": false, "message": "請先關閉遊戲說明。"}
+		return _reject("請先關閉遊戲說明。")
 	if _source_minigame_modal_open() and method != "finish_minigame":
-		return {"ok": false, "message": "請先完成小遊戲。"}
+		return _reject("請先完成小遊戲。")
 	if _source_lottery_modal_open() and method not in ["purchase_lottery", "leave_lottery"]:
-		return {"ok": false, "message": "請先完成彩券事件。"}
+		return _reject("請先完成彩券事件。")
 	if _legacy_save_modal_open():
-		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
+		return _reject("請先完成舊版存檔選擇。")
 	if source_save_menu != null and source_save_menu.visible:
-		return {"ok": false, "message": "請先完成存檔操作。"}
+		return _reject("請先完成存檔操作。")
 	if _presentation_busy:
-		return {"ok": false, "message": "角色移動中。"}
+		return _reject("角色移動中。")
 	var is_sale_response := _source_sale_modal_open() and method in ["sale_create_offer", "sale_cancel_offer", "sale_accept_offer", "close_sale"]
 	if _source_sale_modal_open() and not is_sale_response:
-		return {"ok": false, "message": "請先完成販賣操作。"}
+		return _reject("請先完成販賣操作。")
 	var is_shop_response := _source_shop_modal_open() and (method in ["leave_shop", "acknowledge_shop_gift"] or method == "choose_action" and not args.is_empty() and str(args[0]) in ["buy_item", "sell_item"])
 	if _source_shop_modal_open() and not is_shop_response:
-		return {"ok": false, "message": "請先完成商店操作。"}
+		return _reject("請先完成商店操作。")
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
 	var is_finance_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_finance" and FinancialPresentation.human_pending(state)
 	var is_auction_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_auction" and _human_auction_response_pending()
 	var is_lottery_response := _source_lottery_modal_open() and method in ["purchase_lottery", "leave_lottery"]
 	if method not in ["run_ai_turn", "run_sleep_turn", "finish_minigame"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response and not is_shop_response and not is_lottery_response:
-		return {"ok": false, "message": "目前不是你的回合。"}
+		return _reject("目前不是你的回合。")
 	if game_state != null and game_state.has_method(method):
 		if game_state.has_method("configure_minigames"):
 			game_state.configure_minigames(_source_minigame_animation, _source_minigame_input_data())
@@ -3536,7 +3591,14 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 			result["_presentation_owner"] = game_state
 			return result
 		return {}
-	return {"ok": false, "message": "模擬核心未載入；目前無法執行此操作。"}
+	return _reject("模擬核心未載入；目前無法執行此操作。")
+
+## Every pre-simulation rejection answers the player in the board status toast,
+## so release builds (which have no hint row) are never silently inert.
+func _reject(message: String) -> Dictionary:
+	if source_shell != null and source_shell.has_method("show_status_toast"):
+		source_shell.call("show_status_toast", message)
+	return {"ok": false, "message": message}
 
 func _handle_result(result: Dictionary) -> void:
 	if _legacy_save_modal_open() or _presentation_busy:
@@ -3697,6 +3759,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_dev_mode", _is_development_path())
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
+	_sync_waiting_status()
 	if source_shell.has_method("set_toolbar_enabled"):
 		_update_source_help_gate()
 		source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
@@ -3940,11 +4003,13 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var can_buy_company := _has_action_option(action_options, "buy_company")
 	var can_buy_property := _has_action_option(action_options, "buy")
 	buy_button.text = "購買企業股份" if can_buy_company else "購買地產"
-	buy_button.disabled = not (human_turn and phase == "await_action" and (can_buy_property or can_buy_company))
+	# A pending response card owns the turn: the YES tiles stay visible but
+	# reject every click until the reaction is answered.
+	buy_button.disabled = not (human_turn and phase == "await_action" and (can_buy_property or can_buy_company)) or reaction_pending
 	var can_build := _has_action_option(action_options, "build_facility")
 	var can_company_upgrade := _has_action_option(action_options, "company_upgrade")
 	upgrade_button.text = "企業建設" if can_company_upgrade else "建造設施" if can_build else "升級"
-	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build or can_company_upgrade))
+	upgrade_button.disabled = not (human_turn and phase == "await_action" and (_has_action_option(action_options, "upgrade") or can_build or can_company_upgrade)) or reaction_pending
 	research_button.visible = _has_original_research() and _has_action_option(action_options, "choose_research")
 	research_button.disabled = not (human_turn and phase == "await_action" and research_button.visible)
 	if research_button.disabled:
@@ -4006,6 +4071,44 @@ func _update_actions(phase: String, current_index: int) -> void:
 	else:
 		action_hint_label.text = "請處理目前格位"
 
+## Release builds keep no permanent hint row, so a turn that is merely waiting
+## (AI thinking, a rest turn's lone 結束, a pending response card, the daily
+## checkpoint) explains itself on the board status line instead.
+func _waiting_status_text() -> String:
+	if game_state == null or state.is_empty():
+		return ""
+	var phase := str(state.get("phase", ""))
+	if phase in ["game_over", "unavailable"] or _presentation_busy:
+		return ""
+	if _source_autosave.pending():
+		return "每日自動存檔中…"
+	var auction_pending := _pending_auction_for_ui()
+	if not auction_pending.is_empty():
+		var bidder_id := int(auction_pending.get("bidder_id", -1))
+		return "請%s回應拍賣" % _player_name(bidder_id) if _human_auction_response_pending() else "拍賣進行中"
+	if state.has("pending_finance"):
+		return "請回應付款選擇"
+	if not _pending_trap_for_ui().is_empty():
+		return "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
+	var player := _current_player()
+	if SleepPresentation.automatic(player):
+		return SleepPresentation.hint(player)
+	if _source_inventory_modal_open():
+		return ""
+	if not _is_human_turn():
+		return "%s 思考中…" % str(player.get("name", "AI"))
+	var action_options: Array = _as_array(state.get("action_options", []))
+	var has_landing_action := action_options.has("buy") or action_options.has("buy_company") or action_options.has("upgrade") or action_options.has("build_facility") or action_options.has("company_upgrade") or action_options.has("choose_research")
+	if phase == "await_action" and action_options.has("end_turn") and not has_landing_action and _as_array(state.get("last_roll", [])).is_empty():
+		return "本回合休息，請結束回合"
+	return ""
+
+
+func _sync_waiting_status() -> void:
+	if source_shell != null and source_shell.has_method("set_waiting_status"):
+		source_shell.call("set_waiting_status", _waiting_status_text())
+
+
 func _update_route_choices(phase: String, current_index: int) -> void:
 	if route_options_box == null:
 		return
@@ -4016,8 +4119,11 @@ func _update_route_choices(phase: String, current_index: int) -> void:
 	var player: Dictionary = _current_player()
 	var human_turn := bool(player.get("is_human", true)) and not bool(player.get("bankrupt", false)) and phase != "game_over"
 	if _presentation_busy or phase != "await_route" or options.is_empty():
+		_route_keyboard_index = -1
 		route_status_label.text = ""
 		return
+	if _route_keyboard_index >= options.size():
+		_route_keyboard_index = -1
 	var remaining := int(state.get("remaining_steps", options.size()))
 	route_status_label.text = "選擇下一格 · 剩餘步數 %d" % remaining
 	for option in options:
@@ -5916,6 +6022,7 @@ func _flush_source_autosave() -> void:
 	if bool(result.get("ok", false)):
 		_append_local_log("已完成每日自動存檔（AUTO）。")
 		_refresh_log_only()
+		_sync_waiting_status()
 	elif _source_autosave.failed():
 		_append_local_log("每日自動存檔失敗：" + str(result.get("error", "unknown")))
 		if is_instance_valid(_autosave_failure_dialog):

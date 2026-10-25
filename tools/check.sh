@@ -54,10 +54,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_publi
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_ui.gd
-# These gates assert the owner's canonical installed catalog identity, so a
-# derived catalog (tools/package_rc.sh) cannot satisfy them.  The RC lane skips
-# them explicitly and validates its own catalog with validate_catalog.gd.
-if [[ -n "${RICHMAN4_MAP_CATALOG:-}" && "${RICHMAN4_SKIP_INSTALLED_CATALOG_CHECKS:-0}" != "1" ]]; then
+if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_ui.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_lifecycle.gd
@@ -70,7 +67,7 @@ if [[ -n "${RICHMAN4_MAP_CATALOG:-}" && "${RICHMAN4_SKIP_INSTALLED_CATALOG_CHECK
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_admission.gd
 else
-  echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG (installed identity)"
+  echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
   echo "SKIP: source bank catalog ingress requires RICHMAN4_MAP_CATALOG"
   echo "SKIP: source lottery catalog admission requires RICHMAN4_MAP_CATALOG"
 fi

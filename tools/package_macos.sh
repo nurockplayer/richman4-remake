@@ -6,7 +6,11 @@ if [[ "$("$GODOT_BIN" --version)" != 4.7.2.stable.* ]]; then
   echo 'Packaging requires Godot 4.7.2 stable.' >&2
   exit 1
 fi
-bash tools/check.sh
+# Run the test gate without the packaging environment: the installed-catalog
+# gates require the owner's canonical catalog identity, and tests that assert
+# an explicit missing-atlas fallback must not see the manifest being packaged.
+env -u RICHMAN4_MAP_CATALOG -u RICHMAN4_SCENE_MANIFEST -u RICHMAN4_SCENE_BASE_MANIFEST \
+    -u RICHMAN4_HELP_MANIFEST -u RICHMAN4_AUDIO_ASSETS bash tools/check.sh
 catalog_path="${RICHMAN4_MAP_CATALOG:-}"
 if [[ -n "$catalog_path" ]]; then
   "$GODOT_BIN" --headless --path . --script tools/validate_catalog.gd -- "$catalog_path" --original-facilities

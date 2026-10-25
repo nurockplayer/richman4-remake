@@ -71,7 +71,6 @@ RICHMAN4_MAP_CATALOG="$catalog" \
 RICHMAN4_SCENE_MANIFEST="$scene_manifest" \
 RICHMAN4_HELP_MANIFEST="$help_manifest" \
 RICHMAN4_AUDIO_ASSETS="$asset_root" \
-RICHMAN4_SKIP_INSTALLED_CATALOG_CHECKS=1 \
 GODOT_BIN="$godot_bin" \
   bash tools/package_macos.sh
 

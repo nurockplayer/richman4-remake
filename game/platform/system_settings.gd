@@ -3,10 +3,16 @@ extends RefCounted
 ## Source system preferences only. The host owns applying them to live systems.
 ## Paths are explicit so tests and previews never access the owner's settings.
 
+const UserPaths = preload("res://game/platform/user_paths.gd")
+
 const SCHEMA := "richman4.system-settings/v1"
-const DEFAULT_PATH := "user://system-options.json"
 const MAX_BYTES := 4096
 const LIMITS := {"speed": 2, "music_level": 4, "sound_level": 4, "view": 2}
+
+## The runtime default honours RICHMAN4_USER_ROOT so tests never touch the
+## owner's settings file.
+static func default_path() -> String:
+	return UserPaths.path("system-options.json")
 
 func defaults() -> Dictionary:
 	return {"speed": 1, "animation": true, "music_level": 4, "sound_level": 4, "autosave": true, "view": 1}

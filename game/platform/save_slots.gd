@@ -11,9 +11,8 @@ extends RefCounted
 ## after their own presentation/legacy guards.
 
 const GameState = preload("res://game/core/game_state.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
-const DEFAULT_SLOT_DIRECTORY := "user://richman4-save-slots"
-const DEFAULT_SAVE_PATH := "user://richman4_save.json"
 const FIRST_SLOT := 0
 const LAST_SLOT := 5
 const FIRST_WRITABLE_SLOT := 1
@@ -109,15 +108,17 @@ var _io: Object
 var _temporary_sequence := 0
 
 
+## Empty paths resolve through RICHMAN4_USER_ROOT, so a test that passes
+## nothing never reaches the owner's save directory.
 func _init(
-		slot_directory: String = DEFAULT_SLOT_DIRECTORY,
-		default_save_path: String = DEFAULT_SAVE_PATH,
+		slot_directory: String = "",
+		default_save_path: String = "",
 		io_adapter: Object = null,
 ) -> void:
 	if slot_directory.is_empty():
-		slot_directory = DEFAULT_SLOT_DIRECTORY
+		slot_directory = UserPaths.path("richman4-save-slots")
 	if default_save_path.is_empty():
-		default_save_path = DEFAULT_SAVE_PATH
+		default_save_path = UserPaths.path("richman4_save.json")
 	_slot_directory = _canonical_path(slot_directory)
 	_default_save_path = _canonical_path(default_save_path)
 	_automatic_path = _slot_directory.path_join(AUTOMATIC_FILE_NAME).simplify_path()
@@ -747,8 +748,9 @@ func _fingerprint_bytes(bytes: PackedByteArray, source_identity: String = "") ->
 func _canonical_path(path: String) -> String:
 	if path.is_empty():
 		return ""
-	var normalized := path.simplify_path()
-	if normalized.begins_with("user://") or normalized.begins_with("res://"):
+	var normalized := UserPaths.resolve(path.simplify_path())
+	# Keep the canonical form absolute whichever write root is active.
+	if normalized.begins_with("res://") or normalized.begins_with("user://"):
 		normalized = ProjectSettings.globalize_path(normalized)
 	return normalized.simplify_path()
 

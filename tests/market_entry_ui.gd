@@ -4,6 +4,8 @@ const GameState = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const Maps = preload("res://game/content/original_maps.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
+const StockPanel = preload("res://game/ui/stock_panel.gd")
 
 var checks := 0
 var failures := 0
@@ -114,6 +116,10 @@ func _test_legacy_continue_and_labels(ui: Control) -> void:
 	_expect(ui._stock_symbols_for_ui() == ["tech", "transport", "energy"], "legacy market UI retains its three source symbols")
 	_expect(str(ui.market_mode_label.text).contains("舊版三股市"), "legacy market mode is visible in the header")
 	_expect(current.to_json() == before, "pre-load game object is unchanged until explicit continuation")
+	ui.source_shell.stocks_requested.emit()
+	_expect(ui.stocks_popup.visible and not ui.source_stock_panel.visible, "confirmed legacy save keeps the legacy three-stock popup")
+	_expect(ui._stock_symbols_for_ui() == ["tech", "transport", "energy"], "legacy popup exposes exactly its three symbols")
+	ui.stocks_popup.hide()
 
 
 func _test_modal_guards(ui: Control) -> void:
@@ -215,7 +221,7 @@ func _read_file_text(path: String) -> String:
 func _test_disk_cancellation(ui: Control) -> void:
 	# Use an isolated user:// fixture; the owner save path is left to the native
 	# wrapper and is never opened by this headless acceptance test.
-	var path := "user://issue100-legacy-cancel.json"
+	var path := UserPaths.resolve("user://issue100-legacy-cancel.json")
 	var had_original := FileAccess.file_exists(path)
 	var original_text := _read_file_text(path) if had_original else ""
 	var disk_payload := _legacy_snapshot(1)
@@ -238,7 +244,7 @@ func _test_disk_cancellation(ui: Control) -> void:
 
 func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	ui._set_development_path(false)
-	ui._load_map_catalog("user://issue100-catalog-missing.json")
+	ui._load_map_catalog(UserPaths.resolve("user://issue100-catalog-missing.json"))
 	_expect(not ui._map_catalog_ok and ui._map_catalog.is_empty(), "production path rejects a missing catalog without a demo map")
 	_expect(ui.new_game_confirm_button.disabled, "production path disables new game without original content")
 	var blocked_before: Dictionary = ui._read_snapshot().duplicate(true)
@@ -247,11 +253,39 @@ func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	_expect(str(ui.map_catalog_status_label.text).contains("無法開始正常對局"), "production block explains the missing content action")
 
 	ui._set_development_path(true)
-	ui._load_map_catalog("user://issue100-catalog-missing.json")
+	ui._load_map_catalog(UserPaths.resolve("user://issue100-catalog-missing.json"))
 	_expect(ui._map_catalog.size() == 1 and str(ui.map_catalog_status_label.text).contains("開發路徑"), "development fallback is explicitly labelled")
 	_expect(ui._new_game(61121, 2, ui._selected_map_definition), "development fallback remains usable for tests")
 
-	var path := "user://issue100-complete-catalog.json"
+	var incomplete_payload := _complete_catalog_payload()
+	var incomplete_map: Dictionary = incomplete_payload.maps[0] as Dictionary
+	incomplete_map["stock_rows"] = (incomplete_map["stock_rows"] as Array).slice(0, 11)
+	var incomplete_path := UserPaths.resolve("user://issue100-incomplete-catalog.json")
+	_write_json(incomplete_path, incomplete_payload)
+	ui._set_development_path(false)
+	ui._load_map_catalog(incomplete_path)
+	_expect(not ui._map_catalog_ok and ui._map_catalog.is_empty(), "production path rejects an incomplete catalog without a demo map")
+	_expect(ui.new_game_confirm_button.disabled, "production path disables new game for incomplete content")
+	_expect(str(ui.map_catalog_status_label.text).contains("無法開始正常對局") and str(ui.map_catalog_status_label.text).contains("十二列"), "incomplete catalog reports the actionable twelve-row requirement")
+	var incomplete_before: Dictionary = ui._read_snapshot().duplicate(true)
+	_expect(not ui._new_game(61123, 2, ui._selected_map_definition), "production path blocks new game for an incomplete catalog")
+	_expect(ui._read_snapshot() == incomplete_before, "incomplete catalog block preserves the current game")
+	DirAccess.remove_absolute(incomplete_path)
+
+	var partial_payload := _complete_catalog_payload()
+	var partial_map: Dictionary = partial_payload.maps[0] as Dictionary
+	for index in range((partial_map["stock_rows"] as Array).size()):
+		(partial_map["stock_rows"] as Array)[index]["company_id"] = 0
+	var partial_path := UserPaths.resolve("user://issue100-partial-catalog.json")
+	_write_json(partial_path, partial_payload)
+	ui._set_development_path(false)
+	ui._load_map_catalog(partial_path)
+	_expect(not ui._map_catalog_ok and ui._map_catalog.is_empty(), "production path rejects a catalog without company capability without a demo map")
+	_expect(str(ui.map_catalog_status_label.text).contains("無法開始正常對局") and str(ui.map_catalog_status_label.text).contains("十二股市"), "partial catalog reports the actionable twelve-stock requirement")
+	_expect(not ui._new_game(61124, 2, ui._selected_map_definition), "production path blocks new game for a partial catalog")
+	DirAccess.remove_absolute(partial_path)
+
+	var path := UserPaths.resolve("user://issue100-complete-catalog.json")
 	_write_json(path, _complete_catalog_payload())
 	ui._set_development_path(false)
 	ui._load_map_catalog(path)
@@ -260,6 +294,14 @@ func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	_expect(int(ui.state.get("version", 0)) == GameState.COMPANY_SAVE_VERSION, "normal complete catalog enables company market capability")
 	_expect(ui._stock_symbols_for_ui().size() == 12, "normal complete catalog exposes all twelve source stocks")
 	_expect(str(ui.market_mode_label.text).contains("原版十二股"), "normal complete catalog is visible as twelve-stock mode")
+	ui.source_shell.stocks_requested.emit()
+	_expect(ui.source_stock_panel != null and ui.source_stock_panel.visible, "ordinary launch opens the twelve-stock source panel")
+	_expect(not ui.stocks_popup.visible, "ordinary launch never falls back to the legacy three-stock popup")
+	var source_panel: Control = ui.source_stock_panel
+	_expect(source_panel.call("current_screen") == "overview", "ordinary launch opens the source overview table")
+	_expect(StockPanel.stock_symbols(source_panel.call("get_snapshot"), ui._active_map_definition).size() == 12, "source panel projects all twelve stocks")
+	_expect(source_panel.find_child("StockRow_s12", true, false) != null, "source panel renders the twelfth source row")
+	source_panel.call("close_panel")
 	DirAccess.remove_absolute(path)
 
 

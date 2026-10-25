@@ -1,6 +1,7 @@
 extends SceneTree
 const Visuals = preload("res://game/platform/original_visuals.gd")
 const Board = preload("res://game/ui/board_view.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 class TracedBoard extends "res://game/ui/board_view.gd":
 	var paint_order: Array = []
 	func _draw() -> void:
@@ -25,7 +26,7 @@ func expect(condition: bool, message: String) -> void:
 func _initialize() -> void:
 	call_deferred("run")
 func run() -> void:
-	var folder := "user://scene-fixture"
+	var folder := UserPaths.resolve("user://scene-fixture")
 	DirAccess.make_dir_recursive_absolute(folder.path_join("images"))
 	var picture := Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	picture.fill(Color.GREEN)

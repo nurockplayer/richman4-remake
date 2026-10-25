@@ -644,7 +644,10 @@ func sync_action_state(roll_text: String, roll_disabled: bool, buy_text: String,
 	upgrade_button.visible = phase == "await_action" and can_upgrade and not can_buy
 	end_turn_button.visible = phase == "await_action" and can_end
 	if roll_button.visible:
-		roll_button.text = "GO"
+		# The source GO control is the ordinary roll.  Rest, jail and sleep turns
+		# carry their own labels (服刑/休養/出獄擲骰/醒來) and the action hint
+		# quotes the button, so GO would contradict "按服刑推進回合".
+		roll_button.text = "GO" if roll_text == "擲骰" else roll_text
 	if buy_button.visible or upgrade_button.visible:
 		buy_button.text = "YES" if buy_button.visible else buy_text
 		upgrade_button.text = "YES" if upgrade_button.visible else upgrade_text

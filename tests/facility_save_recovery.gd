@@ -3,6 +3,7 @@ const Game = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 var checks := 0
 var failures := 0
 func _initialize() -> void:
@@ -17,7 +18,7 @@ func run() -> void:
 	root.add_child(ui)
 	await process_frame
 	ui.set_process(false)
-	ui._load_map_catalog("user://facility-recovery-missing-catalog.json")
+	ui._load_map_catalog(UserPaths.resolve("user://facility-recovery-missing-catalog.json"))
 	var options: Dictionary = ui._default_setup_options(4)
 	expect(ui._new_game(42, 4, ui._selected_map_definition, options), "asset-free fallback starts")
 	expect(int(ui.state.version) == 4, "asset-free fallback retains nongraph inventory save")

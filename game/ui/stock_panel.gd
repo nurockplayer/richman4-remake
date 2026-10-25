@@ -137,7 +137,12 @@ func set_snapshot(snapshot_value: Dictionary, map_definition_value: Dictionary =
 	_symbols = stock_symbols(snapshot, map_definition)
 	if not _symbols.has(_selected_symbol):
 		_selected_symbol = ""
-	if _pending_trade.is_empty():
+	if _market_closed():
+		# A freshly closed market dismisses any pending order from the previous
+		# snapshot instead of leaving a stale quantity pad over the blank rows.
+		_pending_trade = {}
+		_quantity_pad.visible = false
+	elif _pending_trade.is_empty():
 		_quantity_pad.visible = false
 	_refresh()
 
@@ -398,6 +403,13 @@ func _build_detail_shell() -> void:
 func _refresh() -> void:
 	if _background == null:
 		return
+	if _market_closed() and _screen_mode == "detail":
+		# A closed day shows only the blank overview table; the live quote detail
+		# screen stays unavailable until the market opens again.
+		_screen_mode = "overview"
+		_table_mode = "overview"
+		_pending_trade = {}
+		_quantity_pad.visible = false
 	_set_source_background(0 if _screen_mode in ["overview", "detail"] else 1)
 	_refresh_toolbar()
 	_clear_table()
@@ -459,10 +471,22 @@ func _clear_table() -> void:
 func _refresh_overview() -> void:
 	_add_headers(["股票名稱", "成交價", "漲跌", "交易量", "持有股數", "平均成本"], OVERVIEW_COLUMNS)
 	if _market_closed():
+		_add_closed_overview_rows()
 		return
 	for index in range(_symbols.size()):
 		var symbol := str(_symbols[index])
 		_add_overview_row(symbol, index)
+
+
+## A closed market keeps the source six-column table and its twelve rows on
+## screen, but they carry no live quote values.  The rows are not selectable and
+## `_trade_gate` refuses both trade actions while the market is closed.
+func _add_closed_overview_rows() -> void:
+	for index in range(_symbols.size()):
+		var row_control := _make_row_control(str(_symbols[index]), index, 0, false, false)
+		for column in range(OVERVIEW_COLUMNS.size()):
+			row_control.add_child(_cell_label("", _overview_x(column), OVERVIEW_COLUMNS[column], TEXT_MUTED))
+		_table_root.add_child(row_control)
 
 
 func _add_overview_row(symbol: String, index: int) -> void:
@@ -565,7 +589,7 @@ func _overview_x(column: int) -> float:
 	return x
 
 
-func _make_row_control(symbol: String, index: int, limit_state: int, tint_price_cell: bool) -> Control:
+func _make_row_control(symbol: String, index: int, limit_state: int, tint_price_cell: bool, interactive := true) -> Control:
 	var row_control := Control.new()
 	row_control.name = "StockRow_" + symbol
 	row_control.position = Vector2(0, ROW_Y + ROW_HEIGHT * index)
@@ -579,7 +603,7 @@ func _make_row_control(symbol: String, index: int, limit_state: int, tint_price_
 	background.visible = tint_price_cell and limit_state in [1, 3]
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row_control.add_child(background)
-	if _selected_symbol == symbol:
+	if interactive and _selected_symbol == symbol:
 		var highlight := ColorRect.new()
 		highlight.name = "StockSelectionHighlight"
 		highlight.position = Vector2(TABLE_LEFT, 1)
@@ -587,6 +611,8 @@ func _make_row_control(symbol: String, index: int, limit_state: int, tint_price_
 		highlight.color = Color("#f5e28a", 0.25)
 		highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row_control.add_child(highlight)
+	if not interactive:
+		return row_control
 	var hit := Button.new()
 	hit.name = "StockSelect_" + symbol
 	hit.position = Vector2(TABLE_LEFT, 0)

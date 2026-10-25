@@ -11,6 +11,12 @@ bash tools/package_macos.sh
 
 `install_templates.py` 下載官方匯出模板並核對固定 SHA-512，僅安裝 macOS 模板。Godot 可由 [官方 4.7.2 發行頁](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable) 取得。`GODOT_BIN` 可指定執行檔。
 
+`tools/check.sh` 會把 `RICHMAN4_USER_ROOT` 指向一個執行結束即刪除的暫存目錄，所有執行期寫入根（存檔檔位、自動存檔、舊版存檔、系統選項、熱鍵、`audio.cfg`）都落在其中，測試永遠不碰擁有者 `user://` 下的真實資料。手動跑單一測試時比照：
+
+```sh
+RICHMAN4_USER_ROOT="$(mktemp -d)" godot --headless --path . --script tests/save_slots.gd
+```
+
 macOS 打包輸出 `build/Richman4.zip` 與新的 `build/package.XXXXXX/*.app`，採本機 ad-hoc 簽章。打包腳本先執行驗證，再匯出並驗證簽章。這是私人本機版本，尚無 Developer ID 公證。
 
 這個 public code repo 不放未確認公開分發權的第三方原版資料，也不追蹤可重建的衍生快取。擁有者可先依 [assets.md](assets.md) 從 private Git/LFS source 取回原始資料，再在 `.local/` 產生匯入結果。沒有素材時仍應可執行，但測試棋盤不代表已還原原版地圖；差異見 [fidelity.md](fidelity.md)。

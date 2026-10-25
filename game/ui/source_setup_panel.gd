@@ -196,15 +196,25 @@ func _build_surface() -> void:
 	fallback.color = Color("#1e3651")
 	fallback.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(fallback)
+	# STRETCH_KEEP_ASPECT_COVERED enlarges the texture past the control to cover
+	# it; without a clipping parent the preview spills below the 640x480 frame.
+	# The wrapper owns the source rectangle and clips the overflow.
+	var preview_clip := Control.new()
+	preview_clip.name = "SourceMapPreviewClip"
+	preview_clip.position = SOURCE_MAP_RECT.position
+	preview_clip.size = SOURCE_MAP_RECT.size
+	preview_clip.clip_contents = true
+	preview_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(preview_clip)
 	_map_preview = TextureRect.new()
 	_map_preview.name = "SourceMapPreview"
-	_map_preview.position = SOURCE_MAP_RECT.position
+	_map_preview.position = Vector2.ZERO
 	_map_preview.size = SOURCE_MAP_RECT.size
 	_map_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_map_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_map_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_map_preview)
+	preview_clip.add_child(_map_preview)
 	for index in range(4):
 		var preview := _art("SourceCharacterVehiclePreview_%d" % index, Rect2())
 		add_child(preview)

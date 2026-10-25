@@ -27,6 +27,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
+const SourceSale = preload("res://game/core/source_sale_flow.gd")
 const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const SourceMinigameFlow = preload("res://game/core/source_minigame_flow.gd")
 const MonthlyStatements = preload("res://game/core/monthly_statements.gd")
@@ -445,6 +446,8 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 		_initialize_original_companies(definition)
 	if SourceShop.enabled(self):
 		SourceShop.initialize(state)
+	if SourceSale.enabled(self):
+		SourceSale.initialize(state)
 
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
@@ -1656,6 +1659,12 @@ func _settle_company_dividends() -> void:
 		_record_event("company_dividend", {"company_id":int(company.id),"company_name":str(company.display_name),"pool":int(settlement.pool),"distributed":int(settlement.distributed),"rounding_remainder":int(settlement.pool)-int(settlement.distributed)})
 	for player_id in payouts:
 		var player := _player(int(player_id))
+		# Charging an earlier holder can bankrupt it, and that bankruptcy can
+		# cascade through company ownership and chair financing into a holder
+		# that has not been paid yet. Its balances were zeroed and its deposit
+		# ledger already settled, so the precomputed payout must be skipped
+		# instead of credited to a dead account.
+		if not bool(player.get("alive", false)): continue
 		var payout := int(payouts[player_id])
 		var old_deposit := int(player.deposit)
 		var new_deposit := old_deposit + payout
@@ -2315,7 +2324,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_shop", "await_lottery", "await_minigame"]:
+	if phase in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -3471,13 +3480,14 @@ func apply_trustee_settings(rows: Array) -> bool:
 
 
 func request_trustee_recovery() -> bool:
+	if state.get("phase", "") in ["await_shop", "await_sale"]: return false
 	if state.get("phase", "") == "game_over":
 		return false
 	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
-	if state.get("phase", "") in ["await_shop", "await_lottery"]: return false
+	if state.get("phase", "") in ["await_shop", "await_sale", "await_lottery"]: return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -4857,7 +4867,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_lottery", "await_minigame"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5212,6 +5222,15 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		state["remaining_steps"] = 0
 		state["bank_access"] = false
 		state["bank_landing"] = false
+		# The construction service belongs to the actor who landed on their own
+		# company; a conceded actor never returns to choose its target.
+		# The construction service belongs to the actor who landed on their own
+		# company; a conceded actor never returns to choose its target. Only
+		# touch the key when the match tracks services so the saved shape of
+		# other games stays byte-identical.
+		if int(state.get("company_service_pending", 0)) > 0:
+			state["company_service_pending"] = 0
+	var pending_cleared: bool = _clear_pending_for_departed(debtor_id)
 	var auctions: Array = state.get("bankruptcy_auctions", [])
 	auctions.append(auction)
 	state["bankruptcy_auctions"] = auctions
@@ -5222,6 +5241,54 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# end_turn is advanced by that caller after its final bookkeeping instead.
 	if was_current_movement and not _settling_company_dividends and not _resolving_news and not _resolving_fate and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
+	elif pending_cleared and state.get("phase", "") != "game_over" and bool(_player(int(state.get("current_player", -1))).get("alive", false)):
+		# The acting player keeps the turn; rebuild the guard list that the
+		# departed player's pending record used to shape.
+		_set_action_options(int(state.get("current_player", -1)))
+
+
+## Pending card, dice and auction records that name a departing player can
+## never be answered once that player leaves the roster, and leaving them behind
+## blocks the next actor behind a response that can only fail as stale.
+func _clear_pending_for_departed(player_id: int) -> bool:
+	var cleared := false
+	var trap: Dictionary = _pending_trap()
+	if not trap.is_empty() and (int(trap.get("caster_id", -1)) == player_id or int(trap.get("target_id", -1)) == player_id):
+		state["pending_trap"] = {}
+		state.erase("pending_trap_card")
+		cleared = true
+	var finance: Dictionary = _pending_finance()
+	if not finance.is_empty():
+		for field in ["payer_id", "creditor_id", "caster_id"]:
+			if int(finance.get(field, -1)) == player_id:
+				state.erase("pending_finance")
+				cleared = true
+				break
+	var remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(remote) == TYPE_DICTIONARY and not (remote as Dictionary).is_empty():
+		if int((remote as Dictionary).get("player_id", -1)) == player_id:
+			state["pending_remote_dice"] = {}
+			cleared = true
+	return _clear_auction_for_departed(player_id) or cleared
+
+
+## An auction names its caster and recomputes its participants from the living
+## players, so a departed caster or bidder cannot stay in a valid record: the
+## lot keeps its current owner and the auction card stays in the caster's hand,
+## exactly as if the auction had never started.
+func _clear_auction_for_departed(player_id: int) -> bool:
+	var value: Variant = state.get("pending_auction", {})
+	if typeof(value) != TYPE_DICTIONARY:
+		return false
+	var pending: Dictionary = value
+	if pending.is_empty():
+		return false
+	var participants: Array = pending.get("participants", [])
+	var is_caster: bool = int(pending.get("caster_id", -1)) == player_id
+	if not is_caster and not participants.has(player_id):
+		return false
+	state.erase("pending_auction")
+	return true
 
 
 func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
@@ -5322,6 +5389,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	if SourceShop.enabled(self) and normalized in ["buy_item", "sell_item"]:
 		return SourceShop.trade(self, normalized, params)
 	if state.get("phase", "") == "await_shop": return _error("請先完成商店操作")
+	if state.get("phase", "") == "await_sale": return _error("請先完成販賣操作")
 
 	if normalized == "respond_auction":
 		return AuctionRules.respond(self, params)
@@ -6585,6 +6653,30 @@ func end_turn() -> Dictionary:
 	return _result(true, "回合結束")
 
 
+## A player concedes the match.  Surrender reuses the ordinary bankruptcy path
+## with no creditor, so the player leaves the active roster, cash and deposits
+## go to zero, and properties/stock follow the same release-to-bank rules as
+## any other bankruptcy.  The match continues unless one player remains; the
+## day wrap of the handover can still end it through the usual game-over check.
+func surrender(player_id: int = -1) -> Dictionary:
+	if state.get("phase", "") == "game_over":
+		return _error("遊戲已結束")
+	var target_id: int = int(state.get("current_player", -1)) if player_id < 0 else player_id
+	var player: Dictionary = _player(target_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("玩家不在對局中")
+	# Shop, minigame and SALE sessions own the turn until they close; conceding
+	# underneath them would leave a session naming a departed actor.
+	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale"]:
+		return _error("請先關閉目前視窗再投降")
+	_declare_bankruptcy(target_id, -1, 0, "surrender")
+	# Bankruptcy advances a moving current actor itself. An action-phase actor
+	# keeps the turn, so hand it over here exactly once.
+	if state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == target_id:
+		_advance_to_next_alive(target_id)
+	return _result(true, "已投降")
+
+
 func _advance_to_next_alive(previous_id: int) -> void:
 	_check_game_over()
 	state.erase("stationary_turn")
@@ -6636,6 +6728,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 				return
 			# Source expiry follows deadline, market and month-end settlement.
 			LandTenure.expire_today(self)
+			SourceSale.cleanup(self, true)
 		else:
 			var market: Dictionary = state.get("market", {})
 			var trends: Dictionary = market.get("trends", {})
@@ -6984,6 +7077,8 @@ var _trustee_bank_balanced := false
 
 
 func run_ai_turn() -> Dictionary:
+	if state.get("phase", "") == "await_sale":
+		return _result(false, "等待販賣操作", {"awaiting_response": true, "completed": false})
 	_trustee_ai_dispatch = true
 	_trustee_bank_balanced = false
 	var result := _run_ai_turn_dispatch()
@@ -7069,6 +7164,9 @@ func _run_ai_turn_dispatch() -> Dictionary:
 			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
 				continue
 			if _trap_pending():
+				continue
+			SourceSale.ai_turn(self)
+			if state.get("phase", "") != "await_roll" or int(state.get("current_player", -1)) != player_id:
 				continue
 			var roll_result: Dictionary = roll()
 			if not bool(roll_result.get("ok", false)):
@@ -7869,6 +7967,8 @@ func _ai_transport_action(player_id: int) -> bool:
 
 
 func run_ai_match(max_turns: int = 10000) -> Dictionary:
+	if state.get("phase", "") == "await_sale":
+		return _result(false, "等待販賣操作", {"completed_turns": 0, "awaiting_response": true})
 	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
 		return _result(false, "等待商店操作", {"completed_turns": 0, "awaiting_response": true})
 	if _trap_pending():
@@ -8537,12 +8637,16 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if graph_save:
 		allowed_phases.append("await_route")
 	if companies_save:
-		allowed_phases.append_array(["await_bank", "await_lottery"])
+		allowed_phases.append_array(["await_bank", "await_lottery", "await_sale"])
 	if source_shop_save:
 		allowed_phases.append("await_shop")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	var sale_errors: Array = SourceSale.validate(data, companies_save)
+	if not sale_errors.is_empty():
+		errors.append_array(sale_errors)
+		return {"ok": false, "errors": errors}
 	var lottery_errors: Array = LotteryFlow.validate(data, companies_save)
 	if not lottery_errors.is_empty():
 		errors.append_array(lottery_errors)
@@ -9865,6 +9969,8 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		LotteryFlow.initialize(candidate)
 	if SourceShop.supports_save(candidate) and not candidate.has("shop_visit") and not candidate.has("shop_sequence"):
 		SourceShop.initialize(candidate)
+	if bool(candidate.get("original_companies", false)) and not candidate.has("sale_board"):
+		SourceSale.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -9945,6 +10051,28 @@ func acknowledge_shop_gift(visit_id: int) -> Dictionary:
 
 func leave_shop(visit_id: int) -> Dictionary:
 	return SourceShop.leave(self, visit_id)
+
+
+func can_open_sale() -> bool:
+	return SourceSale.can_open(self)
+
+func open_sale() -> Dictionary:
+	return SourceSale.open(self)
+
+func sale_snapshot() -> Dictionary:
+	return SourceSale.snapshot(self)
+
+func sale_create_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.create_offer(self, params)
+
+func sale_cancel_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.cancel_offer(self, params)
+
+func sale_accept_offer(params: Dictionary) -> Dictionary:
+	return SourceSale.accept_offer(self, params)
+
+func close_sale(session_id: int) -> Dictionary:
+	return SourceSale.close(self, session_id)
 
 
 func purchase_lottery(number: int) -> Dictionary:

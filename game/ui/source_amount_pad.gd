@@ -161,7 +161,12 @@ func _build() -> void:
 	_percent.gui_input.connect(_on_percent_input)
 	add_child(_percent)
 	_percent.hide()
+	_apply_button_rects()
 	_refresh_display()
+
+
+func _ready() -> void:
+	_apply_button_rects()
 
 
 func configure(action_value: String, maximum_value: int, initial_amount: int = 0) -> void:
@@ -334,10 +339,10 @@ func _set_button_transparent(button: Button) -> void:
 
 
 func _restore_button_style(button: Button) -> void:
-	button.add_theme_stylebox_override("normal", _style(Color("#355955"), Color("#c4c98d"), 1))
-	button.add_theme_stylebox_override("hover", _style(Color("#4d7465"), Color("#fff0b2"), 1))
-	button.add_theme_stylebox_override("pressed", _style(Color("#1f3938"), Color("#fff4c8"), 1))
-	button.add_theme_stylebox_override("disabled", _style(Color("#273635"), Color("#65766b"), 1))
+	button.add_theme_stylebox_override("normal", _button_style(Color("#355955"), Color("#c4c98d"), 1))
+	button.add_theme_stylebox_override("hover", _button_style(Color("#4d7465"), Color("#fff0b2"), 1))
+	button.add_theme_stylebox_override("pressed", _button_style(Color("#1f3938"), Color("#fff4c8"), 1))
+	button.add_theme_stylebox_override("disabled", _button_style(Color("#273635"), Color("#65766b"), 1))
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -461,16 +466,27 @@ func _make_button(text_value: String, node_name: String, button_rect: Rect2) -> 
 	button.set_meta("fallback_text", text_value)
 	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.position = button_rect.position
-	button.size = button_rect.size
 	button.custom_minimum_size = button_rect.size
 	button.focus_mode = Control.FOCUS_ALL
 	button.add_theme_font_size_override("font_size", 9)
 	button.add_theme_color_override("font_color", Color("#f4e7ae"))
-	button.add_theme_stylebox_override("normal", _style(Color("#355955"), Color("#c4c98d"), 1))
-	button.add_theme_stylebox_override("hover", _style(Color("#4d7465"), Color("#fff0b2"), 1))
-	button.add_theme_stylebox_override("pressed", _style(Color("#1f3938"), Color("#fff4c8"), 1))
-	button.add_theme_stylebox_override("disabled", _style(Color("#273635"), Color("#65766b"), 1))
+	button.add_theme_stylebox_override("normal", _button_style(Color("#355955"), Color("#c4c98d"), 1))
+	button.add_theme_stylebox_override("hover", _button_style(Color("#4d7465"), Color("#fff0b2"), 1))
+	button.add_theme_stylebox_override("pressed", _button_style(Color("#1f3938"), Color("#fff4c8"), 1))
+	button.add_theme_stylebox_override("disabled", _button_style(Color("#273635"), Color("#65766b"), 1))
+	button.set_meta("source_rect", button_rect)
+	button.size = button_rect.size
 	return button
+
+
+## A Button outside the tree sizes itself from the process default theme, which
+## is taller than Panel21's 17px rows.  Re-apply the source rectangles once the
+## real theme is in effect so the keypad rows keep their pitch.
+func _apply_button_rects() -> void:
+	for child in get_children():
+		if child is Button and child.has_meta("source_rect"):
+			var rect: Rect2 = child.get_meta("source_rect")
+			(child as Button).size = rect.size
 
 
 func _style(background: Color, border: Color, width: int) -> StyleBoxFlat:
@@ -479,6 +495,15 @@ func _style(background: Color, border: Color, width: int) -> StyleBoxFlat:
 	style.border_color = border
 	style.set_border_width_all(width)
 	style.set_corner_radius_all(1)
+	return style
+
+
+## Panel21's keypad rectangles come from the source surface (17px rows).  A
+## themed button adds text padding, which would make the rows taller than their
+## 24px pitch and overlap; the source hit areas have no content margin.
+func _button_style(background: Color, border: Color, width: int) -> StyleBoxFlat:
+	var style := _style(background, border, width)
+	style.set_content_margin_all(0)
 	return style
 
 

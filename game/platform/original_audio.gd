@@ -2,6 +2,8 @@ class_name OriginalAudio
 extends Node
 ## Optional owner-provided music. Files are loaded from disk, never from res://.
 
+const UserPaths = preload("res://game/platform/user_paths.gd")
+
 signal library_changed(track_count: int)
 signal playback_changed(track_name: String)
 
@@ -61,7 +63,7 @@ func _default_source_paths() -> Array[String]:
 
 ## Overridable so tests never read the owner's user://audio.cfg.
 func _settings_path() -> String:
-	return "user://audio.cfg"
+	return UserPaths.path("audio.cfg")
 
 
 func configure(path: String, persist := true) -> bool:

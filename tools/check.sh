@@ -7,9 +7,17 @@ mkdir -p .local build
 # paths. Keep Godot from scanning/importing those multi-GB local caches into a
 # second per-worktree .godot/imported copy.
 touch .local/.gdignore build/.gdignore
-# Remove the current check's temp log even if the run is interrupted or errexit fires.
+# Every check resolves its runtime write roots (save slots, autosave, legacy
+# save, settings, hotkeys, audio) under this throwaway root, so a headless run
+# can never read or write the owner's real userdata. Run a single check by hand
+# the same way:
+#   RICHMAN4_USER_ROOT="$(mktemp -d)" godot --headless --path . --script tests/save_slots.gd
+richman4_user_root="$(mktemp -d)"
+export RICHMAN4_USER_ROOT="$richman4_user_root"
+# Remove the current check's temp log and the throwaway user root even if the
+# run is interrupted or errexit fires.
 current_check_log=""
-trap 'rm -f "$current_check_log"' EXIT
+trap 'rm -f "$current_check_log"; rm -rf "$richman4_user_root"' EXIT
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
@@ -64,6 +72,9 @@ else
   echo "SKIP: source lottery catalog admission requires RICHMAN4_MAP_CATALOG"
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+# Every default write root must follow RICHMAN4_USER_ROOT; this guard fails if
+# an ordinary MainUI run creates or modifies anything in the owner's userdata.
+run_checked "$GODOT_BIN" --headless --path . --script tests/userdata_isolation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_autosave.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave.gd
@@ -127,6 +138,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_title_panel.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
+# Native RC smoke 2026-10-26 JST defects: fallback bank keypad geometry and
+# status line, setup frame stray node and preview clipping, jail action label.
+run_checked "$GODOT_BIN" --headless --path . --script tests/native_smoke_fixes.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
@@ -169,6 +183,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_audio_selecti
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rendering.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_main_ui.gd
+# In-game SURRENDER: core transition and the options confirmation host.
+run_checked "$GODOT_BIN" --headless --path . --script tests/surrender.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/surrender_ui.gd
 # Issue #148 runtime consumers for the source options values.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_preferences.gd
 # Issue #143 source date and 28-slot hotkey child windows.
@@ -200,6 +217,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/gods_facility_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_finance.gd
+# A dividend charge can bankrupt a holder mid-settlement and cascade into
+# another holder before the payout loop reaches its precomputed dividend.
+run_checked "$GODOT_BIN" --headless --path . --script tests/company_dividend_cascade.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_insurance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ai.gd
@@ -208,6 +228,14 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
+# Issue #164 source SALE rules: durable bulletin board, settlement and cost basis.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_stock_cost.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_rules.gd
+# Issue #164 source SALE board presenters and private artwork preparation.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_catalog.gd
+run_checked python3 -m unittest tests.test_source_sale_assets -v
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/legacy_stock_bounds.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd

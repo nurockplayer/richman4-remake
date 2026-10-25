@@ -35,5 +35,13 @@ func _initialize() -> void:
 			for event in game.state.event_log:
 				if event.get("type","") == "lottery_purchased": purchased += 1
 			expect(result.ok and purchased == (1 if cash > 1000 else 0), "public AI dispatch preserves threshold: %s/%d" % [mode,cash])
+			expect(int(game.state.current_player) != 0 and game.state.phase != "await_lottery", "public AI dispatch finishes the turn after the encounter: %s/%d" % [mode,cash])
+	# A saved AI-pending encounter must resume through one ordinary dispatch.
+	var pending: Object = make_actor("ai", 1001)
+	var loaded: Object = Game.from_dict(JSON.parse_string(pending.to_json()))
+	expect(loaded != null and loaded.state.phase == "await_lottery" and int(loaded.state.lottery_pending) == 0, "AI-pending lottery save reloads")
+	if loaded != null:
+		var resumed: Dictionary = loaded.run_ai_turn()
+		expect(resumed.ok and int(loaded.state.current_player) != 0 and loaded.state.phase != "await_lottery", "one dispatch finishes a saved AI lottery encounter")
 	print("Lottery public purchase acceptance: %d checks, %d failures" % [checks,failures])
 	quit(1 if failures else 0)

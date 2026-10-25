@@ -6941,9 +6941,6 @@ func run_ai_turn() -> Dictionary:
 			return _error("目前玩家無法行動")
 	if not bool(player.get("is_ai", false)):
 		return _error("目前玩家不是 AI")
-	if state.get("phase", "") == "await_lottery":
-		LotteryFlow.ai_turn(self)
-		return _result(true, "AI 彩券操作完成", {"completed": true})
 	if not _pending_finance().is_empty():
 		return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 	if _trap_pending():
@@ -6987,7 +6984,11 @@ func run_ai_turn() -> Dictionary:
 		if safety >= MAX_AI_TURN_ITERATIONS:
 			break
 		safety += 1
-		if state.get("phase", "") == "await_roll":
+		if state.get("phase", "") == "await_lottery":
+			# The visit is owned by the current actor; resolve it inside the same
+			# call so the loop still reaches the turn's ordinary action and end.
+			LotteryFlow.ai_turn(self)
+		elif state.get("phase", "") == "await_roll":
 			if _is_inventory():
 				_ai_roll_action(player_id)
 			# Immediate card effects can end the match or hand off this turn.

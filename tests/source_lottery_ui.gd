@@ -131,7 +131,7 @@ func _test_pending_purchase() -> void:
 
 
 func _test_ai_encounter() -> void:
-	var game := waiting_game(14, [true, false, false, false])
+	var game := waiting_game(5, [true, false, false, false])
 	game.state.current_player = 1
 	game.state.players[1].position = 3
 	game._resolve_landing(1, false)
@@ -146,7 +146,7 @@ func _test_ai_encounter() -> void:
 	ui._maybe_schedule_ai_turn()
 	await create_timer(1.0).timeout
 	await settle()
-	expect(game.state.phase == "await_action" and int(game.state.lottery_pending) == -1, "the AI timer closes its own lottery encounter")
+	expect(int(game.state.lottery_pending) == -1 and game.state.phase != "await_lottery" and int(game.state.current_player) != 1, "the AI timer closes its encounter and finishes its turn")
 	expect(not controller.is_open(), "the resolved AI encounter has no purchase report")
 	var sold := 36 - int(game.state.lottery_tickets.count(0))
 	var bought := int(game.state.jackpot) == 1000 and sold == 1 and int(game.state.lottery_tickets.count(2)) == 1 and int(game.state.players[1].cash) == cash_before - 1000

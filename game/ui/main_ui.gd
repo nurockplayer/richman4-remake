@@ -188,6 +188,7 @@ var route_status_label: Label
 
 var _local_log: Array[String] = []
 var _ai_pending := false
+var _options_help_open := false
 var _last_rendered_phase := ""
 var _selected_tile := -1
 var _map_catalog: Array = []
@@ -234,6 +235,7 @@ func _ready() -> void:
 	_build_interface()
 	_build_source_shell()
 	_setup_audio()
+	_apply_persisted_settings()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
@@ -372,6 +374,7 @@ func _build_source_help_controller() -> void:
 	controller.z_index = 60
 	controller.finished.connect(func() -> void:
 		_ai_pending = false
+		_finish_options_help()
 		_refresh_from_state())
 	canvas.add_child(controller)
 	source_help_controller = controller
@@ -506,6 +509,10 @@ func _open_source_options(mode: String) -> void:
 	var loaded: Dictionary = system_settings.read_settings(settings_path)
 	if bool(loaded.get("ok", false)):
 		settings = loaded.get("settings", settings)
+	if str(loaded.get("status", "")) != "loaded":
+		# Without a committed file the source defaults must not contradict the
+		# existing audio preference, so mirror it until the player chooses.
+		settings["music_level"] = 4 if (audio_controller != null and bool(audio_controller.get("enabled"))) else 0
 	source_options_panel.set_visuals(source_shell.get("_visuals"))
 	source_options_panel.set_current_track(_source_audio_track())
 	var opened: bool = source_options_panel.set_view_model({
@@ -540,6 +547,14 @@ func _on_source_options_cancelled() -> void:
 	_refresh_log_only()
 
 
+func _apply_persisted_settings() -> void:
+	if system_settings == null:
+		return
+	var loaded: Dictionary = system_settings.read_settings(settings_path)
+	if str(loaded.get("status", "")) == "loaded":
+		_apply_source_settings(loaded.get("settings", {}))
+
+
 func _apply_source_settings(settings: Dictionary) -> void:
 	# Only the music switch has a runtime consumer so far; the remaining source
 	# fields persist for later hosts.  Runtime-only calls never rewrite audio.cfg.
@@ -564,17 +579,41 @@ func _on_source_options_preview(track: int) -> void:
 
 func _on_source_options_command(command: String) -> void:
 	if command == "help":
-		# The source keeps the parent draft for child windows; the current help
-		# host owns the whole source surface, so close before handing over.
-		source_options_panel.close_options()
-		_on_source_help_requested()
+		# The source keeps the parent draft while a child window is open.
+		if game_state == null or source_help_controller == null or _presentation_busy:
+			_append_local_log("遊戲說明需在對局中開啟。")
+			_refresh_log_only()
+			return
+		source_options_panel.suspend_input(true)
+		source_help_controller.z_index = 80
+		_options_help_open = true
+		if not _open_source_help():
+			_finish_options_help()
 		return
 	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
 	_refresh_log_only()
 
+
+func _finish_options_help() -> void:
+	if not _options_help_open:
+		return
+	_options_help_open = false
+	if source_help_controller != null:
+		source_help_controller.z_index = 60
+	if source_options_panel != null and bool(source_options_panel.call("is_open")):
+		source_options_panel.call("suspend_input", false)
+
 func _on_source_help_requested() -> void:
 	if source_help_controller == null or not _source_help_operation_allowed():
 		return
+	_open_source_help()
+
+
+## Opens the help host without the modal gate; the options child-window path
+## keeps the parent presenter open while this surface owns input.
+func _open_source_help() -> bool:
+	if source_help_controller == null:
+		return false
 	var edition := ""
 	var source: Variant = _active_map_definition.get("source", {})
 	if source is Dictionary:
@@ -584,6 +623,8 @@ func _on_source_help_requested() -> void:
 	if source_help_controller.open(game_state, edition, source_shell.get("_visuals")):
 		_ai_pending = false
 		_refresh_from_state()
+		return true
+	return false
 
 func _source_help_modal_open() -> bool:
 	return source_help_controller != null and source_help_controller.is_open()

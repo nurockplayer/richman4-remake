@@ -4,8 +4,9 @@ extends SceneTree
 ##
 ## The title OPTION button and the in-game toolbar command must reach the source
 ## presenter, accepted drafts must persist through the injected settings path,
-## and cancelling must leave the committed file untouched.  Only an explicit
-## worktree-local path is used, so the owner's settings and saves are never read
+## cancelling must leave the committed file untouched, and the music switch must
+## survive a relaunch.  Only an explicit worktree-local path is injected before
+## the scene enters the tree, so the owner's settings and saves are never read
 ## or written.
 
 const MainScene = preload("res://game/main.tscn")
@@ -26,6 +27,10 @@ func _expect(condition: bool, message: String) -> void:
 		push_error("FAIL: " + message)
 
 
+func _expect_equal(actual: Variant, expected: Variant, message: String) -> void:
+	_expect(actual == expected, "%s (actual=%s expected=%s)" % [message, str(actual), str(expected)])
+
+
 func _settle() -> void:
 	await process_frame
 	await process_frame
@@ -36,19 +41,23 @@ func _click(panel: Control, point: Vector2) -> void:
 	panel.call("_handle_left_up", point)
 
 
+func _new_ui(settings_file: String) -> Control:
+	var ui: Control = MainScene.instantiate()
+	# Must be set before entering the tree: _ready applies committed settings.
+	ui.settings_path = settings_file
+	root.add_child(ui)
+	return ui
+
+
 func _run() -> void:
 	var scratch := ProjectSettings.globalize_path("res://.local/source-options-main-ui-%d" % OS.get_process_id())
 	_expect(not DirAccess.dir_exists_absolute(scratch), "options fixture requires a new temporary directory")
 	_expect(DirAccess.make_dir_recursive_absolute(scratch) == OK, "options fixture directory is created")
 	var settings_file := scratch.path_join("settings.json")
 
-	var ui: Control = MainScene.instantiate()
-	root.add_child(ui)
+	var ui := _new_ui(settings_file)
 	await _settle()
 	ui.set_process(false)
-	ui.settings_path = settings_file
-	if ui.audio_controller != null:
-		ui.audio_controller.call("set_enabled", true, false)
 	var shell: Control = ui.source_shell
 	var panel: Control = ui.source_options_panel
 
@@ -57,21 +66,44 @@ func _run() -> void:
 		await _finish(ui, scratch, settings_file)
 		return
 
-	# Title entry: available regardless of the toolbar state.
+	# Without a committed file, a mirrored music field must not override the
+	# existing audio preference when the player accepts an unrelated change.
 	_expect(shell.title_screen.visible, "normal launch keeps the source title visible")
+	if ui.audio_controller != null:
+		ui.audio_controller.call("set_enabled", false, false)
 	_expect(not shell.title_option_button.disabled, "title OPTION is enabled now that the presenter exists")
 	shell.title_option_button.pressed.emit()
 	await _settle()
 	_expect(panel.call("is_open"), "title OPTION opens the presenter")
+	_expect_equal(panel.call("draft_settings")["music_level"], 0, "options mirror disabled audio when no settings file exists")
+	panel.call("close_options")
+	await _settle()
+	_expect(not FileAccess.file_exists(settings_file), "opening and cancelling options does not create a settings file")
+
+	if ui.audio_controller != null:
+		ui.audio_controller.call("set_enabled", true, false)
+	shell.title_option_button.pressed.emit()
+	await _settle()
+	_expect(panel.call("is_open"), "title OPTION reopens the presenter")
 	var model: Dictionary = panel.call("view_model")
 	_expect(model.get("mode") == "title", "title entry presents source title commands")
 	_expect_equal(model.get("edition"), str(shell.get("_source_edition")), "title entry uses the active source edition")
-	_expect(not FileAccess.file_exists(settings_file), "opening options does not create a settings file")
+	_expect_equal(panel.call("draft_settings")["music_level"], 4, "options mirror enabled audio when no settings file exists")
 
-	# Accepted draft persists through the injected path and applies the switch.
 	_click(panel, Vector2(81 + 1, 17 + 4))
-	_click(panel, Vector2(66 + 4, 82 + 4))
 	_expect_equal(panel.call("draft_settings")["speed"], 0, "options draft records the pressed speed row")
+	_click(panel, Vector2(227 + 10, 119 + 10))
+	await _settle()
+	_expect(ui.source_help_controller != null and ui.source_help_controller.is_open(), "help command opens the existing help host")
+	_expect(panel.call("is_open"), "help keeps the parent options presenter open")
+	if ui.source_help_controller != null and ui.source_help_controller.is_open():
+		ui.source_help_controller.help_panel.close_help()
+		await _settle()
+	_expect(not ui.source_help_controller.is_open(), "closing help returns control")
+	_expect(panel.call("is_open") and not bool(panel.call("is_input_suspended")), "options input resumes after help")
+	_expect_equal(panel.call("draft_settings")["speed"], 0, "help does not discard the parent options draft")
+
+	_click(panel, Vector2(66 + 4, 82 + 4))
 	_expect_equal(panel.call("draft_settings")["music_level"], 0, "options draft records the music switch")
 	_click(panel, Vector2(266 + 10, 314 + 10))
 	await _settle()
@@ -85,7 +117,6 @@ func _run() -> void:
 	if ui.audio_controller != null:
 		_expect(not bool(ui.audio_controller.get("enabled")), "music switch turns off runtime playback")
 
-	# Reopening presents the committed file and cancel leaves it untouched.
 	shell.title_option_button.pressed.emit()
 	await _settle()
 	_expect(panel.call("is_open"), "title OPTION reopens the presenter")
@@ -97,7 +128,6 @@ func _run() -> void:
 	var after_cancel: Dictionary = settings.read_settings(settings_file)
 	_expect_equal(int((after_cancel.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "cancel keeps the committed file")
 
-	# In-game toolbar entry: the handler now opens the game-mode presenter.
 	shell.show_game()
 	shell.set_toolbar_enabled("options", true)
 	_expect(not shell.toolbar_buttons["options"].disabled, "in-game toolbar OPTION entry is enabled")
@@ -107,11 +137,18 @@ func _run() -> void:
 	_expect(panel.call("view_model").get("mode") == "game", "in-game entry presents the game commands")
 	panel.call("close_options")
 
-	await _finish(ui, scratch, settings_file)
+	ui.queue_free()
+	await create_timer(0.15).timeout
 
-
-func _expect_equal(actual: Variant, expected: Variant, message: String) -> void:
-	_expect(actual == expected, "%s (actual=%s expected=%s)" % [message, str(actual), str(expected)])
+	# Relaunch: the committed switch wins over audio.cfg, which still says on.
+	var restarted := _new_ui(settings_file)
+	await _settle()
+	restarted.set_process(false)
+	if restarted.audio_controller != null:
+		_expect(not bool(restarted.audio_controller.get("enabled")), "persisted music switch applies on the next launch")
+	else:
+		_expect(true, "audio controller is optional for the persisted settings check")
+	await _finish(restarted, scratch, settings_file)
 
 
 func _finish(ui: Control, scratch: String, settings_file: String) -> void:

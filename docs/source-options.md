@@ -22,8 +22,10 @@ Issue #141（#102 / S35）提供標題與遊戲中兩種系統選項面板、六
 
 `OriginalAudio.play_track(index)` 只嘗試指定曲目；索引、停用狀態或讀取失敗不更換目前曲目、不發送成功訊號，也不寫設定。`set_enabled`／`set_volume` 保留既有預設持久化行為，新增明確 `persist=false` 供未來選項主程式套用執行期狀態。
 
+MainUI 的優先順序：已有合法設定檔時，啟動即套用其中的音樂開關（不重寫 `audio.cfg`）；尚無設定檔時，面板的音樂欄位反映目前 `audio.cfg` 狀態，避免只改速度卻意外開啟音樂。遊戲說明由選項面板開啟時保留父草稿並暫停輸入，關閉說明後恢復。
+
 ## 驗證範圍
 
 `tests/source_options_panel.gd` 涵蓋來源命中範圍、按下／放開時機、草稿取消、模式命令、曲目預覽、重複事件與替換材質。`tests/source_options_rendering.gd` 固定命令字型／位置、單次視窗標籤、曲目文字位置／色彩、底部按鈕圖塊與實際曲目反白；首次實作已通過互動測試，但此新增來源繪圖回歸曾產生有效失敗，不能將舊互動綠燈視為畫面正確。
 
-`tests/source_options_main_ui.gd` 從實際 MainUI 驗證標題 OPTION 與遊戲中工具列可開啟、確定後經注入路徑持久化、取消保留既有檔案；不讀寫擁有者設定或存檔。`tests/system_settings.gd` 只使用顯式隔離暫存目錄。`tests/source_audio_selection.gd` 使用記憶體音訊與替身，不讀擁有者檔案、不發出可聽音樂；既有音訊流程與 bootstrap 測試保留。原生元件擷取可證明繪製方向，不能證明實體輸入、MainUI 可達性、設定效果或目前套件。
+`tests/source_options_main_ui.gd` 從實際 MainUI 驗證標題 OPTION 與遊戲中工具列可開啟、確定後經注入路徑持久化、取消保留既有檔案、重新啟動套用已存音樂開關，以及說明子視窗保留父草稿；不讀寫擁有者設定或存檔。`tests/system_settings.gd` 只使用顯式隔離暫存目錄。`tests/source_audio_selection.gd` 使用記憶體音訊與替身，不讀擁有者檔案、不發出可聽音樂；既有音訊流程與 bootstrap 測試保留。原生元件擷取可證明繪製方向，不能證明實體輸入、MainUI 可達性、設定效果或目前套件。

@@ -44,6 +44,8 @@ else
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_menu_ui.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
 # Visual fixtures cover layout and controls; native atlas rendering remains a
 # separate gate, and the opaque-background test reports its headless skip.

@@ -234,7 +234,11 @@ func run_b() -> void:
 func run() -> void:
 	var args := OS.get_cmdline_user_args()
 	var phase := str(args[0]).to_lower() if args.size() > 0 else ""
-	if phase == "a":
+	# Both phases delete slot 1; without a scratch root that would be the
+	# owner's real save.
+	if UserPaths.override_root().is_empty():
+		_expect(false, "RICHMAN4_USER_ROOT must point at a throwaway directory")
+	elif phase == "a":
 		await run_a()
 	elif phase == "b":
 		await run_b()

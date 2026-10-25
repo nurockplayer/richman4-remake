@@ -45,28 +45,28 @@ def fake_free_space_env(root: Path, gib: int) -> dict[str, str]:
 
 
 class DiskGuardTests(unittest.TestCase):
-    def test_default_policy_blocks_thirty_gib_free(self) -> None:
+    def test_default_policy_blocks_five_gib_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             result = run_guard(
                 "--path", temporary,
                 "--operation", "fixture",
-                env=fake_free_space_env(root, 30),
+                env=fake_free_space_env(root, 5),
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("warn <60 GiB, hard <40 GiB", result.stdout)
-            self.assertIn("blocked below 40 GiB free", result.stderr)
+            self.assertIn("warn <20 GiB, hard <10 GiB", result.stdout)
+            self.assertIn("blocked below 10 GiB free", result.stderr)
 
-    def test_default_policy_warns_but_allows_fifty_gib_free(self) -> None:
+    def test_default_policy_warns_but_allows_fifteen_gib_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             result = run_guard(
                 "--path", temporary,
                 "--operation", "fixture",
-                env=fake_free_space_env(root, 50),
+                env=fake_free_space_env(root, 15),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("warn <60 GiB, hard <40 GiB", result.stdout)
+            self.assertIn("warn <20 GiB, hard <10 GiB", result.stdout)
             self.assertIn("do not create another FULL asset/Godot lane", result.stderr)
 
     def test_zero_thresholds_allow_materialization(self) -> None:

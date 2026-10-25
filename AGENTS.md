@@ -41,23 +41,27 @@ player outcomes and rapid delivery; choose engineering methods from evidence.
 - Use the cheapest sufficient checks: focused tests for a change, affected
   integration for a feature, broader checks for cross-cutting risk. A repeated
   failure without new information calls for a better diagnostic, not blind reruns.
-- Before merge, obtain independent nonauthor review of the final candidate and
-  pass applicable hosted checks. Record candidate/base identities; refresh
-  affected evidence if they change. Resolve valid P1/P2 findings, including
-  inherited debt, or explicitly demonstrate why they do not apply. Never
-  force-push, bypass branch protections or weaken acceptance to obtain green.
-- Native input, focus, window and rendering behavior needs native verification.
-  Test fixtures, emitted signals, headless runs and source review cannot prove
-  ordinary-player reachability. Track functional, native/package and
-  original-presentation verdicts separately. Report only what was checked.
+- Merge gate: hosted Verify green, one independent nonauthor review (the
+  CodeRabbit bot is advisory; do not wait on it when stuck), and no unresolved
+  valid P1/P2 finding. After a rebase, rerun only the affected tests. Never
+  force-push, bypass branch protections or weaken tests to obtain green.
+- Functional, native/package and original-presentation verdicts are tracked
+  separately, and only the functional verdict gates merge. Native verification
+  is a merge prerequisite only for PRs that change input, focus, window or
+  rendering behavior; otherwise open a follow-up under #204. Missing original
+  art gets a playable placeholder and a fidelity follow-up, not a blocked merge.
+  Release and #1 closure require all three verdicts. Report only what was
+  checked; headless runs and source review do not prove native reachability.
+- Keep PR bodies short: what changed, which tests, CI link. Write failing tests
+  first where useful, without frozen-RED commits or quoted check counts.
 - Publish safe source changes to a branch/PR early enough to avoid losing work.
   Historical drafts and unavailable candidates are evidence, not automatically
   integrated code. Work on an explicitly identified available baseline; never
   call a reconstruction identical without verifying it.
 - Record material decisions, failures, evidence and rationale on the active
-  Issue/PR. Keep #52 concise: exact source, ownership, proven results, remaining
-  gaps and the next action. Preserve old receipts; do not accumulate history in
-  the handoff. Prefer event waits and avoid redundant status checks.
+  Issue/PR. Keep #52 to about five lines: main SHA, active PR/owner, blockers,
+  next action. Do not accumulate history or receipts in the handoff. Prefer
+  event waits and avoid redundant status checks.
 
 ## Assets and local resources
 

@@ -939,9 +939,7 @@ func _on_source_options_command(command: String) -> void:
 	if command in ["restart", "surrender", "quit"]:
 		_source_options_command = command
 		if command == "surrender":
-			# No public surrender transition exists; never fake it with a
-			# private bankruptcy helper or silently drop the current match.
-			_source_options_confirmation.dialog_text = "認輸投降流程尚未接入；目前棋局保持不變。"
+			_source_options_confirmation.dialog_text = "確定認輸投降？將立即退出對局，名下資產交由銀行處理。"
 		elif command == "restart":
 			_source_options_confirmation.dialog_text = "重新開始遊戲？未儲存的進度將會失去。"
 		else:
@@ -970,6 +968,12 @@ func _confirm_source_options_command() -> void:
 		_on_source_start_requested()
 	elif command == "quit":
 		get_tree().quit()
+	elif command == "surrender":
+		if source_options_panel != null:
+			source_options_panel.call("close_options")
+		var result := _invoke_game("surrender")
+		_append_local_log(_result_text(result, "已投降。"))
+		_handle_result(result)
 	else:
 		_finish_source_options_child(source_options_panel)
 	_refresh_log_only()

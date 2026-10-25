@@ -5185,6 +5185,14 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		debtor["bomb_steps"] = 0
 		_hazard_return_tool_to_supply("定時炸彈")
 	debtor["cash"] = 0
+	# Ordinary charges exhaust cash and deposit before declaring bankruptcy, but
+	# surrender declares with the account untouched. Retire any remaining
+	# deposit from the bank ledger together with the account so it keeps
+	# matching the living players' deposits.
+	if int(debtor.get("deposit", 0)) > 0:
+		var deposit_ledger: Dictionary = state.get("bank", {})
+		deposit_ledger["deposits"] = max(0, int(deposit_ledger.get("deposits", 0)) - int(debtor["deposit"]))
+		state["bank"] = deposit_ledger
 	debtor["deposit"] = 0
 	debtor["loan"] = 0
 	debtor["loan_due_day"] = 0
@@ -6571,6 +6579,26 @@ func end_turn() -> Dictionary:
 	state["property_action_used"] = false
 	_advance_to_next_alive(player_id)
 	return _result(true, "回合結束")
+
+
+## A player concedes the match.  Surrender reuses the ordinary bankruptcy path
+## with no creditor, so the player leaves the active roster, cash and deposits
+## go to zero, and properties/stock follow the same release-to-bank rules as
+## any other bankruptcy.  The match continues unless one player remains; the
+## day wrap of the handover can still end it through the usual game-over check.
+func surrender(player_id: int = -1) -> Dictionary:
+	if state.get("phase", "") == "game_over":
+		return _error("遊戲已結束")
+	var target_id: int = int(state.get("current_player", -1)) if player_id < 0 else player_id
+	var player: Dictionary = _player(target_id)
+	if player.is_empty() or not bool(player.get("alive", false)):
+		return _error("玩家不在對局中")
+	_declare_bankruptcy(target_id, -1, 0, "surrender")
+	# Bankruptcy advances a moving current actor itself. An action-phase actor
+	# keeps the turn, so hand it over here exactly once.
+	if state.get("phase", "") != "game_over" and int(state.get("current_player", -1)) == target_id:
+		_advance_to_next_alive(target_id)
+	return _result(true, "已投降")
 
 
 func _advance_to_next_alive(previous_id: int) -> void:

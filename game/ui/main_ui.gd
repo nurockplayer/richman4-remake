@@ -268,6 +268,15 @@ func _process(_delta: float) -> void:
 		return
 	_maybe_schedule_ai_turn()
 
+## Source slot7 TAB cycles the window group before Godot's focus traversal.
+## MainUI owns the modal/movement/pending-action gates; a runtime hotkey host
+## (device bindings) can later replace this key without touching the shell.
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB and _source_view_operation_allowed():
+		_on_source_view_requested()
+		get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if _legacy_save_modal_open():
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
@@ -355,6 +364,8 @@ func _build_source_shell() -> void:
 	shell.name = "SourceGameShell"
 	add_child(shell)
 	source_shell = shell
+	# The calendar child asks the host before accepting its sun/moon regions.
+	shell.presentation_input_guard = Callable(self, "_source_view_operation_allowed")
 	if shell.has_signal("start_requested"):
 		shell.start_requested.connect(_on_source_start_requested)
 		shell.load_requested.connect(_on_source_load_requested)
@@ -620,6 +631,10 @@ func _open_source_options(mode: String) -> void:
 	var loaded: Dictionary = system_settings.read_settings(settings_path)
 	if bool(loaded.get("ok", false)):
 		settings = loaded.get("settings", settings)
+		# A runtime window-group choice outlives Options reopen/Cancel; only an
+		# explicit OK writes it.  Failed reads keep their own error instead.
+		if source_shell != null:
+			settings["view"] = int(source_shell.get("view_mode"))
 	if str(loaded.get("status", "")) != "loaded":
 		# Without a committed file the source defaults must not contradict the
 		# existing audio preference, so mirror it until the player chooses.
@@ -676,9 +691,12 @@ func _apply_persisted_settings() -> void:
 
 
 func _apply_source_settings(settings: Dictionary) -> void:
-	# Music and minigame animation have runtime consumers; the remaining source
-	# fields persist for later hosts.  Runtime-only calls never rewrite audio.cfg.
+	# Music, minigame animation and the window group have runtime consumers; the
+	# remaining source fields persist for later hosts.  Runtime-only calls never
+	# rewrite audio.cfg.
 	_source_minigame_animation = bool(settings.get("animation", true))
+	if source_shell != null and source_shell.has_method("set_view_mode"):
+		source_shell.set_view_mode(int(settings.get("view", 1)))
 	if audio_controller == null:
 		return
 	audio_controller.call("set_enabled", int(settings.get("music_level", 0)) > 0, false)
@@ -854,6 +872,17 @@ func _restore_trustee_window_policy() -> void:
 	if _trustee_quit_policy_held and not _source_trustee_modal_open():
 		get_tree().auto_accept_quit = _trustee_prior_auto_quit
 		_trustee_quit_policy_held = false
+
+func _source_view_operation_allowed() -> bool:
+	if game_state == null or source_shell == null or _source_modal_open() or not _source_save_operation_allowed():
+		return false
+	return not _presentation_busy and not _ai_pending and not _trap_response_busy and not _finance_response_busy and not _auction_response_busy and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+
+
+func _on_source_view_requested() -> void:
+	if _source_view_operation_allowed():
+		source_shell.cycle_view_mode()
+
 
 func _on_source_map_requested() -> void:
 	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_minigame_modal_open():

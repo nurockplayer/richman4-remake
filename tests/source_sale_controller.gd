@@ -72,6 +72,23 @@ func controller_checks() -> void:
 	stale.confirmed.emit(1)
 	expect(actor.to_json() == before,"replaced owner rejects former child callback")
 	controller.close_current()
+	# A listed property must render: rebuilding the board from a property offer
+	# that omits the top-level building fields used to hide the whole panel and
+	# leave the game soft-locked in await_sale with no way to close the session.
+	actor = sale_game()
+	actor.state.players[0].position = 2
+	actor._set_action_options(0)
+	expect(actor.choose_action("buy").ok,"property fixture supplies a legal land holding")
+	var property_source := int(actor.state.board[2].type_and_idx)
+	open_for(actor,0)
+	expect(create(actor,"property",property_source,1,Sale.reference_value(actor,"property",property_source)).get("ok",false),"property listing publishes")
+	controller.sync(actor,false)
+	expect(controller.is_open() and controller.panel.is_open(),"property offer renders the durable board instead of hiding it")
+	var property_board: Dictionary = controller.panel.view_model() if is_instance_valid(controller.panel) else {}
+	var property_rows: Array = property_board.get("players", [])
+	expect(property_rows.size() == 4 and property_rows[0].offers.size() == 1,"property offer carries top-level building identity")
+	controller.close_current()
+	expect(not controller.is_open() and actor.state.phase == "await_action","property board still closes without soft-lock")
 	controller.queue_free()
 	await process_frame
 	print("Source SALE controller checks: %d, failures: %d" % [checks,failures])

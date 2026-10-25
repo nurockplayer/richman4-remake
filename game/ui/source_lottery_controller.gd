@@ -65,8 +65,13 @@ func sync(owner: Object, blocked: bool) -> void:
 	if owner != null and _queue.is_empty() and owner.state.get("phase", "") == "await_lottery":
 		var snapshot: Dictionary = owner.get_snapshot()
 		var player_id := int(snapshot.current_player)
-		_queue.append({"kind": "purchase", "edition": str(snapshot.get("map_source", {}).get("edition", "")), "tickets": snapshot.lottery_tickets.duplicate(), "jackpot": snapshot.jackpot, "cash": snapshot.players[player_id].cash, "player_id": player_id, "players": LotteryFlow.presentation_players(snapshot.players)})
-		_purchase = true
+		var actor: Variant = snapshot.players[player_id]
+		# Only a human chooses a ticket. An AI encounter must stay free of the
+		# modal so the host's AI timer can call run_ai_turn, which resolves the
+		# encounter in the core; otherwise the modal blocks that timer forever.
+		if actor is Dictionary and bool(actor.get("is_human", true)):
+			_queue.append({"kind": "purchase", "edition": str(snapshot.get("map_source", {}).get("edition", "")), "tickets": snapshot.lottery_tickets.duplicate(), "jackpot": snapshot.jackpot, "cash": actor.cash, "player_id": player_id, "players": LotteryFlow.presentation_players(snapshot.players)})
+			_purchase = true
 	_blocked = blocked
 	if not blocked and not _closing: _show_next()
 

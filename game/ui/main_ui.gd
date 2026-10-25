@@ -26,6 +26,8 @@ const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
+const SourceMinigameAssets = preload("res://game/platform/source_minigame_assets.gd")
+const SourceMinigameController = preload("res://game/ui/source_minigame_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -73,6 +75,7 @@ var source_shell: Control
 var source_stock_panel: Control
 var source_help_controller: Control
 var source_bank_controller: Control
+var source_minigame_controller: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -352,6 +355,7 @@ func _build_source_shell() -> void:
 	_build_source_shop_controller()
 	_build_source_help_controller()
 	_build_source_bank_controller()
+	_build_source_minigame_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
 
@@ -449,7 +453,7 @@ func _on_source_stock_closed() -> void:
 func _on_source_start_requested() -> void:
 	if _source_bank_modal_open():
 		return
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
 	_on_new_game_pressed()
 
@@ -497,7 +501,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -507,7 +511,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -524,7 +528,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -557,13 +561,13 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
-	if _source_inventory_modal_open(): return
+	if _source_inventory_modal_open() or _source_minigame_modal_open(): return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
-	if _source_inventory_modal_open(): return
+	if _source_inventory_modal_open() or _source_minigame_modal_open(): return
 	if board_view == null:
 		return
 	if board_view.has_method("select_tile"):
@@ -1821,7 +1825,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -1989,7 +1993,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_minigame_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2038,16 +2042,16 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _source_save_operation_allowed() -> bool:
-	return game_state != null and not _source_bank_modal_open() and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
+	return game_state != null and not _source_bank_modal_open() and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _source_minigame_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open()
+	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_minigame_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _source_minigame_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2421,7 +2425,7 @@ func _on_stocks_pressed() -> void:
 func _on_bank_pressed() -> void:
 	if _source_bank_modal_open():
 		return
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_help_modal_open() or _source_inventory_modal_open() or _source_minigame_modal_open():
 		return
 	if not _is_human_turn():
 		return
@@ -2561,6 +2565,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_help_modal_open():
 		return {"ok": false, "message": "請先關閉遊戲說明。"}
+	if _source_minigame_modal_open() and method != "finish_minigame":
+		return {"ok": false, "message": "請先完成小遊戲。"}
 	if _legacy_save_modal_open():
 		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
 	if _presentation_busy:
@@ -2571,9 +2577,11 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 	var is_trap_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_trap" and _human_trap_response_pending()
 	var is_finance_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_finance" and FinancialPresentation.human_pending(state)
 	var is_auction_response := method == "choose_action" and not args.is_empty() and str(args[0]) == "respond_auction" and _human_auction_response_pending()
-	if method not in ["run_ai_turn", "run_sleep_turn"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response and not is_shop_response:
+	if method not in ["run_ai_turn", "run_sleep_turn", "finish_minigame"] and not _is_human_turn() and not is_trap_response and not is_finance_response and not is_auction_response and not is_shop_response:
 		return {"ok": false, "message": "目前不是你的回合。"}
 	if game_state != null and game_state.has_method(method):
+		if game_state.has_method("configure_minigames"):
+			game_state.configure_minigames(true, _source_minigame_input_data())
 		var before := _read_snapshot().duplicate(true)
 		var result: Variant = game_state.callv(method, args)
 		if result is Dictionary:
@@ -2611,6 +2619,8 @@ func _cancel_presentation() -> void:
 		_close_source_inventory(false)
 	if source_help_controller != null:
 		source_help_controller.cancel()
+	if source_minigame_controller != null:
+		source_minigame_controller.cancel()
 	if source_bank_controller != null:
 		source_bank_controller.cancel()
 	_presentation_generation += 1
@@ -2655,6 +2665,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 		_sync_source_bank()
+		_sync_source_minigame()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2697,6 +2708,7 @@ func _update_all() -> void:
 	_sync_source_shop()
 	_sync_source_shell(phase, current_index)
 	_sync_source_bank()
+	_sync_source_minigame()
 	_last_rendered_phase = phase
 
 func _sync_source_shell(phase: String, current_index: int) -> void:
@@ -3045,7 +3057,7 @@ func _refresh_log_only() -> void:
 	_update_event_log()
 
 func _update_end_overlay(phase: String) -> void:
-	if phase != "game_over":
+	if phase != "game_over" or _source_minigame_modal_open():
 		end_overlay.hide()
 		return
 	var winner_index := int(state.get("winner", -1))
@@ -4752,3 +4764,37 @@ func _restore_inventory_quit_policy() -> void:
 	if _inventory_quit_policy_held and not _source_inventory_modal_open():
 		get_tree().auto_accept_quit = _inventory_prior_auto_quit
 		_inventory_quit_policy_held = false
+
+
+func _build_source_minigame_controller() -> void:
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null: return
+	var controller := SourceMinigameController.new()
+	controller.z_index = 52
+	controller.finished.connect(func() -> void:
+		_ai_pending = false
+		_refresh_from_state())
+	controller.action_requested.connect(func(method: String, args: Array) -> void:
+		var result := _invoke_game(method, args)
+		controller.apply_action_result(result)
+		_handle_result(result))
+	canvas.add_child(controller)
+	source_minigame_controller = controller
+
+func _source_minigame_modal_open() -> bool:
+	# Pending core ownership blocks input even before a panel can be displayed.
+	return (game_state != null and str(game_state.state.get("phase", "")) == "await_minigame") or (source_minigame_controller != null and source_minigame_controller.is_open())
+
+func _sync_source_minigame() -> void:
+	if source_minigame_controller == null or source_shell == null: return
+	var blocked := _presentation_busy or _legacy_save_modal_open() or _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open()
+	blocked = blocked or (source_shell.has_method("is_title_visible") and source_shell.is_title_visible())
+	blocked = blocked or (source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible())
+	blocked = blocked or (source_stock_panel != null and source_stock_panel.visible)
+	for popup in [news_popup,fate_popup,auction_popup]:
+		blocked = blocked or (popup != null and popup.visible)
+	source_minigame_controller.set_visuals(source_shell.get("_visuals"))
+	source_minigame_controller.sync(game_state,blocked)
+
+func _source_minigame_input_data() -> Dictionary:
+	return SourceMinigameAssets.input_data()

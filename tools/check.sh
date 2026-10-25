@@ -64,6 +64,19 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visual.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_opaque_background.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_bank_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
+# Issue #157 source minigames S31–S33: deterministic models, public AI shortcut
+# completion and the asset-free presenter/controller path.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_models.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_source_reclaim.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_balloon_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_runner.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
+# Native render gates need an actual display and the private source scene.
+if [[ "${RICHMAN4_MINIGAME_NATIVE_CHECKS:-0}" == "1" ]]; then
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_bomb_mapping_native.gd
+fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd

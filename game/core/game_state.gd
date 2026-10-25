@@ -27,6 +27,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
+const SourceMinigameFlow = preload("res://game/core/source_minigame_flow.gd")
 const MonthlyStatements = preload("res://game/core/monthly_statements.gd")
 const RULESET_ID = "richman4_provisional_v1"
 const RUNTIME_MAP_SCHEMA = "richman4.runtime-map/v1"
@@ -179,6 +180,10 @@ var _resolving_fate := false
 var _running_sleep_turn := false
 var state: Dictionary = {}
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _minigame_session: RefCounted
+var _minigame_sequence := 0
+var _minigame_animation := true
+var _minigame_input_data: Dictionary = {}
 var _time_anchors: Dictionary = {}
 var _time_anchor_sequence: int = 0
 
@@ -2308,7 +2313,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_shop"]:
+	if phase in ["game_over", "await_shop", "await_minigame"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -4632,6 +4637,11 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 					_record_event("bank_landed", {"player_id": player_id, "tile": tile_index})
 				elif not bank_passed_before_god:
 					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
+		"minigame":
+			if final_landing:
+				_minigame_sequence += 1
+				_minigame_session = SourceMinigameFlow.new()
+				_minigame_session.admit(self, player_id, _minigame_sequence, _minigame_animation, _minigame_input_data)
 		"unsupported":
 			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
 
@@ -4843,7 +4853,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_minigame"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5280,6 +5290,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
+	if state.get("phase", "") == "await_minigame":
+		return _error("請先完成小遊戲")
 	var normalized: String = action.to_lower().strip_edges()
 	if _trustee_ai_dispatch and not TrusteeStrategy.action_allowed(state, normalized, params):
 		return _error("託管設定停用此操作")
@@ -7051,6 +7063,8 @@ func _run_ai_turn_dispatch() -> Dictionary:
 		if not bool(end_result.get("ok", false)):
 			return _result(false, str(end_result.get("message", "AI 結束回合失敗")), {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
 	var completed: bool = state.get("phase", "") == "game_over" or int(state.get("current_player", -1)) != player_id
+	if state.get("phase", "") == "await_minigame":
+		return _result(true, "等待小遊戲結果", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false, "awaiting_response": true})
 	if not completed:
 		return _result(false, "AI 回合在限制內未完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": false})
 	return _result(true, "AI 回合完成", {"player_id": player_id, "iterations": safety, "route_iterations": route_safety, "completed": true})
@@ -7837,6 +7851,11 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 		return _error("請先回應陷害卡")
 	if max_turns < 1:
 		return _error("最大回合數無效")
+	# An admitted interactive session belongs to its human result controller.
+	# Do not change its controls or reinterpret it as a new AI shortcut.
+	var pending_minigame: Dictionary = minigame_snapshot()
+	if not pending_minigame.is_empty() and not bool(pending_minigame.get("shortcut", false)):
+		return _result(false, "等待小遊戲結果", {"completed_turns": 0, "awaiting_response": true})
 	for player in _players():
 		if bool(player.get("alive", false)):
 			player["is_ai"] = true
@@ -7844,8 +7863,19 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 	var completed: int = 0
 	while state.get("phase", "") != "game_over" and completed < max_turns:
 		var result: Dictionary = run_ai_turn()
+		# MainUI uses run_ai_turn() and owns its delayed result presentation.
+		# This non-presenting driver consumes only an already-finished shortcut,
+		# through the same encounter-validated, once-only settlement boundary.
+		if bool(result.get("ok", false)):
+			pending_minigame = minigame_snapshot()
+			if bool(pending_minigame.get("shortcut", false)) and bool(pending_minigame.get("finished", false)):
+				result = finish_minigame(int(pending_minigame.get("encounter_id", -1)))
+				if bool(result.get("ok", false)):
+					result = run_ai_turn()
 		if not bool(result.get("ok", false)):
 			return _result(false, str(result.get("message", "AI 失敗")), {"completed_turns": completed})
+		if bool(result.get("awaiting_response", false)):
+			return _result(false, str(result.get("message", "等待玩家回應")), {"completed_turns": completed, "awaiting_response": true})
 		completed += 1
 	if state.get("phase", "") != "game_over":
 		return _result(false, "AI 對局在限制內未結束", {"completed_turns": completed})
@@ -8044,7 +8074,7 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		var kind: Variant = tile.get("kind", null)
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
-		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate"]
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate", "minigame"]
 		if facility_mode:
 			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
@@ -8834,7 +8864,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("board index mismatch %d" % index)
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
-				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate"])
+				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate", "minigame"])
 			if facility_save:
 				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
@@ -9846,11 +9876,14 @@ static func _migrate_news_source_kind(data: Dictionary) -> void:
 		var tile: Dictionary = tile_value
 		if int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 2 and str(tile.get("kind", "")) == "unsupported":
 			tile["kind"] = "news"
+		elif int(tile.get("type_and_idx", -1)) >= 0 and int(tile.get("type_and_idx", -1)) <= 2000 and int(tile.get("event_code", -1)) in [6, 7, 8] and str(tile.get("kind", "")) == "unsupported":
+			tile["kind"] = "minigame"
 		elif int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 3 and str(tile.get("kind", "")) in ["rest", "unsupported"]:
 			tile["kind"] = "fate"
 
 
 func save_to_path(path: String) -> bool:
+	if state.get("phase", "") == "await_minigame": return false
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -9880,3 +9913,24 @@ func acknowledge_shop_gift(visit_id: int) -> Dictionary:
 
 func leave_shop(visit_id: int) -> Dictionary:
 	return SourceShop.leave(self, visit_id)
+
+
+## Runtime animation preferences are applied by the host before actions, never
+## read from disk in a simulation tick. Active encounters retain their admission.
+func configure_minigames(animation: bool, input_data: Dictionary = {}) -> void:
+	if state.get("phase", "") == "await_minigame": return
+	_minigame_animation = animation
+	_minigame_input_data = input_data
+
+func minigame_snapshot() -> Dictionary:
+	return _minigame_session.snapshot() if _minigame_session != null and state.get("phase", "") == "await_minigame" else {}
+
+func minigame_tick(encounter_id: int) -> bool:
+	return _minigame_session != null and _minigame_session.tick(self,encounter_id)
+
+func minigame_pointer(encounter_id: int, position: Vector2, pressed: bool) -> bool:
+	return _minigame_session != null and _minigame_session.pointer(self,encounter_id,position,pressed)
+
+func finish_minigame(encounter_id: int) -> Dictionary:
+	if _minigame_session == null: return _error("目前沒有小遊戲")
+	return _minigame_session.finish(self,encounter_id)

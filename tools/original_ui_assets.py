@@ -120,14 +120,15 @@ def _jump_resource_indices(edition: str) -> tuple[int, ...]:
 EDITION_UI_RESOURCES = {
     "Game": {
         "jump": {index: None for index in _jump_resource_indices("Game")},
-        "Data": {479: None, 560: (0,)},
+        # SALE YES/NO confirmation; Game 399 is the audited twin of source 440.
+        "Data": {399: None, 479: None, 560: (0,)},
         "help": {0: None},
     },
     "MultiverseJourney": {
         "jump": {
             index: None for index in _jump_resource_indices("MultiverseJourney")
         },
-        "Data": {520: None, 601: (0,)},
+        "Data": {440: None, 520: None, 601: (0,)},
         "help": {0: None},
     },
 }

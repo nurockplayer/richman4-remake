@@ -32,6 +32,7 @@ const CHECKS := [
 	["shop_held", "Panel", 11, 0],
 	["sale_board", "Panel", 73, 0],
 	["sale_tool_icons", "Panel", 74, 0],
+	["sale_confirmation", "Data", 399, 0],
 	["lottery_purchase", "Panel", 12, 0],
 	["lottery_digits", "Panel", 13, 0],
 	["lottery_draw", "Panel", 15, 0],
@@ -53,6 +54,7 @@ const CHECKS := [
 
 const EDITION_RESOURCES := {
 	"setup_atlas": {"Game": 4, "MultiverseJourney": 8},
+	"sale_confirmation": {"Game": 399, "MultiverseJourney": 440},
 	"save_load": {"Game": 479, "MultiverseJourney": 520},
 	"loading": {"Game": 560, "MultiverseJourney": 601},
 }

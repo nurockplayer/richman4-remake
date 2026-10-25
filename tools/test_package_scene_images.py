@@ -368,8 +368,20 @@ class PackageSceneTests(unittest.TestCase):
                     for vehicle_index in range(3):
                         index = base + character_id * 3 + vehicle_index
                         self.assertIn(index, ranges["character_previews"])
-            self.assertEqual(set(game_group["Data"]["resources"]), {"1", "2", "3", "479", "560"})
-            self.assertEqual(set(mj_group["Data"]["resources"]), {"1", "2", "3", "520", "601"})
+            self.assertEqual(
+                set(game_group["Data"]["resources"]),
+                {"1", "2", "3", "399", "479", "560"},
+            )
+            self.assertEqual(
+                set(mj_group["Data"]["resources"]),
+                {"1", "2", "3", "440", "520", "601"},
+            )
+            # SALE YES/NO confirmation is edition-specific: Game 399 (SMP) is
+            # the audited twin of source 440, and MJ 440 is the source index.
+            self.assertEqual(game_group["Data"]["resources"]["399"]["signature"], "SMP")
+            self.assertEqual(mj_group["Data"]["resources"]["440"]["signature"], "SMP")
+            self.assertNotIn("440", game_group["Data"]["resources"])
+            self.assertNotIn("399", mj_group["Data"]["resources"])
             self.assertEqual(set(game_group["Data"]["resources"]["479"]["chunks"]), {str(i) for i in range(7)})
             self.assertEqual(set(mj_group["Data"]["resources"]["520"]["chunks"]), {str(i) for i in range(11)})
             self.assertNotIn("520", game_group["Data"]["resources"])
@@ -431,7 +443,7 @@ class PackageSceneTests(unittest.TestCase):
 
             with patch("original_ui_assets.decode_entry", side_effect=traced_decode):
                 export_ui_resources("Game", source, root / "stage")
-            self.assertEqual(calls, [1, 2, 3, 479, 560])
+            self.assertEqual(calls, [1, 2, 3, 399, 479, 560])
 
     def test_chunk_transparency_matches_documented_source_callers(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -599,8 +611,12 @@ class PackageSceneTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             updated = update_ui_manifest(root / "source", manifest_path, editions={"Game"})
-            self.assertEqual(set(updated["ui"]["Game"]["Data"]["resources"]), {"1", "2", "3", "479", "560"})
+            self.assertEqual(
+                set(updated["ui"]["Game"]["Data"]["resources"]),
+                {"1", "2", "3", "399", "479", "560"},
+            )
             self.assertEqual(existing.read_bytes(), existing_bytes)
+            self.assertTrue((output / "images/Game/ui/Data/399/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/479/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/560/0.png").is_file())
             self.assertFalse((output / "images/Game/ui/jump/4/0.png").exists())

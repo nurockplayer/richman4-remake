@@ -31,7 +31,7 @@
 
 `python3 tools/decode_original_ground.py --source /本機原作 --output .local/original-scenes` 的 CLI 一併匯出這些限定 UI 圖；Python `decode_source` 保留 `include_ui=False` 的舊呼叫預設，新的 UI 呼叫必須明確傳 `include_ui=True`。
 
-private RC 匯出的 `Panel` 範圍另涵蓋各 presenter 實際查詢的來源資源：`0/1` HUD 與工具列、`2` 日曆、`10/11` 商店與庫存、`12`–`17` 彩券（`14/16/17` 為 FLIC 動畫，其餘 SMP）、`21/23/24` 銀行與計算機、`25/76/77` 月結與信託、`73/74` SALE、`75` 股票、`78`–`111` 小遊戲（`78` 為 FLIC intro，`81` 是點擊遮罩不是圖像，`92` 是 raw RGB555 背景，其餘 SMP/SPR）。SMP/SPR 的 WORD0 透明政策依原 caller 逐 chunk 決定（例如 `Panel10` 的 0/1/16/17 與 `Panel11` 的 0/1/15/16 保持不透明），其餘沿用透明剪影；FLIC 動畫保留來源 frame 數與 index-zero 透明設定。這些 key 由 `tools/rc_art_report.gd` 在封裝後逐一驗證。FULL lane 的一次正式生成才執行此命令；一般 UI 修改重用既有資料，不重新生成整組 ground。`jump` 的地圖背景採明確的 raw RGB555 binding，角色／車輛預覽採明確的 SPR binding；匯出器不會把不同 edition 的 index 或 stage 自動修正成看似相近的資源。
+private RC 匯出的 `Panel` 範圍另涵蓋各 presenter 實際查詢的來源資源：`0/1` HUD 與工具列、`2` 日曆、`10/11` 商店與庫存、`12`–`17` 彩券（`14/16/17` 為 FLIC 動畫，其餘 SMP）、`21/23/24` 銀行與計算機、`25/76/77` 月結與信託、`73/74` SALE、`75` 股票、`78`–`111` 小遊戲（`78` 為 FLIC intro，`81` 是點擊遮罩不是圖像，`92` 是 raw RGB555 背景，其餘 SMP/SPR）。SMP/SPR 的 WORD0 透明政策依原 caller 逐 chunk 決定（例如 `Panel10` 的 0/1/16/17 與 `Panel11` 的 0/1/15/16 保持不透明），其餘沿用透明剪影；FLIC 動畫保留來源 frame 數與 index-zero 透明設定。SALE 的 YES/NO 確認框是 `Data` 資源，且索引依 edition 不同：Game 用 `Data / 399`（與來源 `Data / 440` 逐位元相同的 SMP），MultiverseJourney 用 `Data / 440`；兩者不可互換，因為 Game 的 440 不是圖像、MJ 的 399 是另一組 SPR。這些 key 由 `tools/rc_art_report.gd` 在封裝後逐一驗證。FULL lane 的一次正式生成才執行此命令；一般 UI 修改重用既有資料，不重新生成整組 ground。`jump` 的地圖背景採明確的 raw RGB555 binding，角色／車輛預覽採明確的 SPR binding；匯出器不會把不同 edition 的 index 或 stage 自動修正成看似相近的資源。
 
 SMP／SPR UI 圖以 RGB555 解碼，word zero 作透明背景，使不規則圖示能疊在原版底板；headerless raw 地圖／Loading 圖的 word zero 一律保持不透明黑底。這是依原版合成畫面作的明確呈現選擇；非零的黑色 word 0x8000 也保持不透明。原始素材不變，逐幕檢視若發現差異再縮小到該資源調整。
 

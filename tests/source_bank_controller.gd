@@ -295,6 +295,9 @@ func _test_action_result_boundary() -> void:
 	var error_label: Label = _controller.get("error_label") as Label
 	_expect(error_label != null and error_label.visible and error_label.text.contains("拒絕"), "controller-owned error boundary keeps denial truthful")
 	_expect(int(panel.call("current_amount")) == 12, "denial preserves the selected amount atomically")
+	var denied_feedback := panel.find_child("ATMFeedback", true, false) as Label
+	_expect(denied_feedback != null and not denied_feedback.text.begins_with("已"), "denied action never shows a settled amount")
+	_expect(denied_feedback != null and denied_feedback.text.contains("拒絕"), "denied action reports the core failure on the panel status line")
 
 	_invocations.clear()
 	_handled.clear()
@@ -308,6 +311,8 @@ func _test_action_result_boundary() -> void:
 	_expect(_handled.size() == 1, "accepted action reaches the deferred result adapter")
 	_expect(int(panel.call("view_model").get("deposit", -1)) == 112, "accepted action rebuilds from the latest result model")
 	_expect(not error_label.visible or error_label.text.is_empty(), "accepted action clears the controller error boundary")
+	var accepted_feedback := panel.find_child("ATMFeedback", true, false) as Label
+	_expect(accepted_feedback != null and accepted_feedback.text == "已存款 $12", "accepted action reads the settled amount back on the panel status line")
 
 
 func _test_landing_front_owner_limits_and_close() -> void:

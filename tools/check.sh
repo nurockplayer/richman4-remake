@@ -209,6 +209,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
 # Issue #164 source SALE rules: durable bulletin board, settlement and cost basis.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_stock_cost.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_rules.gd
+# Issue #164 source SALE board presenters and private artwork preparation.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_catalog.gd
+run_checked python3 -m unittest tests.test_source_sale_assets -v
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/legacy_stock_bounds.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd

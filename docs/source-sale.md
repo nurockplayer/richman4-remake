@@ -6,6 +6,17 @@ is admitted from accepted S20 commit
 scope. The current branch is a functional draft checkpoint, stopped at the
 owner-requested safe handoff. S21 acceptance is pending.
 
+## Port to current main
+
+The #165 delta is ported onto current `main` as two PRs: core rules/settlement
+(PR #238) and the panel/controller/host wiring (this PR). The later main
+refactors (shop `supports_save`, lenient closed-visit validation, audio apply)
+are preserved; only #165's own files were taken. SALE opens from the toolbar or
+the source X hotkey, and the panel draws its own art-free board when the private
+Panel73/74 overlay is absent. Both preparation tools refuse an `--output` inside
+the public checkout. The replay hash is compared against `origin/main`; idle
+human SALE entry never consumes RNG.
+
 ## Frozen source contract
 
 Ordinary SALE entry opens the original player bulletin board. Each player

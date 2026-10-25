@@ -10,16 +10,17 @@ touch .local/.gdignore build/.gdignore
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
-  if ! "$@" >"$check_log" 2>&1; then
-    cat "$check_log"
-    return 1
-  fi
+  local status=0 reported=0
+  "$@" >"$check_log" 2>&1 || status=$?
   cat "$check_log"
   # Godot can report a script parse/runtime error yet return status zero.
-  if grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
-    echo "Godot reported an error; evidence: $check_log" >&2
-    return 1
+  if (( status == 0 )) && grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
+    echo "Godot reported an error (see output above)" >&2
+    reported=1
   fi
+  # The log was already printed; don't leave one temp file per check behind.
+  rm -f "$check_log"
+  (( status == 0 && reported == 0 ))
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd

@@ -11,6 +11,7 @@ extends SceneTree
 
 const MainScene = preload("res://game/main.tscn")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
+const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
 
 var checks := 0
 var failures := 0
@@ -41,6 +42,19 @@ func _click(panel: Control, point: Vector2) -> void:
 	panel.call("_handle_left_up", point)
 
 
+## Child presenters take a frame-local point and dispatch on release.
+func _click_date(panel: Control, point: Vector2) -> void:
+	panel.call("_handle_left_down", point)
+	panel.call("_handle_left_up")
+	await _settle()
+
+
+func _click_hotkeys(panel: Control, point: Vector2) -> void:
+	panel.call("_handle_left_down", point, false)
+	panel.call("_handle_left_up")
+	await _settle()
+
+
 ## Dispatch through the real viewport so _input ordering and handled flags are
 ## exercised, not just the panel's close helper.
 func _right_release(viewport: Viewport, point: Vector2 = Vector2(10, 400)) -> void:
@@ -53,10 +67,11 @@ func _right_release(viewport: Viewport, point: Vector2 = Vector2(10, 400)) -> vo
 	await _settle()
 
 
-func _new_ui(settings_file: String) -> Control:
+func _new_ui(settings_file: String, hotkeys_file: String) -> Control:
 	var ui: Control = MainScene.instantiate()
 	# Must be set before entering the tree: _ready applies committed settings.
 	ui.settings_path = settings_file
+	ui.hotkeys_path = hotkeys_file
 	root.add_child(ui)
 	return ui
 
@@ -66,8 +81,9 @@ func _run() -> void:
 	_expect(not DirAccess.dir_exists_absolute(scratch), "options fixture requires a new temporary directory")
 	_expect(DirAccess.make_dir_recursive_absolute(scratch) == OK, "options fixture directory is created")
 	var settings_file := scratch.path_join("settings.json")
+	var hotkeys_file := scratch.path_join("hotkeys.json")
 
-	var ui := _new_ui(settings_file)
+	var ui := _new_ui(settings_file, hotkeys_file)
 	await _settle()
 	ui.set_process(false)
 	var shell: Control = ui.source_shell
@@ -75,7 +91,7 @@ func _run() -> void:
 
 	_expect(panel != null, "source options presenter is mounted on the reference canvas")
 	if panel == null:
-		await _finish(ui, scratch, settings_file)
+		await _finish(ui, scratch, settings_file, hotkeys_file)
 		return
 
 	# Without a committed file, a mirrored music field must not override the
@@ -114,6 +130,65 @@ func _run() -> void:
 	_expect(not ui.source_help_controller.is_open(), "real right release closes help from options")
 	_expect(panel.call("is_open") and not bool(panel.call("is_input_suspended")), "options input resumes after help")
 	_expect_equal(panel.call("draft_settings")["speed"], 0, "help does not discard the parent options draft")
+
+	# Issue #143 date child: confirming keeps the committed date even after the
+	# outer options are cancelled, and never writes the settings file.
+	var date_panel: Control = ui.source_date_panel
+	_click(panel, Vector2(227 + 10, 14 + 10))
+	await _settle()
+	_expect(date_panel != null and date_panel.call("is_open"), "date command opens the date child")
+	_expect(bool(panel.call("is_input_suspended")), "date child suspends the options input")
+	var seeded: Dictionary = date_panel.call("draft_date")
+	var centers: Dictionary = date_panel.call("day_centers")
+	var target_day := 15 if int(seeded.get("day", 0)) != 15 else 14
+	await _click_date(date_panel, centers[target_day])
+	await _click_date(date_panel, Vector2(134 + 10, 180 + 10))
+	var expected_date := {
+		"year": int(seeded.get("year", 0)),
+		"month": int(seeded.get("month", 0)),
+		"day": target_day,
+	}
+	_expect(not date_panel.call("is_open"), "date OK closes the date child")
+	_expect_equal(date_panel.call("committed_date"), expected_date, "date OK commits the chosen day")
+	_expect_equal(ui._system_start_date(), expected_date, "committed date seeds the next start date")
+	_expect(panel.call("is_open") and not bool(panel.call("is_input_suspended")), "options input resumes after the date child")
+	_expect(not FileAccess.file_exists(settings_file), "date confirmation writes no settings file")
+	panel.call("close_options")
+	await _settle()
+	_expect_equal(ui._system_start_date(), expected_date, "outer options cancel keeps the committed date")
+	# Reopen in title mode directly: help may have left the title screen.
+	ui._open_source_options("title")
+	await _settle()
+	_expect(panel.call("is_open") and panel.call("view_model").get("mode") == "title", "title options reopen after the date child")
+
+	# Issue #143 hotkey child: confirmation persists through its own injected
+	# path and survives the outer options cancel.
+	var hotkeys_panel: Control = ui.source_hotkeys_panel
+	_click(panel, Vector2(227 + 10, 68 + 10))
+	await _settle()
+	_expect(hotkeys_panel != null and hotkeys_panel.call("is_open"), "hotkey command opens the 28-slot child")
+	_expect(bool(panel.call("is_input_suspended")), "hotkey child suspends the options input")
+	_expect(not FileAccess.file_exists(hotkeys_file), "opening hotkeys writes no file")
+	await _click_hotkeys(hotkeys_panel, Vector2(242 + 10, 281 + 10))
+	_expect(not hotkeys_panel.call("is_open"), "hotkey OK closes the child")
+	_expect(FileAccess.file_exists(hotkeys_file), "hotkey OK writes the injected bindings file")
+	var key_store := SystemHotkeys.new()
+	var loaded_keys: Dictionary = key_store.read_bindings(hotkeys_file)
+	_expect(bool(loaded_keys.get("ok", false)), "saved hotkeys read back cleanly")
+	_expect_equal(loaded_keys.get("bindings", []), key_store.defaults(), "saved hotkeys keep the source defaults")
+	_expect(panel.call("is_open") and not bool(panel.call("is_input_suspended")), "options input resumes after the hotkey child")
+	_click(panel, Vector2(227 + 10, 68 + 10))
+	await _settle()
+	await _click_hotkeys(hotkeys_panel, Vector2(130 + 10, 281 + 10))
+	_expect(not hotkeys_panel.call("is_open"), "hotkey cancel closes the child")
+	panel.call("close_options")
+	await _settle()
+	_expect(FileAccess.file_exists(hotkeys_file), "outer options cancel keeps the committed hotkeys")
+	ui._open_source_options("title")
+	await _settle()
+	_expect(panel.call("is_open"), "title options reopen after the hotkey child")
+	# The outer cancels above discarded the earlier speed draft; set it again.
+	_click(panel, Vector2(81 + 1, 17 + 4))
 
 	_click(panel, Vector2(66 + 4, 82 + 4))
 	_expect_equal(panel.call("draft_settings")["music_level"], 0, "options draft records the music switch")
@@ -174,21 +249,23 @@ func _run() -> void:
 	await create_timer(0.15).timeout
 
 	# Relaunch: the committed switch wins over audio.cfg, which still says on.
-	var restarted := _new_ui(settings_file)
+	var restarted := _new_ui(settings_file, hotkeys_file)
 	await _settle()
 	restarted.set_process(false)
 	if restarted.audio_controller != null:
 		_expect(not bool(restarted.audio_controller.get("enabled")), "persisted music switch applies on the next launch")
 	else:
 		_expect(true, "audio controller is optional for the persisted settings check")
-	await _finish(restarted, scratch, settings_file)
+	await _finish(restarted, scratch, settings_file, hotkeys_file)
 
 
-func _finish(ui: Control, scratch: String, settings_file: String) -> void:
+func _finish(ui: Control, scratch: String, settings_file: String, hotkeys_file: String) -> void:
 	ui.queue_free()
 	await create_timer(0.15).timeout
 	if FileAccess.file_exists(settings_file):
 		DirAccess.remove_absolute(settings_file)
+	if FileAccess.file_exists(hotkeys_file):
+		DirAccess.remove_absolute(hotkeys_file)
 	if DirAccess.dir_exists_absolute(scratch):
 		DirAccess.remove_absolute(scratch)
 	print("Source options main UI checks: %d, failures: %d" % [checks, failures])

@@ -28,7 +28,10 @@ const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
 const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const SourceOptionsPanel = preload("res://game/ui/source_options_panel.gd")
+const SourceDatePanel = preload("res://game/ui/source_date_panel.gd")
+const SourceHotkeysPanel = preload("res://game/ui/source_hotkeys_panel.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
+const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
@@ -80,9 +83,15 @@ var source_save_menu: Control
 var source_help_controller: Control
 var source_bank_controller: Control
 var source_options_panel: Control
+var source_date_panel: Control
+var source_hotkeys_panel: Control
 var system_settings: RefCounted
+var system_hotkeys: RefCounted
 ## Explicit so tests and previews never touch the owner's real settings file.
 var settings_path := SystemSettings.DEFAULT_PATH
+var hotkeys_path := SystemHotkeys.DEFAULT_PATH
+## Committed 28-slot bindings for a future input consumer (Issue #148).
+var source_hotkeys_bindings: Array = []
 var source_monthly_controller: Control
 var legacy_interface_root: Control
 
@@ -194,6 +203,8 @@ var route_status_label: Label
 var _local_log: Array[String] = []
 var _ai_pending := false
 var _options_help_open := false
+## Date child confirmation survives the outer options cancel (source contract).
+var _source_start_date_override: Dictionary = {}
 var _last_rendered_phase := ""
 var _selected_tile := -1
 var _map_catalog: Array = []
@@ -419,6 +430,29 @@ func _build_source_options() -> void:
 	panel.preview_requested.connect(_on_source_options_preview)
 	canvas.add_child(panel)
 	source_options_panel = panel
+	_build_source_options_children(canvas)
+
+
+## The date and hotkey windows are source child windows opened from the title
+## commands; they cover the suspended options presenter until they close.
+func _build_source_options_children(canvas: Control) -> void:
+	system_hotkeys = SystemHotkeys.new()
+	var date_panel := SourceDatePanel.new()
+	date_panel.name = "SourceDatePanelHost"
+	date_panel.z_index = 75
+	date_panel.hide()
+	date_panel.accepted.connect(_on_source_date_accepted)
+	date_panel.cancelled.connect(_on_source_date_cancelled)
+	canvas.add_child(date_panel)
+	source_date_panel = date_panel
+	var hotkeys_panel := SourceHotkeysPanel.new()
+	hotkeys_panel.name = "SourceHotkeysPanelHost"
+	hotkeys_panel.z_index = 75
+	hotkeys_panel.hide()
+	hotkeys_panel.accepted.connect(_on_source_hotkeys_accepted)
+	hotkeys_panel.cancelled.connect(_on_source_hotkeys_cancelled)
+	canvas.add_child(hotkeys_panel)
+	source_hotkeys_panel = hotkeys_panel
 
 
 func _build_source_bank_controller() -> void:
@@ -704,8 +738,97 @@ func _on_source_options_command(command: String) -> void:
 		if not _open_source_help():
 			_finish_options_help()
 		return
+	if command == "date":
+		_open_source_date_child()
+		return
+	if command == "hotkeys":
+		_open_source_hotkeys_child()
+		return
 	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
 	_refresh_log_only()
+
+
+func _open_source_date_child() -> void:
+	if source_date_panel == null or source_options_panel == null:
+		return
+	var system_date := _system_clock_date()
+	source_date_panel.set_visuals(source_shell.get("_visuals"))
+	var opened: bool = source_date_panel.set_view_model({
+		"edition": _source_bank_edition(),
+		"date": _source_options_date(system_date),
+		"system_date": system_date,
+	})
+	if not opened:
+		# An unavailable model must not leave a visible overlay the modal gate
+		# does not know about; the host reports the failure in the log instead.
+		source_date_panel.hide()
+		_append_local_log("日期資料無法顯示。")
+		_refresh_log_only()
+		return
+	# The source keeps the parent draft while the child window owns input.
+	source_options_panel.suspend_input(true)
+
+
+func _open_source_hotkeys_child() -> void:
+	if source_hotkeys_panel == null or source_options_panel == null:
+		return
+	var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+	if not bool(loaded.get("ok", false)):
+		_append_local_log("熱鍵資料無法顯示。")
+		_refresh_log_only()
+		return
+	source_hotkeys_panel.set_visuals(source_shell.get("_visuals"))
+	var opened: bool = source_hotkeys_panel.set_view_model({
+		"edition": _source_bank_edition(),
+		"bindings": loaded.get("bindings", system_hotkeys.defaults()),
+	})
+	if not opened:
+		source_hotkeys_panel.hide()
+		_append_local_log("熱鍵資料無法顯示。")
+		_refresh_log_only()
+		return
+	source_options_panel.suspend_input(true)
+
+
+## The date child never writes a settings file; its committed date survives an
+## outer options cancel and seeds the next setup.  Issue #148 owns the live
+## runtime date consumer.
+func _on_source_date_accepted(date: Dictionary) -> void:
+	_source_start_date_override = date.duplicate(true)
+	_finish_source_options_child(source_date_panel)
+	_append_local_log("起始日期已改為 %d 年 %d 月 %d 日。" % [
+		int(date.get("year", 0)), int(date.get("month", 0)), int(date.get("day", 0)),
+	])
+	_refresh_log_only()
+
+
+func _on_source_date_cancelled() -> void:
+	_finish_source_options_child(source_date_panel)
+	_refresh_log_only()
+
+
+## The hotkey child persists on its own confirmation, independent of the outer
+## options cancel.  Issue #148 owns the InputMap consumer.
+func _on_source_hotkeys_accepted(bindings: Array) -> void:
+	var result: Dictionary = system_hotkeys.write_bindings(hotkeys_path, bindings)
+	if bool(result.get("ok", false)):
+		source_hotkeys_bindings = (result.get("bindings", bindings) as Array).duplicate(true)
+		_append_local_log("熱鍵已儲存。")
+	else:
+		_append_local_log("熱鍵儲存失敗；變更只在目前執行中生效。")
+		source_hotkeys_bindings = bindings.duplicate(true)
+	_finish_source_options_child(source_hotkeys_panel)
+	_refresh_log_only()
+
+
+func _on_source_hotkeys_cancelled() -> void:
+	_finish_source_options_child(source_hotkeys_panel)
+	_refresh_log_only()
+
+
+func _finish_source_options_child(_panel: Control) -> void:
+	if source_options_panel != null and bool(source_options_panel.call("is_open")):
+		source_options_panel.call("suspend_input", false)
 
 
 func _finish_options_help() -> void:
@@ -1613,10 +1736,32 @@ func _select_option_id(option: OptionButton, value: int) -> bool:
 	return false
 
 func _system_start_date() -> Dictionary:
+	# A date confirmed in the options date child outranks the OS clock.
+	if GameCalendar.is_valid(_source_start_date_override):
+		return _source_start_date_override.duplicate(true)
+	return _system_clock_date()
+
+func _system_clock_date() -> Dictionary:
 	var system_date: Variant = Time.get_date_dict_from_system()
 	if system_date is Dictionary and GameCalendar.is_valid(system_date):
 		return {"year": int(system_date.get("year", 0)), "month": int(system_date.get("month", 0)), "day": int(system_date.get("day", 0))}
 	return {}
+
+## Seed for the date child: the committed override, the loaded game's start
+## date, or the host clock, in that order.  The presenter requires a valid date.
+func _source_options_date(system_date: Dictionary) -> Dictionary:
+	if GameCalendar.is_valid(_source_start_date_override):
+		return _source_start_date_override.duplicate(true)
+	var start_date: Variant = state.get("start_date", null)
+	if start_date is Dictionary and GameCalendar.is_valid(start_date):
+		return {
+			"year": int(start_date.get("year", 0)),
+			"month": int(start_date.get("month", 0)),
+			"day": int(start_date.get("day", 0)),
+		}
+	if not system_date.is_empty():
+		return system_date.duplicate(true)
+	return {"year": 1998, "month": 1, "day": 1}
 
 func _default_setup_options(player_count: int, map_definition: Dictionary = {}) -> Dictionary:
 	var date := _system_start_date()

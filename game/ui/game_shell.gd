@@ -595,7 +595,10 @@ func sync_snapshot(next_snapshot: Dictionary, next_definition: Dictionary = {}, 
 
 
 func _sync_source_edition() -> void:
-	var source: Variant = snapshot.get("map_source", map_definition.get("source", {}))
+	# Only the snapshot's own map source may change the edition. Old saves carry
+	# no edition, and following the current catalog definition there would
+	# silently reset the title and toolbar from the expansion back to Game.
+	var source: Variant = snapshot.get("map_source", {})
 	if not source is Dictionary:
 		return
 	var edition := str(source.get("edition", ""))

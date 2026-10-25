@@ -34,8 +34,10 @@ const SourceMinigameController = preload("res://game/ui/source_minigame_controll
 const SourceOptionsPanel = preload("res://game/ui/source_options_panel.gd")
 const SourceDatePanel = preload("res://game/ui/source_date_panel.gd")
 const SourceHotkeysPanel = preload("res://game/ui/source_hotkeys_panel.gd")
+const SourceAutosave = preload("res://game/ui/source_autosave.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
 const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
+const SourcePreferences = preload("res://game/ui/source_preferences.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
@@ -97,8 +99,17 @@ var system_hotkeys: RefCounted
 ## Explicit so tests and previews never touch the owner's real settings file.
 var settings_path := SystemSettings.DEFAULT_PATH
 var hotkeys_path := SystemHotkeys.DEFAULT_PATH
-## Committed 28-slot bindings for a future input consumer (Issue #148).
+## Committed 28-slot bindings consumed by the ordinary key dispatch.
 var source_hotkeys_bindings: Array = []
+var source_save_directory := "user://richman4-save-slots"
+var source_legacy_save_path := SAVE_PATH
+var _source_autosave := SourceAutosave.new()
+var _autosave_failure_dialog: ConfirmationDialog
+## Runtime consumer for the source options values (Issue #148).
+var _source_preferences := SourcePreferences.new()
+var _source_settings: Dictionary = SystemSettings.new().defaults()
+var _source_options_confirmation: ConfirmationDialog
+var _source_options_command := ""
 var source_monthly_controller: Control
 var legacy_interface_root: Control
 
@@ -268,6 +279,7 @@ func _ready() -> void:
 	_build_source_shell()
 	_setup_audio()
 	_apply_persisted_settings()
+	_load_source_hotkeys()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
@@ -283,33 +295,49 @@ func _process(_delta: float) -> void:
 		return
 	_maybe_schedule_ai_turn()
 
-## Source slot7 cycles the window group before Godot's focus traversal.
-## MainUI owns the modal/movement/pending-action gates; the key comes from the
-## same persisted bindings the hotkey child window writes, so a remapped slot7
-## works without a global InputMap.  #148 still owns the full runtime host.
+## Source slot7 cycles the window group before Godot's focus traversal eats the
+## key, so the view slot also runs from _input.  Every ordinary source key goes
+## through the same command resolver, so tab and the other slots can never
+## disagree about bindings, modifiers or gates.
 func _input(event: InputEvent) -> void:
-	if not (event is InputEventKey):
-		return
-	var key := event as InputEventKey
-	if not key.pressed or key.echo:
-		return
-	# Shift/Alt/Meta keep their ordinary focus traversal and shortcuts.
-	if key.shift_pressed or key.alt_pressed or key.meta_pressed:
-		return
-	# A remapped printable key must not eat typing in a focused text field.
-	var focused := get_viewport().gui_get_focus_owner()
-	if focused is LineEdit or focused is TextEdit:
-		return
-	var word := _source_view_binding()
-	# An unused word (0, or a CTRL prefix over an unused key) is disabled.
-	if (word & 0xff) == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
-		return
-	var pressed_word: int = system_hotkeys.event_key(key) if system_hotkeys != null else (0x09 if key.keycode == KEY_TAB else 0)
-	if pressed_word != (word & 0xff):
+	if _source_hotkey_command(event) != "view":
 		return
 	if _source_view_operation_allowed():
 		_on_source_view_requested()
 		get_viewport().set_input_as_handled()
+
+
+## Shared acceptance rules for ordinary source keys: a single key press (not
+## echo) without Shift/Alt/Meta, unless a text field owns typing.
+func _source_hotkey_usable(event: InputEvent) -> bool:
+	if not (event is InputEventKey):
+		return false
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return false
+	# Shift/Alt/Meta keep their ordinary focus traversal and shortcuts.
+	if key.shift_pressed or key.alt_pressed or key.meta_pressed:
+		return false
+	var focused := get_viewport().gui_get_focus_owner()
+	return not (focused is LineEdit or focused is TextEdit)
+
+
+## Resolve one key event to a source command, including the slot7 view cycle
+## that the hotkey child window writes.
+func _source_hotkey_command(event: InputEvent) -> String:
+	if not _source_hotkey_usable(event):
+		return ""
+	if _source_binding_matches(event as InputEventKey, _source_view_binding()):
+		return "view"
+	return _source_preferences.hotkey_command(event, source_hotkeys_bindings)
+
+
+func _source_binding_matches(key: InputEventKey, word: int) -> bool:
+	# An unused word (0, or a CTRL prefix over an unused key) is disabled.
+	if (word & 0xff) == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
+		return false
+	var pressed_word: int = system_hotkeys.event_key(key) if system_hotkeys != null else (0x09 if key.keycode == KEY_TAB else 0)
+	return pressed_word == (word & 0xff)
 
 
 func _source_view_binding() -> int:
@@ -343,23 +371,42 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		_refresh_from_state()
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_SPACE:
-			if roll_button != null and not roll_button.disabled:
-				_on_roll_pressed()
+	if event is InputEventKey:
+		var command: String = _source_hotkey_command(event)
+		# The view slot is dispatched from _input before focus traversal; never
+		# cycle a second time here.
+		if command == "view":
+			return
+		# Preserve the admitted source-picker aliases while the corresponding
+		# source key is still at its default.  A user remap removes the alias.
+		if command.is_empty() and _source_hotkey_usable(event):
+			if event.ctrl_pressed and source_hotkeys_bindings.size() == 28:
+				if event.keycode == KEY_S and source_hotkeys_bindings[22] == 0x53:
+					command = "save"
+				elif event.keycode == KEY_L and source_hotkeys_bindings[23] == 0x4c:
+					command = "load"
+			elif not event.ctrl_pressed and event.keycode == KEY_N:
+				if state.get("phase", "") == "game_over":
+					_restart_game()
+				else:
+					_on_new_game_pressed()
 				get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_N:
-			if state.get("phase", "") == "game_over":
-				_restart_game()
-			else:
-				_on_new_game_pressed()
+				return
+		if not command.is_empty():
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_S and event.ctrl_pressed:
-			_on_source_save_requested()
-			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_L and event.ctrl_pressed:
-			_on_source_load_requested()
-			get_viewport().set_input_as_handled()
+			match command:
+				"roll":
+					if roll_button != null and not roll_button.disabled:
+						_on_roll_pressed()
+				"stocks": _on_source_stocks_requested()
+				"cards": _on_source_cards_requested()
+				"tools": _on_source_tools_requested()
+				"inspect": _on_source_inspect_requested()
+				"map": _on_source_map_requested()
+				"options": _on_source_option_requested()
+				"save": _on_source_save_requested()
+				"load": _on_source_load_requested()
+				"help": _on_source_help_requested()
 
 func _build_interface() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -490,6 +537,11 @@ func _build_source_options() -> void:
 	canvas.add_child(panel)
 	source_options_panel = panel
 	_build_source_options_children(canvas)
+	_source_options_confirmation = ConfirmationDialog.new()
+	_source_options_confirmation.title = "確認"
+	_source_options_confirmation.confirmed.connect(_confirm_source_options_command)
+	_source_options_confirmation.canceled.connect(_cancel_source_options_command)
+	add_child(_source_options_confirmation)
 
 
 ## The date and hotkey windows are source child windows opened from the title
@@ -621,8 +673,18 @@ func _on_source_stock_closed() -> void:
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 
+## The source title keeps keyboard focus while an overlay owns input, so every
+## title entry shares the option presenter's rejection set.
+func _source_title_entry_blocked() -> bool:
+	if _source_options_modal_open() or _source_autosave.pending():
+		return true
+	return source_save_menu != null and source_save_menu.visible
+
+
 func _on_source_start_requested(stage: int = 0) -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open():
+	if _source_title_entry_blocked():
+		return
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open():
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
@@ -661,8 +723,9 @@ func _on_source_new_stage_requested() -> void:
 
 
 func _on_source_quit_requested() -> void:
-	if source_shell != null and source_shell.is_title_visible() and not (source_save_menu != null and source_save_menu.visible):
-		get_tree().quit()
+	if _source_title_entry_blocked() or source_shell == null or not source_shell.is_title_visible():
+		return
+	get_tree().quit()
 
 
 func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
@@ -729,6 +792,7 @@ func _build_source_save_menu() -> void:
 		return
 	var menu := SourceSaveMenu.new()
 	menu.name = "SourceSaveMenu"
+	menu.storage = SourceSaveMenu.SaveSlots.new(source_save_directory, source_legacy_save_path)
 	menu.z_index = 30
 	menu.hide()
 	source_shell.add_child(menu)
@@ -742,7 +806,7 @@ func _build_source_save_menu() -> void:
 	source_save_menu = menu
 
 func _open_source_save_menu(mode: String) -> void:
-	if source_save_menu == null or source_save_menu.visible or not _source_save_operation_allowed():
+	if source_save_menu == null or source_save_menu.visible or _source_autosave.pending() or not _source_save_operation_allowed():
 		return
 	var snapshot: Dictionary = {}
 	if mode == "save":
@@ -777,7 +841,7 @@ func _on_source_slot_load_ready(snapshot: Dictionary) -> void:
 	_consider_loaded_snapshot(restored, snapshot)
 
 func _on_source_load_requested() -> void:
-	if _source_inventory_modal_open() or _source_shop_modal_open(): return
+	if _source_title_entry_blocked() or _source_inventory_modal_open() or _source_shop_modal_open(): return
 	_open_source_save_menu("load")
 
 func _on_source_save_requested() -> void:
@@ -830,6 +894,8 @@ func _source_options_modal_open() -> bool:
 
 
 func _source_options_operation_allowed() -> bool:
+	if _source_autosave.pending():
+		return false
 	if source_shell == null or _presentation_busy or _legacy_save_modal_open():
 		return false
 	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open():
@@ -865,16 +931,31 @@ func _apply_persisted_settings() -> void:
 
 
 func _apply_source_settings(settings: Dictionary) -> void:
-	# Music, minigame animation and the window group have runtime consumers; the
-	# remaining source fields persist for later hosts.  Runtime-only calls never
-	# rewrite audio.cfg.
+	# Music, movement pacing, minigame animation and the window group have runtime
+	# consumers; the remaining source fields persist for later hosts.  Runtime-only
+	# calls never rewrite audio.cfg, and presentation pacing never touches
+	# simulation/RNG.
+	_source_settings = settings.duplicate(true)
 	_source_minigame_animation = bool(settings.get("animation", true))
 	if source_shell != null and source_shell.has_method("set_view_mode"):
 		source_shell.set_view_mode(int(settings.get("view", 1)))
 	if audio_controller == null:
 		return
-	audio_controller.call("set_enabled", int(settings.get("music_level", 0)) > 0, false)
+	_source_preferences.apply(_source_settings, audio_controller)
 	_update_audio_button()
+
+
+## A damaged store must stay repairable: the ordinary keys fall back to the
+## source defaults instead of silently disabling every shortcut.
+func _load_source_hotkeys() -> void:
+	if system_hotkeys == null:
+		system_hotkeys = SystemHotkeys.new()
+	var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+	if bool(loaded.get("ok", false)):
+		source_hotkeys_bindings = (loaded.get("bindings", system_hotkeys.defaults()) as Array).duplicate(true)
+	else:
+		source_hotkeys_bindings = system_hotkeys.defaults()
+		_append_local_log("熱鍵設定檔無法讀取，已改用原始設定。")
 
 
 func _source_audio_track() -> int:
@@ -909,7 +990,42 @@ func _on_source_options_command(command: String) -> void:
 	if command == "hotkeys":
 		_open_source_hotkeys_child()
 		return
+	if command in ["restart", "surrender", "quit"]:
+		_source_options_command = command
+		if command == "surrender":
+			# No public surrender transition exists; never fake it with a
+			# private bankruptcy helper or silently drop the current match.
+			_source_options_confirmation.dialog_text = "認輸投降流程尚未接入；目前棋局保持不變。"
+		elif command == "restart":
+			_source_options_confirmation.dialog_text = "重新開始遊戲？未儲存的進度將會失去。"
+		else:
+			_source_options_confirmation.dialog_text = "結束遊戲？未儲存的進度將會失去。"
+		# The confirmation window owns input while the options draft stays open.
+		source_options_panel.suspend_input(true)
+		_source_options_confirmation.popup_centered()
+		return
 	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
+	_refresh_log_only()
+
+
+func _cancel_source_options_command() -> void:
+	_source_options_command = ""
+	_finish_source_options_child(source_options_panel)
+
+
+## Restart re-enters the existing start flow, which asks for its own
+## confirmation before replacing the match; quit uses the ordinary scene exit.
+func _confirm_source_options_command() -> void:
+	var command := _source_options_command
+	_source_options_command = ""
+	if command == "restart":
+		if source_options_panel != null:
+			source_options_panel.call("close_options")
+		_on_source_start_requested()
+	elif command == "quit":
+		get_tree().quit()
+	else:
+		_finish_source_options_child(source_options_panel)
 	_refresh_log_only()
 
 
@@ -1155,7 +1271,7 @@ func _on_source_view_requested() -> void:
 
 
 func _on_source_map_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -1165,7 +1281,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -1182,7 +1298,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -1220,12 +1336,14 @@ func _on_source_route_requested(next_index: int) -> void:
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
+	if _source_autosave.pending(): return
 	if _source_inventory_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open(): return
 	if board_view != null and board_view.has_method("pan_by"):
 		board_view.call("pan_by", delta)
 	_refresh_source_minimap()
 
 func _on_source_minimap_node_requested(index: int) -> void:
+	if _source_autosave.pending(): return
 	if _source_inventory_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open(): return
 	if board_view == null:
 		return
@@ -2537,7 +2655,7 @@ func _is_fallback_definition(definition: Dictionary) -> bool:
 	return str(definition.get("id", "")) == FALLBACK_MAP_ID
 
 func _on_new_game_pressed() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
 		return
 	if new_game_popup == null:
 		_restart_game()
@@ -2695,6 +2813,9 @@ func _sync_audio_music_level(enabled: bool) -> void:
 	var result: Dictionary = system_settings.write_settings(settings_path, settings)
 	if not bool(result.get("ok", false)):
 		_append_local_log("音樂偏好未能同步到系統選項；下次啟動可能沿用舊設定。")
+	# Keep the live gain in step with the switch: enabling after a committed
+	# music level of zero would otherwise report playback and stay silent.
+	_apply_source_settings(settings)
 
 func _on_audio_config_pressed() -> void:
 	if audio_folder_dialog == null:
@@ -2715,6 +2836,9 @@ func _on_audio_folder_selected(path: String) -> void:
 	_refresh_log_only()
 
 func _on_audio_playback_changed(track_name: String) -> void:
+	# Track highlighting follows the audio layer's real state, never a guess.
+	if source_options_panel != null and bool(source_options_panel.call("is_open")):
+		source_options_panel.set_current_track(_source_audio_track())
 	if event_status_label != null:
 		event_status_label.text = "播放：%s" % track_name
 
@@ -2729,7 +2853,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -2792,6 +2916,7 @@ func _source_save_operation_allowed() -> bool:
 	return true
 
 func _source_modal_open() -> bool:
+	if _source_autosave.pending(): return true
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
@@ -2807,6 +2932,7 @@ func _reject_load_during_presentation() -> void:
 	_refresh_log_only()
 
 func _load_game_from_path(path: String) -> void:
+	if _source_autosave.pending(): return
 	if _load_blocked_by_presentation():
 		_reject_load_during_presentation()
 		return
@@ -3180,7 +3306,7 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
-	if _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open():
+	if _source_autosave.pending() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open():
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_trustee_modal_open() or _source_minigame_modal_open():
 		return
@@ -3316,6 +3442,9 @@ func _is_human_turn() -> bool:
 	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _source_trustee_modal_open() and not _source_lottery_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	_source_autosave.sync_owner(game_state)
+	if _source_autosave.pending():
+		return {"ok": false, "message": "請先完成每日自動存檔。"}
 	# A pending bank visit outranks a queued report: the report is withheld
 	# until the bank closes, so the bank must be able to finish even while the
 	# report queue is non-empty.
@@ -3361,6 +3490,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 				source_monthly_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
 			if source_lottery_controller != null:
 				source_lottery_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
+			if bool(result.get("ok", false)):
+				_source_autosave.capture_transition(game_state, before, _read_snapshot(), bool(_source_settings.get("autosave", false)))
 			result["_presentation_before"] = before
 			result["_presentation_generation"] = _presentation_generation
 			result["_presentation_owner"] = game_state
@@ -3384,13 +3515,16 @@ func _handle_result(result: Dictionary) -> void:
 			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
-			board_view.play_movement(moves)
+			board_view.play_movement(moves, _source_preferences.movement_seconds(_source_settings))
 			return
 	if result.is_empty():
 		_append_local_log("模擬層未回傳事件；請查看目前回合狀態。")
 	_refresh_from_state(result)
 
 func _cancel_presentation() -> void:
+	_source_autosave.cancel()
+	if _autosave_failure_dialog != null:
+		_autosave_failure_dialog.hide()
 	_release_trustee_window_policy()
 	_trustee_owner = null
 	_trustee_generation = -1
@@ -3400,6 +3534,9 @@ func _cancel_presentation() -> void:
 		source_monthly_controller.cancel()
 	if _source_inventory_modal_open():
 		_close_source_inventory(false)
+	if _source_options_confirmation != null:
+		_source_options_confirmation.hide()
+	_source_options_command = ""
 	if source_help_controller != null:
 		source_help_controller.cancel()
 	if source_lottery_controller != null:
@@ -3434,6 +3571,7 @@ func _on_movement_finished() -> void:
 		_refresh_from_state(result)
 
 func _refresh_from_state(result: Dictionary = {}) -> void:
+	_source_autosave.sync_owner(game_state)
 	if _source_inventory_modal_open() and _inventory_owner != game_state:
 		_close_source_inventory(false)
 	if _legacy_save_modal_open() or _presentation_busy:
@@ -3453,6 +3591,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 		_sync_source_lottery()
 		_sync_source_minigame()
 		_sync_source_monthly()
+		_flush_source_autosave()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -3539,6 +3678,8 @@ func _update_load_gate() -> void:
 	# Defer until any enclosing snapshot refresh has finished its other gates.
 	if _source_monthly_modal_open():
 		_sync_source_monthly.call_deferred()
+	if _source_autosave.pending():
+		_flush_source_autosave.call_deferred()
 
 func _update_header(phase: String, current_index: int) -> void:
 	seed_label.text = "SEED %s" % str(state.get("seed", "?"))
@@ -3948,6 +4089,7 @@ func _respond_to_trap(decline: bool) -> void:
 
 
 func _maybe_schedule_ai_turn() -> void:
+	if _source_autosave.pending(): return
 	if _legacy_save_modal_open() or _presentation_busy:
 		return
 	if _source_modal_open():
@@ -3977,6 +4119,9 @@ func _maybe_schedule_ai_turn() -> void:
 	timer.timeout.connect(_on_ai_timer_timeout.bind(_presentation_generation))
 
 func _on_ai_timer_timeout(generation := -1) -> void:
+	if _source_autosave.pending():
+		_ai_pending = false
+		return
 	if _legacy_save_modal_open():
 		_ai_pending = false
 		return
@@ -5630,3 +5775,44 @@ func _sync_source_minigame() -> void:
 
 func _source_minigame_input_data() -> Dictionary:
 	return SourceMinigameAssets.input_data()
+
+func _flush_source_autosave() -> void:
+	if source_save_menu == null: return
+	var blocked := not _source_save_operation_allowed() or _source_modal_open_without_autosave()
+	var result: Dictionary = _source_autosave.flush(game_state, source_save_menu.storage, blocked)
+	if result.is_empty(): return
+	_ai_pending = false
+	if bool(result.get("ok", false)):
+		_append_local_log("已完成每日自動存檔（AUTO）。")
+		_refresh_log_only()
+	elif _source_autosave.failed():
+		_append_local_log("每日自動存檔失敗：" + str(result.get("error", "unknown")))
+		if is_instance_valid(_autosave_failure_dialog):
+			_autosave_failure_dialog.hide()
+			_autosave_failure_dialog.queue_free()
+		var dialog := ConfirmationDialog.new()
+		_autosave_failure_dialog = dialog
+		var owner := game_state
+		var generation := _presentation_generation
+		dialog.title = "每日自動存檔失敗"
+		dialog.ok_button_text = "重試"
+		dialog.cancel_button_text = "略過本次"
+		dialog.confirmed.connect(func() -> void:
+			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
+			_source_autosave.retry()
+			_flush_source_autosave.call_deferred())
+		var skip_checkpoint := func() -> void:
+			if dialog != _autosave_failure_dialog or owner != game_state or generation != _presentation_generation: return
+			dialog.hide()
+			_source_autosave.skip()
+			_ai_pending = false
+			_refresh_from_state()
+		dialog.canceled.connect(skip_checkpoint)
+		# Window X can emit only close_requested; it shares Skip semantics.
+		dialog.close_requested.connect(skip_checkpoint)
+		add_child(dialog)
+		_autosave_failure_dialog.dialog_text = "未寫入新的 AUTO 存檔。可以重試，或略過本次並繼續遊戲。"
+		_autosave_failure_dialog.popup_centered()
+
+func _source_modal_open_without_autosave() -> bool:
+	return source_shell != null and (source_shell.is_title_visible() or source_shell.is_setup_visible() or source_shell.is_player_inspector_visible()) or (source_save_menu != null and source_save_menu.visible) or (source_stock_panel != null and source_stock_panel.visible)

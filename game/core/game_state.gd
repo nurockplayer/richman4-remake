@@ -3477,7 +3477,7 @@ func request_trustee_recovery() -> bool:
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
-	if state.get("phase", "") == "await_shop": return false
+	if state.get("phase", "") in ["await_shop", "await_lottery"]: return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -5147,6 +5147,11 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	LotteryFlow.clear_player(state, debtor_id)
 	AllianceRules.clear_for_player(self, debtor_id)
 	var debtor_is_current: bool = int(state.get("current_player", -1)) == debtor_id
+	# These phases own no caller-side advance. await_action is deliberately
+	# excluded because its callers already advance exactly once (end_turn after
+	# _repay_due_loan, _finish_payment_turn, company trade/service), and
+	# await_shop/await_minigame can never charge their actor: shop trades spend
+	# points and a pending minigame only awards points.
 	var was_current_movement: bool = debtor_is_current and state.get("phase", "") in ["await_roll", "await_route", "await_bank", "await_lottery"]
 	if _is_gods():
 		# A bankrupt holder can no longer keep an attached god. Detach before the
@@ -5184,6 +5189,13 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		# its finite slot before the player leaves the active roster.
 		debtor["bomb_steps"] = 0
 		_hazard_return_tool_to_supply("定時炸彈")
+	# The deposit ledger must follow the zeroed player balance, or the saved
+	# state fails validation with "bank deposits mismatch".
+	var forfeited_deposit: int = int(debtor.get("deposit", 0))
+	if forfeited_deposit > 0:
+		var bank: Dictionary = state.get("bank", {})
+		bank["deposits"] = max(0, int(bank.get("deposits", 0)) - forfeited_deposit)
+		state["bank"] = bank
 	debtor["cash"] = 0
 	debtor["deposit"] = 0
 	debtor["loan"] = 0

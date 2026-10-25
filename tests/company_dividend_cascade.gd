@@ -66,6 +66,18 @@ func _bankrupt_reason(game: Object, player_id: int) -> String:
 	return ""
 
 
+## The statement is captured before payments, so it is the record of the
+## precomputed payouts this loop must honour (or, for a dead holder, skip).
+func _report_payouts(game: Object, company_id: int) -> Array:
+	for event in game.state.event_log:
+		if str(event.get("type", "")) != "monthly_statement":
+			continue
+		for company in (event.get("report", {}) as Dictionary).get("companies", []):
+			if int((company as Dictionary).get("company_id", -1)) == company_id:
+				return company.get("payouts", [])
+	return []
+
+
 func _run() -> void:
 	var game: Object = Game.new_game_on_board(42, 4, _definition(), {"original_facilities": true, "original_gods": true, "original_companies": true, "start_date": {"year": 1998, "month": 1, "day": 14}})
 	_expect(game != null, "two-company fixture starts")
@@ -97,7 +109,12 @@ func _run() -> void:
 	game._set_action_options(3)
 	var setup: Dictionary = Game.validate_save(game.to_dict())
 	_expect(bool(setup.get("ok", false)), "cascade fixture validates before settlement: " + str(setup.get("errors", [])))
+	_expect(bool(game.state.players[0].alive) and bool(game.state.players[2].alive), "both holders are alive before settlement")
 	game._settle_company_dividends()
+	# The losing payout is charged first and the paying company owes the holder
+	# that the cascade removes; otherwise skipping it would prove nothing.
+	_expect(_report_payouts(game, 1) == [-100, 0, 0, 0], "losing company owes its holder the only charge")
+	_expect(_report_payouts(game, 2) == [0, 0, 900, 0], "paying company owes the cascade victim a positive dividend")
 	_expect(not bool(game.state.players[0].alive), "negative dividend bankrupts its holder")
 	_expect(not bool(game.state.players[2].alive), "holder bankruptcy cascades into chair financing")
 	_expect(_bankrupt_reason(game, 2) == "special_finance_chair_loss", "cascade bankruptcy keeps its cause")

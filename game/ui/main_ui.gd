@@ -21,6 +21,7 @@ const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
+const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
@@ -236,6 +237,7 @@ var _inventory_close_callback := Callable()
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
+var _source_setup_return_to_game := false
 var source_trustee_controller: Control
 var _trustee_owner: Object
 var _trustee_generation := -1
@@ -377,6 +379,10 @@ func _build_source_shell() -> void:
 		shell.minimap_node_requested.connect(_on_source_minimap_node_requested)
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
+	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
+	if setup_panel != null:
+		setup_panel.confirmed.connect(_on_source_setup_confirmed)
+		setup_panel.cancelled.connect(_on_source_setup_cancelled)
 	_build_source_stock_panel()
 	_build_source_save_menu()
 	_build_source_inventory_panel()
@@ -537,7 +543,70 @@ func _on_source_start_requested() -> void:
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
-	_on_new_game_pressed()
+	# The legacy popup remains the fallback when no source-edition map is
+	# available, so the public checkout keeps its synthetic-board path.
+	if source_shell == null or not source_shell.has_method("show_setup") or not SourceSetupPanel.has_source_maps(_map_catalog):
+		_on_new_game_pressed()
+		return
+	# MainUI builds the ordinary game state before showing the source title.
+	# Entry intent therefore comes from the visible shell surface, rather than
+	# from the presence of an initialized state behind the title.
+	var title_visible := false
+	if source_shell.has_method("is_title_visible"):
+		title_visible = bool(source_shell.call("is_title_visible"))
+	_source_setup_return_to_game = not title_visible and game_state != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable"
+	var selected := _active_map_definition.duplicate(true)
+	if selected.is_empty():
+		selected = _selected_map_definition.duplicate(true)
+	selected = _source_setup_definition(selected)
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		player_count = PLAYER_COUNT
+	var defaults := _setup_options_from_state(true)
+	if defaults.is_empty():
+		defaults = _default_setup_options(player_count, selected)
+	defaults["player_count"] = player_count
+	var catalog: Array = _map_catalog.duplicate(true)
+	source_shell.call("show_setup", catalog, selected, defaults)
+
+
+func _source_setup_definition(identity: Dictionary) -> Dictionary:
+	# Current board geometry is a display snapshot, not an initial map. Match
+	# the pinned source identity to regain its capabilities and market data.
+	for value in _map_catalog:
+		if value is Dictionary and str(value.get("id", "")) == str(identity.get("id", "")) and _map_source_matches(value.get("source", {}), identity.get("source", {}), true):
+			return value.duplicate(true)
+	return identity.duplicate(true)
+
+
+func _on_source_setup_confirmed(options: Dictionary, map_definition: Dictionary) -> void:
+	var character_ids: Variant = options.get("character_ids", [])
+	var requested_count := int(options.get("player_count", character_ids.size() if character_ids is Array else 0))
+	if requested_count < 2 or requested_count > 4:
+		return
+	var source_definition := _source_setup_definition(map_definition)
+	var effective_options := _default_setup_options(requested_count, source_definition)
+	# The source panel supplies player choices. Ruleset capabilities always
+	# come from the validated initial catalog, never from presentation fields.
+	for key in ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "human_character_ids", "player_count"]:
+		if options.has(key):
+			effective_options[key] = options[key]
+	var before_game := game_state
+	var before_seed := int(state.get("seed", MIN_SEED - 1))
+	if _new_game(null, requested_count, source_definition, effective_options):
+		_source_setup_return_to_game = false
+	elif game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
+		_refresh_log_only()
+
+
+func _on_source_setup_cancelled() -> void:
+	if source_shell == null:
+		return
+	if _source_setup_return_to_game and game_state != null and str(state.get("phase", "")) != "unavailable":
+		source_shell.call("show_game")
+	else:
+		source_shell.call("show_title")
+	_source_setup_return_to_game = false
 
 func _build_source_save_menu() -> void:
 	if source_shell == null:
@@ -1707,7 +1776,7 @@ func _setup_date_from_controls() -> Dictionary:
 		return {}
 	return {"year": int(start_year_input.value), "month": int(start_month_input.value), "day": int(start_day_input.value)}
 
-func _setup_options_from_state() -> Dictionary:
+func _setup_options_from_state(derive_human_flags: bool = false) -> Dictionary:
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		return {}
@@ -1719,7 +1788,7 @@ func _setup_options_from_state() -> Dictionary:
 		if not player is Dictionary or not player.has("character_id"):
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
-	return {
+	var options := {
 		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
@@ -1736,6 +1805,34 @@ func _setup_options_from_state() -> Dictionary:
 		"start_date": {"year": int(start_date.get("year", 0)), "month": int(start_date.get("month", 0)), "day": int(start_date.get("day", 0))},
 		"character_ids": character_ids,
 	}
+	var initial_flags: Variant = state.get("initial_human_flags", null)
+	if initial_flags is Array and initial_flags.size() == player_count:
+		var flags_valid := true
+		for flag in initial_flags:
+			if typeof(flag) != TYPE_BOOL:
+				flags_valid = false
+				break
+		if flags_valid:
+			options["human_flags"] = initial_flags.duplicate()
+	if derive_human_flags and not options.has("human_flags"):
+		# Older saves and games started from the legacy popup keep control
+		# only on the players. The source setup derives it from them so opening
+		# the panel does not silently turn additional humans into AI; restart
+		# keeps its own defaults untouched.
+		var saved_flags: Array = []
+		for player in state.get("players", []):
+			if not player is Dictionary or typeof(player.get("is_human", null)) != TYPE_BOOL:
+				saved_flags.clear()
+				break
+			saved_flags.append(bool(player.is_human))
+		if saved_flags.size() == player_count and saved_flags.count(true) > 0:
+			options["human_flags"] = saved_flags
+	var initial_vehicle: Variant = state.get("initial_vehicle", null)
+	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
+		options["initial_vehicle"] = initial_vehicle
+	if state.has("land_tenure_months"):
+		options["land_tenure_months"] = int(state.land_tenure_months)
+	return options
 
 func _populate_setup_controls() -> void:
 	var player_count := int(_as_array(state.get("players", [])).size())
@@ -2263,6 +2360,14 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	var effective_setup := setup_options.duplicate(true)
 	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
 		effective_setup = _default_setup_options(resolved_players, selected_definition)
+	if effective_setup.has("human_character_ids"):
+		# The source panel selects humans in click order and leaves AI slots
+		# empty; fill them from a local seed RNG so the strict factory contract
+		# (unique character ids per player) still holds.
+		effective_setup = SourceSetupPanel.resolve_players(effective_setup, resolved_players, resolved_seed)
+		if effective_setup.is_empty():
+			_append_local_log("真人角色選擇無效；目前棋局保持不變。")
+			return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
@@ -2433,10 +2538,11 @@ func _source_save_operation_allowed() -> bool:
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
+	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_options_modal_open() or _source_minigame_modal_open()
+	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_options_modal_open() or _source_minigame_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
 	return _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_minigame_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)

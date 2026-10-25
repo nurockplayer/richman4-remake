@@ -98,6 +98,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_sourc
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transport.gd
+# Issue #128 source new-game setup surface: hit geometry, ordered humans,
+# deterministic AI fill, catalog capability preservation and restart defaults.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_interaction.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.

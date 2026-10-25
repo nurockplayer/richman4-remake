@@ -36,6 +36,7 @@ const SourceDatePanel = preload("res://game/ui/source_date_panel.gd")
 const SourceHotkeysPanel = preload("res://game/ui/source_hotkeys_panel.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
 const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
+const SourcePreferences = preload("res://game/ui/source_preferences.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
@@ -97,8 +98,13 @@ var system_hotkeys: RefCounted
 ## Explicit so tests and previews never touch the owner's real settings file.
 var settings_path := SystemSettings.DEFAULT_PATH
 var hotkeys_path := SystemHotkeys.DEFAULT_PATH
-## Committed 28-slot bindings for a future input consumer (Issue #148).
+## Committed 28-slot bindings consumed by the ordinary key dispatch.
 var source_hotkeys_bindings: Array = []
+## Runtime consumer for the source options values (Issue #148).
+var _source_preferences := SourcePreferences.new()
+var _source_settings: Dictionary = SystemSettings.new().defaults()
+var _source_options_confirmation: ConfirmationDialog
+var _source_options_command := ""
 var source_monthly_controller: Control
 var legacy_interface_root: Control
 
@@ -268,6 +274,7 @@ func _ready() -> void:
 	_build_source_shell()
 	_setup_audio()
 	_apply_persisted_settings()
+	_load_source_hotkeys()
 	_load_map_catalog()
 	if _map_is_startable(_selected_map_definition):
 		_new_game(DEFAULT_SEED, PLAYER_COUNT, _selected_map_definition, _default_setup_options(PLAYER_COUNT))
@@ -282,6 +289,62 @@ func _process(_delta: float) -> void:
 	if _source_modal_open():
 		return
 	_maybe_schedule_ai_turn()
+
+## Source slot7 cycles the window group before Godot's focus traversal eats the
+## key, so the view slot also runs from _input.  Every ordinary source key goes
+## through the same command resolver, so tab and the other slots can never
+## disagree about bindings, modifiers or gates.
+func _input(event: InputEvent) -> void:
+	if _source_hotkey_command(event) != "view":
+		return
+	if _source_view_operation_allowed():
+		_on_source_view_requested()
+		get_viewport().set_input_as_handled()
+
+
+## Shared acceptance rules for ordinary source keys: a single key press (not
+## echo) without Shift/Alt/Meta, unless a text field owns typing.
+func _source_hotkey_usable(event: InputEvent) -> bool:
+	if not (event is InputEventKey):
+		return false
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return false
+	# Shift/Alt/Meta keep their ordinary focus traversal and shortcuts.
+	if key.shift_pressed or key.alt_pressed or key.meta_pressed:
+		return false
+	var focused := get_viewport().gui_get_focus_owner()
+	return not (focused is LineEdit or focused is TextEdit)
+
+
+## Resolve one key event to a source command, including the slot7 view cycle
+## that the hotkey child window writes.
+func _source_hotkey_command(event: InputEvent) -> String:
+	if not _source_hotkey_usable(event):
+		return ""
+	if _source_binding_matches(event as InputEventKey, _source_view_binding()):
+		return "view"
+	return _source_preferences.hotkey_command(event, source_hotkeys_bindings)
+
+
+func _source_binding_matches(key: InputEventKey, word: int) -> bool:
+	# An unused word (0, or a CTRL prefix over an unused key) is disabled.
+	if (word & 0xff) == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
+		return false
+	var pressed_word: int = system_hotkeys.event_key(key) if system_hotkeys != null else (0x09 if key.keycode == KEY_TAB else 0)
+	return pressed_word == (word & 0xff)
+
+
+func _source_view_binding() -> int:
+	if system_hotkeys == null:
+		return int(SystemHotkeys.DEFAULTS[7])
+	if source_hotkeys_bindings.is_empty():
+		var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+		source_hotkeys_bindings = (loaded.get("bindings", system_hotkeys.defaults()) as Array).duplicate(true)
+	if source_hotkeys_bindings.size() != 28:
+		return int(SystemHotkeys.DEFAULTS[7])
+	return int(source_hotkeys_bindings[7])
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _legacy_save_modal_open():
@@ -303,23 +366,42 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		_refresh_from_state()
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_SPACE:
-			if roll_button != null and not roll_button.disabled:
-				_on_roll_pressed()
+	if event is InputEventKey:
+		var command: String = _source_hotkey_command(event)
+		# The view slot is dispatched from _input before focus traversal; never
+		# cycle a second time here.
+		if command == "view":
+			return
+		# Preserve the admitted source-picker aliases while the corresponding
+		# source key is still at its default.  A user remap removes the alias.
+		if command.is_empty() and _source_hotkey_usable(event):
+			if event.ctrl_pressed and source_hotkeys_bindings.size() == 28:
+				if event.keycode == KEY_S and source_hotkeys_bindings[22] == 0x53:
+					command = "save"
+				elif event.keycode == KEY_L and source_hotkeys_bindings[23] == 0x4c:
+					command = "load"
+			elif not event.ctrl_pressed and event.keycode == KEY_N:
+				if state.get("phase", "") == "game_over":
+					_restart_game()
+				else:
+					_on_new_game_pressed()
 				get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_N:
-			if state.get("phase", "") == "game_over":
-				_restart_game()
-			else:
-				_on_new_game_pressed()
+				return
+		if not command.is_empty():
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_S and event.ctrl_pressed:
-			_on_source_save_requested()
-			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_L and event.ctrl_pressed:
-			_on_source_load_requested()
-			get_viewport().set_input_as_handled()
+			match command:
+				"roll":
+					if roll_button != null and not roll_button.disabled:
+						_on_roll_pressed()
+				"stocks": _on_source_stocks_requested()
+				"cards": _on_source_cards_requested()
+				"tools": _on_source_tools_requested()
+				"inspect": _on_source_inspect_requested()
+				"map": _on_source_map_requested()
+				"options": _on_source_option_requested()
+				"save": _on_source_save_requested()
+				"load": _on_source_load_requested()
+				"help": _on_source_help_requested()
 
 func _build_interface() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -370,6 +452,8 @@ func _build_source_shell() -> void:
 	shell.name = "SourceGameShell"
 	add_child(shell)
 	source_shell = shell
+	# The calendar child asks the host before accepting its sun/moon regions.
+	shell.presentation_input_guard = Callable(self, "_source_view_operation_allowed")
 	if shell.has_signal("start_requested"):
 		shell.start_requested.connect(_on_source_start_requested)
 		shell.load_requested.connect(_on_source_load_requested)
@@ -446,6 +530,11 @@ func _build_source_options() -> void:
 	canvas.add_child(panel)
 	source_options_panel = panel
 	_build_source_options_children(canvas)
+	_source_options_confirmation = ConfirmationDialog.new()
+	_source_options_confirmation.title = "確認"
+	_source_options_confirmation.confirmed.connect(_confirm_source_options_command)
+	_source_options_confirmation.canceled.connect(_cancel_source_options_command)
+	add_child(_source_options_confirmation)
 
 
 ## The date and hotkey windows are source child windows opened from the title
@@ -728,6 +817,10 @@ func _open_source_options(mode: String) -> void:
 	var loaded: Dictionary = system_settings.read_settings(settings_path)
 	if bool(loaded.get("ok", false)):
 		settings = loaded.get("settings", settings)
+		# A runtime window-group choice outlives Options reopen/Cancel; only an
+		# explicit OK writes it.  Failed reads keep their own error instead.
+		if source_shell != null:
+			settings["view"] = int(source_shell.get("view_mode"))
 	if str(loaded.get("status", "")) != "loaded":
 		# Without a committed file the source defaults must not contradict the
 		# existing audio preference, so mirror it until the player chooses.
@@ -784,13 +877,31 @@ func _apply_persisted_settings() -> void:
 
 
 func _apply_source_settings(settings: Dictionary) -> void:
-	# Music and minigame animation have runtime consumers; the remaining source
-	# fields persist for later hosts.  Runtime-only calls never rewrite audio.cfg.
+	# Music, movement pacing, minigame animation and the window group have runtime
+	# consumers; the remaining source fields persist for later hosts.  Runtime-only
+	# calls never rewrite audio.cfg, and presentation pacing never touches
+	# simulation/RNG.
+	_source_settings = settings.duplicate(true)
 	_source_minigame_animation = bool(settings.get("animation", true))
+	if source_shell != null and source_shell.has_method("set_view_mode"):
+		source_shell.set_view_mode(int(settings.get("view", 1)))
 	if audio_controller == null:
 		return
-	audio_controller.call("set_enabled", int(settings.get("music_level", 0)) > 0, false)
+	_source_preferences.apply(_source_settings, audio_controller)
 	_update_audio_button()
+
+
+## A damaged store must stay repairable: the ordinary keys fall back to the
+## source defaults instead of silently disabling every shortcut.
+func _load_source_hotkeys() -> void:
+	if system_hotkeys == null:
+		system_hotkeys = SystemHotkeys.new()
+	var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+	if bool(loaded.get("ok", false)):
+		source_hotkeys_bindings = (loaded.get("bindings", system_hotkeys.defaults()) as Array).duplicate(true)
+	else:
+		source_hotkeys_bindings = system_hotkeys.defaults()
+		_append_local_log("熱鍵設定檔無法讀取，已改用原始設定。")
 
 
 func _source_audio_track() -> int:
@@ -825,7 +936,42 @@ func _on_source_options_command(command: String) -> void:
 	if command == "hotkeys":
 		_open_source_hotkeys_child()
 		return
+	if command in ["restart", "surrender", "quit"]:
+		_source_options_command = command
+		if command == "surrender":
+			# No public surrender transition exists; never fake it with a
+			# private bankruptcy helper or silently drop the current match.
+			_source_options_confirmation.dialog_text = "認輸投降流程尚未接入；目前棋局保持不變。"
+		elif command == "restart":
+			_source_options_confirmation.dialog_text = "重新開始遊戲？未儲存的進度將會失去。"
+		else:
+			_source_options_confirmation.dialog_text = "結束遊戲？未儲存的進度將會失去。"
+		# The confirmation window owns input while the options draft stays open.
+		source_options_panel.suspend_input(true)
+		_source_options_confirmation.popup_centered()
+		return
 	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
+	_refresh_log_only()
+
+
+func _cancel_source_options_command() -> void:
+	_source_options_command = ""
+	_finish_source_options_child(source_options_panel)
+
+
+## Restart re-enters the existing start flow, which asks for its own
+## confirmation before replacing the match; quit uses the ordinary scene exit.
+func _confirm_source_options_command() -> void:
+	var command := _source_options_command
+	_source_options_command = ""
+	if command == "restart":
+		if source_options_panel != null:
+			source_options_panel.call("close_options")
+		_on_source_start_requested()
+	elif command == "quit":
+		get_tree().quit()
+	else:
+		_finish_source_options_child(source_options_panel)
 	_refresh_log_only()
 
 
@@ -1058,6 +1204,17 @@ func _restore_trustee_window_policy() -> void:
 	if _trustee_quit_policy_held and not _source_trustee_modal_open():
 		get_tree().auto_accept_quit = _trustee_prior_auto_quit
 		_trustee_quit_policy_held = false
+
+func _source_view_operation_allowed() -> bool:
+	if game_state == null or source_shell == null or _source_modal_open() or not _source_save_operation_allowed():
+		return false
+	return not _presentation_busy and not _ai_pending and not _trap_response_busy and not _finance_response_busy and not _auction_response_busy and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+
+
+func _on_source_view_requested() -> void:
+	if _source_view_operation_allowed():
+		source_shell.cycle_view_mode()
+
 
 func _on_source_map_requested() -> void:
 	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open() or _source_trustee_modal_open():
@@ -2600,6 +2757,9 @@ func _sync_audio_music_level(enabled: bool) -> void:
 	var result: Dictionary = system_settings.write_settings(settings_path, settings)
 	if not bool(result.get("ok", false)):
 		_append_local_log("音樂偏好未能同步到系統選項；下次啟動可能沿用舊設定。")
+	# Keep the live gain in step with the switch: enabling after a committed
+	# music level of zero would otherwise report playback and stay silent.
+	_apply_source_settings(settings)
 
 func _on_audio_config_pressed() -> void:
 	if audio_folder_dialog == null:
@@ -2620,6 +2780,9 @@ func _on_audio_folder_selected(path: String) -> void:
 	_refresh_log_only()
 
 func _on_audio_playback_changed(track_name: String) -> void:
+	# Track highlighting follows the audio layer's real state, never a guess.
+	if source_options_panel != null and bool(source_options_panel.call("is_open")):
+		source_options_panel.set_current_track(_source_audio_track())
 	if event_status_label != null:
 		event_status_label.text = "播放：%s" % track_name
 
@@ -3289,7 +3452,7 @@ func _handle_result(result: Dictionary) -> void:
 			_update_actions(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_update_route_choices(str(state.get("phase", "")), int(state.get("current_player", 0)))
 			_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
-			board_view.play_movement(moves)
+			board_view.play_movement(moves, _source_preferences.movement_seconds(_source_settings))
 			return
 	if result.is_empty():
 		_append_local_log("模擬層未回傳事件；請查看目前回合狀態。")
@@ -3305,6 +3468,9 @@ func _cancel_presentation() -> void:
 		source_monthly_controller.cancel()
 	if _source_inventory_modal_open():
 		_close_source_inventory(false)
+	if _source_options_confirmation != null:
+		_source_options_confirmation.hide()
+	_source_options_command = ""
 	if source_help_controller != null:
 		source_help_controller.cancel()
 	if source_lottery_controller != null:

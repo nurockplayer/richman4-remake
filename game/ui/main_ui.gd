@@ -25,6 +25,7 @@ const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
 const SourceShopController = preload("res://game/ui/source_shop_controller.gd")
 const SourceHelpController = preload("res://game/ui/source_help_controller.gd")
+const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
 const PLAYER_COUNT := 4
 const DEFAULT_SEED := 136622
@@ -71,6 +72,7 @@ var board_view: Control
 var source_shell: Control
 var source_stock_panel: Control
 var source_help_controller: Control
+var source_bank_controller: Control
 var legacy_interface_root: Control
 
 var seed_label: Label
@@ -349,6 +351,7 @@ func _build_source_shell() -> void:
 	_build_source_inventory_panel()
 	_build_source_shop_controller()
 	_build_source_help_controller()
+	_build_source_bank_controller()
 	if legacy_interface_root != null:
 		legacy_interface_root.hide()
 
@@ -368,6 +371,48 @@ func _build_source_help_controller() -> void:
 	var game_screen: Variant = source_shell.get("game_screen")
 	if game_screen is Control:
 		(game_screen as Control).visibility_changed.connect(_update_source_help_gate)
+
+func _build_source_bank_controller() -> void:
+	if source_shell == null:
+		return
+	var canvas: Control = source_shell.get("reference_canvas")
+	if canvas == null:
+		return
+	var controller := SourceBankController.new()
+	controller.z_index = 40
+	controller.invoke_game = Callable(self, "_invoke_game")
+	controller.handle_result = Callable(self, "_handle_result")
+	canvas.add_child(controller)
+	source_bank_controller = controller
+
+func _source_bank_modal_open() -> bool:
+	if source_bank_controller != null and source_bank_controller.is_open():
+		return true
+	return game_state != null and game_state.has_method("pending_bank_visit") and not game_state.pending_bank_visit().is_empty()
+
+func _source_bank_edition() -> String:
+	var source: Variant = _active_map_definition.get("source", {})
+	if source is Dictionary:
+		var edition := str(source.get("edition", "")).strip_edges()
+		if edition in ["Game", "MultiverseJourney"]:
+			return edition
+	if source_shell != null:
+		var edition := str(source_shell.get("_source_edition")).strip_edges()
+		if edition in ["Game", "MultiverseJourney"]:
+			return edition
+	return ""
+
+func _sync_source_bank() -> void:
+	if source_bank_controller == null or source_shell == null:
+		return
+	var blocked := _presentation_busy or _legacy_save_modal_open()
+	blocked = blocked or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open()
+	blocked = blocked or (source_stock_panel != null and source_stock_panel.visible)
+	blocked = blocked or (source_shell.has_method("is_title_visible") and source_shell.is_title_visible())
+	blocked = blocked or (source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible())
+	for popup in [news_popup, fate_popup, auction_popup]:
+		blocked = blocked or (popup != null and popup.visible)
+	source_bank_controller.sync(game_state, state, _source_bank_edition(), source_shell.get("_visuals"), blocked)
 
 func _build_source_stock_panel() -> void:
 	if source_shell == null:
@@ -402,6 +447,8 @@ func _on_source_stock_closed() -> void:
 		source_shell.call("show_game")
 
 func _on_source_start_requested() -> void:
+	if _source_bank_modal_open():
+		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	_on_new_game_pressed()
@@ -450,7 +497,7 @@ func _on_source_ai_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_map_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_shell == null:
 		return
@@ -460,7 +507,7 @@ func _on_source_map_requested() -> void:
 		source_shell.call("toggle_map_view")
 
 func _on_source_inspect_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_shell != null and source_shell.has_method("open_player_inspector"):
 		source_shell.call("open_player_inspector")
@@ -477,7 +524,7 @@ func _on_source_sale_requested() -> void:
 	_refresh_log_only()
 
 func _on_source_stocks_requested() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
 		return
 	if source_stock_panel == null:
 		_on_stocks_pressed()
@@ -1827,6 +1874,8 @@ func _on_new_game_confirm() -> void:
 			_refresh_log_only()
 
 func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map_definition: Dictionary = {}, setup_options: Dictionary = {}) -> bool:
+	if _source_bank_modal_open():
+		return false
 	var resolved_seed: int
 	if seed_value == null:
 		resolved_seed = int(Time.get_unix_time_from_system()) % 2147483647
@@ -1940,7 +1989,7 @@ func _update_audio_button() -> void:
 		audio_button.text = "音樂 開" if enabled else "音樂 關"
 
 func _save_game() -> void:
-	if _source_help_modal_open() or _source_inventory_modal_open():
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if game_state == null or not game_state.has_method("to_dict"):
 		_append_local_log("儲存失敗：模擬核心未載入。")
@@ -1989,16 +2038,16 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _source_save_operation_allowed() -> bool:
-	return game_state != null and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
+	return game_state != null and not _source_bank_modal_open() and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
-	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open()
+	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")
@@ -2370,6 +2419,8 @@ func _on_stocks_pressed() -> void:
 	_settle_inventory_popup(stocks_popup, Vector2i(760, 610))
 
 func _on_bank_pressed() -> void:
+	if _source_bank_modal_open():
+		return
 	if _source_help_modal_open() or _source_inventory_modal_open():
 		return
 	if not _is_human_turn():
@@ -2502,6 +2553,10 @@ func _is_human_turn() -> bool:
 	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
+	if _source_bank_modal_open():
+		var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
+		if method not in ["resume_bank_visit", "complete_bank_visit"] and not bank_action:
+			return {"ok": false, "message": "請先完成銀行操作。"}
 	if _source_inventory_modal_open() and not _inventory_applying:
 		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_help_modal_open():
@@ -2556,6 +2611,8 @@ func _cancel_presentation() -> void:
 		_close_source_inventory(false)
 	if source_help_controller != null:
 		source_help_controller.cancel()
+	if source_bank_controller != null:
+		source_bank_controller.cancel()
 	_presentation_generation += 1
 	_presentation_busy = false
 	_presentation_result = {}
@@ -2597,6 +2654,7 @@ func _refresh_from_state(result: Dictionary = {}) -> void:
 	_update_all()
 	if source_shell != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable" and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
+		_sync_source_bank()
 
 func _read_snapshot() -> Dictionary:
 	if game_state == null:
@@ -2638,6 +2696,7 @@ func _update_all() -> void:
 	_update_load_gate()
 	_sync_source_shop()
 	_sync_source_shell(phase, current_index)
+	_sync_source_bank()
 	_last_rendered_phase = phase
 
 func _sync_source_shell(phase: String, current_index: int) -> void:

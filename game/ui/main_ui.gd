@@ -1450,6 +1450,18 @@ func _setup_options_from_state() -> Dictionary:
 				break
 		if flags_valid:
 			options["human_flags"] = initial_flags.duplicate()
+	if not options.has("human_flags"):
+		# Older saves and games started from the legacy popup keep control
+		# only on the players. Derive it so opening the source setup does not
+		# silently turn additional humans into AI.
+		var saved_flags: Array = []
+		for player in state.get("players", []):
+			if not player is Dictionary or typeof(player.get("is_human", null)) != TYPE_BOOL:
+				saved_flags.clear()
+				break
+			saved_flags.append(bool(player.is_human))
+		if saved_flags.size() == player_count and saved_flags.count(true) > 0:
+			options["human_flags"] = saved_flags
 	var initial_vehicle: Variant = state.get("initial_vehicle", null)
 	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
 		options["initial_vehicle"] = initial_vehicle

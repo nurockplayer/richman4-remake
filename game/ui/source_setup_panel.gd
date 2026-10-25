@@ -484,38 +484,44 @@ func _select_vehicle(value: String) -> void:
 	_vehicle.select(index if index >= 0 else 0)
 
 func _edition_maps() -> Array:
-	var result: Array = []
+	# The source rows are fixed map slots, not catalog order: row 0 is the
+	# stage's first map. A missing map keeps its row disabled instead of
+	# shifting later maps into a mislabelled slot.
 	var first := _stage * 4 + 1 if _edition == "MultiverseJourney" else 1
-	var last := first + 3
-	for value in _catalog:
-		if not value is Dictionary or _definition_edition(value) != _edition:
-			continue
-		var number := _definition_map_number(value)
-		if number >= first and number <= last:
-			result.append(value)
-	# Focused tests may supply a selected definition outside catalog storage.
-	# Keep it usable only when its edition and stage are source-valid.
-	if result.is_empty() and not _selected_map.is_empty() and _definition_edition(_selected_map) == _edition:
-		var selected_number := _definition_map_number(_selected_map)
-		if selected_number >= first and selected_number <= last:
-			result.append(_selected_map.duplicate(true))
+	var result: Array = []
+	for slot in range(4):
+		var number := first + slot
+		var found: Dictionary = {}
+		for value in _catalog:
+			if value is Dictionary and _definition_edition(value) == _edition and _definition_map_number(value) == number:
+				found = value
+				break
+		# Focused tests may supply a selected definition outside catalog storage.
+		# Keep it usable only when its edition and stage are source-valid.
+		if found.is_empty() and not _selected_map.is_empty() and _definition_edition(_selected_map) == _edition and _definition_map_number(_selected_map) == number:
+			found = _selected_map.duplicate(true)
+		result.append(found)
 	return result
 
 func _rebuild_maps() -> void:
 	_setup_atlas_offset = _stage * 20 + 1
 	var valid := _edition_maps()
 	var selected_is_valid := false
+	var first_valid: Dictionary = {}
 	for definition in valid:
+		if definition.is_empty():
+			continue
+		if first_valid.is_empty():
+			first_valid = definition
 		if str(definition.get("id", "")) == str(_selected_map.get("id", "")):
 			selected_is_valid = true
-			break
-	if not selected_is_valid and not valid.is_empty():
-		_selected_map = valid[0].duplicate(true)
+	if not selected_is_valid and not first_valid.is_empty():
+		_selected_map = first_valid.duplicate(true)
 	for index in range(_map_buttons.size()):
 		var button := _map_buttons[index]
-		button.disabled = index >= valid.size()
-		if index < valid.size():
-			var definition: Dictionary = valid[index]
+		var definition: Dictionary = valid[index] if index < valid.size() else {}
+		button.disabled = definition.is_empty()
+		if not definition.is_empty():
 			button.tooltip_text = _map_name(definition, index)
 			button.text = _map_name(definition, index) if not _has_setup_atlas else ""
 			button.button_pressed = str(definition.get("id", "")) == str(_selected_map.get("id", ""))
@@ -536,7 +542,7 @@ func _map_name(definition: Dictionary, index: int) -> String:
 
 func _select_map(index: int) -> void:
 	var valid := _edition_maps()
-	if index < 0 or index >= valid.size():
+	if index < 0 or index >= valid.size() or valid[index].is_empty():
 		return
 	_selected_map = valid[index].duplicate(true)
 	_set_stage_from_definition(_selected_map)
@@ -632,11 +638,12 @@ func _update_preview() -> void:
 func _rebuild_maps_text_only() -> void:
 	var valid := _edition_maps()
 	for index in range(_map_buttons.size()):
-		if index < valid.size():
-			_map_buttons[index].text = "" if _has_setup_atlas else _map_name(valid[index], index)
-			_map_labels[index].text = _map_name(valid[index], index)
+		var definition: Dictionary = valid[index] if index < valid.size() else {}
+		if not definition.is_empty():
+			_map_buttons[index].text = "" if _has_setup_atlas else _map_name(definition, index)
+			_map_labels[index].text = _map_name(definition, index)
 			_map_labels[index].visible = false
-			_map_checks[index].visible = _has_setup_atlas and str(valid[index].get("id", "")) == str(_selected_map.get("id", ""))
+			_map_checks[index].visible = _has_setup_atlas and str(definition.get("id", "")) == str(_selected_map.get("id", ""))
 		else:
 			var names := MJ_MAP_NAMES if _edition == "MultiverseJourney" else MAP_NAMES
 			_map_buttons[index].text = names[index]

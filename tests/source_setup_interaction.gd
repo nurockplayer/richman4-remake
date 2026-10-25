@@ -118,6 +118,14 @@ func run() -> void:
 	panel.set_catalog(catalog, catalog[8], {"player_count":4,"character_ids":[0,1,2,3],"human_flags":[true,false,false,false]})
 	expect(panel.get_stage() == 1 and panel.get_map_background_resource() == 4, "MJ stage is selected by upstream definition")
 	expect(panel.get_setup_atlas_offset() == 21, "MJ stage one selects its own source atlas")
+	# Fixed source slots ignore catalog order and keep missing maps disabled.
+	var sparse: Array = []
+	for number in [4, 2, 3]:
+		sparse.append({"id":"Game:%d" % number, "source":{"edition":"Game","map_number":number}})
+	panel.set_catalog(sparse, sparse[0], {})
+	expect(panel.get_node("MapChoice_0").disabled, "missing source map keeps its row disabled")
+	await click(viewport, Vector2(500, 110))
+	expect(str(panel.get("_selected_map").get("id", "")) == "Game:3", "row three binds to map three regardless of catalog order")
 	panel.queue_free()
 	viewport.queue_free()
 	await process_frame

@@ -754,7 +754,7 @@ func _on_source_new_stage_requested() -> void:
 func _on_source_quit_requested() -> void:
 	if _source_title_entry_blocked() or source_shell == null or not source_shell.is_title_visible():
 		return
-	get_tree().quit()
+	_request_quit()
 
 
 func _source_setup_entry_definition(stage: int, preferred: Dictionary) -> Dictionary:
@@ -812,6 +812,8 @@ func _on_source_setup_cancelled() -> void:
 		return
 	if _source_setup_return_to_game and game_state != null and str(state.get("phase", "")) != "unavailable":
 		source_shell.call("show_game")
+		if str(state.get("phase", "")) == "game_over":
+			_update_end_overlay("game_over")
 	else:
 		source_shell.call("show_title")
 	_source_setup_return_to_game = false
@@ -908,6 +910,10 @@ func _open_source_options(mode: String) -> void:
 		settings["music_level"] = 4 if (audio_controller != null and bool(audio_controller.get("enabled"))) else 0
 	source_options_panel.set_visuals(source_shell.get("_visuals"))
 	source_options_panel.set_current_track(_source_audio_track())
+	var settled := mode == "game" and str(state.get("phase", "")) == "game_over"
+	# A settled match has no actor left to concede.
+	source_options_panel.set_disabled_commands(["surrender"] if settled else [])
+	source_options_panel.z_index = 110 if settled else 70
 	var opened: bool = source_options_panel.set_view_model({
 		"edition": _source_bank_edition(),
 		"mode": mode,
@@ -944,11 +950,21 @@ func _on_source_options_accepted(settings: Dictionary) -> void:
 	else:
 		_append_local_log("選項儲存失敗；變更只在目前執行中生效。")
 	_apply_source_settings(settings)
+	_reset_source_options_layer()
 	_refresh_log_only()
 
 
 func _on_source_options_cancelled() -> void:
+	_reset_source_options_layer()
 	_refresh_log_only()
+
+
+## Options normally sit below the settlement overlay; while a settled match is
+## shown they are raised so the still-available settings and quit commands stay
+## visible instead of becoming a hidden modal.
+func _reset_source_options_layer() -> void:
+	if source_options_panel != null:
+		source_options_panel.z_index = 70
 
 
 func _apply_persisted_settings() -> void:
@@ -1001,6 +1017,10 @@ func _on_source_options_preview(track: int) -> void:
 
 
 func _on_source_options_command(command: String) -> void:
+	if command == "surrender" and str(state.get("phase", "")) == "game_over":
+		_append_local_log("遊戲已結束，無法投降。")
+		_refresh_log_only()
+		return
 	if command == "help":
 		# The source keeps the parent draft while a child window is open.
 		if game_state == null or source_help_controller == null or _presentation_busy:
@@ -1050,7 +1070,7 @@ func _confirm_source_options_command() -> void:
 			source_options_panel.call("close_options")
 		_on_source_start_requested()
 	elif command == "quit":
-		get_tree().quit()
+		_request_quit()
 	elif command == "surrender":
 		if source_options_panel != null:
 			source_options_panel.call("close_options")
@@ -1165,6 +1185,11 @@ func _finish_options_help() -> void:
 
 func _on_source_help_requested() -> void:
 	if source_help_controller == null or not _source_help_operation_allowed():
+		return
+	if str(state.get("phase", "")) == "game_over":
+		# No live turn remains to explain; the settlement owns the screen.
+		_append_local_log("遊戲已結束，請回到標題開啟遊戲說明。")
+		_refresh_log_only()
 		return
 	_open_source_help()
 
@@ -2341,7 +2366,7 @@ func _build_end_overlay() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	end_overlay.add_child(center)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(430.0, 250.0)
+	panel.custom_minimum_size = Vector2(540.0, 380.0)
 	_apply_panel_style(panel, Color("#20394b"), Color("#d9a958"), 18, 2)
 	center.add_child(panel)
 	var margin := MarginContainer.new()
@@ -2365,10 +2390,14 @@ func _build_end_overlay() -> void:
 	restart.name = "SettlementRestart"
 	restart.custom_minimum_size = Vector2(0.0, 48.0)
 	column.add_child(restart)
-	var close := _make_button("返回棋盤", _close_end_overlay)
+	var close := _make_button("返回標題", _close_end_overlay)
 	close.name = "SettlementClose"
 	close.custom_minimum_size = Vector2(0.0, 38.0)
 	column.add_child(close)
+	var quit := _make_button("結束遊戲", _on_end_quit_pressed)
+	quit.name = "SettlementQuit"
+	quit.custom_minimum_size = Vector2(0.0, 38.0)
+	column.add_child(quit)
 	end_overlay.hide()
 
 func _make_popup(size: Vector2i) -> PopupPanel:
@@ -3029,7 +3058,11 @@ func _apply_loaded_game(restored: Object, parsed: Dictionary, legacy_market: boo
 	if source_shell != null and source_shell.has_method("show_game"):
 		source_shell.call("show_game")
 	_sync_source_shell(str(state.get("phase", "")), int(state.get("current_player", 0)))
-	end_overlay.hide()
+	if str(state.get("phase", "")) == "game_over":
+		# A finished save must present its settlement, not a dead board.
+		_update_end_overlay("game_over")
+	else:
+		end_overlay.hide()
 	_ai_pending = false
 
 func _show_content_error(message: String) -> void:
@@ -3470,8 +3503,24 @@ func _restart_game() -> void:
 func _on_end_restart_pressed() -> void:
 	_restart_game()
 
+func _on_end_quit_pressed() -> void:
+	_request_quit()
+
+
+## Ordinary scene exit. Tests replace this seam instead of leaving the process.
+func _request_quit() -> void:
+	get_tree().quit()
+
+
 func _close_end_overlay() -> void:
+	# The settled match has no legal action left, so the only safe place to
+	# return to is the title, where a new match or load can start. Without a
+	# shell there is no title to reach; keep the settlement and its quit choice
+	# up instead of revealing an inert board with no way out.
+	if source_shell == null or not source_shell.has_method("show_title"):
+		return
 	end_overlay.hide()
+	source_shell.call("show_title")
 
 func _is_human_turn() -> bool:
 	var player := _current_player()
@@ -4047,15 +4096,79 @@ func _update_end_overlay(phase: String) -> void:
 	if phase != "game_over" or _source_monthly_modal_open() or _source_lottery_modal_open() or _source_minigame_modal_open():
 		end_overlay.hide()
 		return
+	# A settled match can still live behind the title or setup screen; the
+	# settlement must not cover a surface the player deliberately returned to.
+	if source_shell != null:
+		if source_shell.has_method("is_title_visible") and bool(source_shell.call("is_title_visible")):
+			end_overlay.hide()
+			return
+		if source_shell.has_method("is_setup_visible") and bool(source_shell.call("is_setup_visible")):
+			end_overlay.hide()
+			return
 	var winner_index := int(state.get("winner", -1))
 	var players: Array = state.get("players", [])
 	var winner_name := "尚未公布"
 	if winner_index >= 0 and winner_index < players.size() and players[winner_index] is Dictionary:
 		winner_name = str(players[winner_index].get("name", "玩家 %d" % (winner_index + 1)))
 	end_title.text = "本局結算"
-	end_detail.text = "勝者：%s\n\n可以開始新局，或返回棋盤查看最後狀態。" % winner_name
+	var lines: Array[String] = ["勝者：%s" % winner_name, _game_over_reason_text()]
+	var ranking := _settlement_ranking()
+	if not ranking.is_empty():
+		lines.append("")
+		lines.append("資產排名")
+		for index in range(ranking.size()):
+			var entry: Dictionary = ranking[index]
+			var line := "%d. %s　%s" % [index + 1, str(entry.get("name", "玩家")), _format_money(int(entry.get("wealth", 0)))]
+			if not bool(entry.get("alive", true)):
+				line += "（已破產）"
+			lines.append(line)
+	end_detail.text = "\n".join(lines)
 	end_overlay.show()
 	end_overlay.move_to_front()
+
+
+## The terminal event carries the exact end reason; older or synthetic
+## snapshots only have a winner, so they fall back to a survivor message.
+func _game_over_reason_text() -> String:
+	var entries: Array = state.get("event_log", [])
+	for index in range(entries.size() - 1, -1, -1):
+		var event: Variant = entries[index]
+		if not event is Dictionary or str(event.get("type", "")) != "game_over":
+			continue
+		match str(event.get("reason", "")):
+			"day_limit":
+				return "期限結束：已進行 %d 天。" % int(event.get("elapsed", state.get("elapsed", 0)))
+			"wealth_target":
+				return "達成財富目標：總資產達到 %s。" % _format_money(int(event.get("wealth_target", 0)))
+			"calendar_limit":
+				return "已到達遊戲日曆的最後一天。"
+			"company_dividend_no_survivors":
+				return "公司分紅結算後，所有玩家皆已破產。"
+	return "最後一位存活的玩家獲勝。" if int(state.get("winner", -1)) >= 0 else "所有玩家皆已破產。"
+
+
+func _settlement_ranking() -> Array:
+	var players: Array = state.get("players", [])
+	var ranking: Array = []
+	for index in range(players.size()):
+		var player: Variant = players[index]
+		if not player is Dictionary:
+			continue
+		var wealth := 0
+		if game_state != null and game_state.has_method("get_player_wealth"):
+			wealth = int(game_state.call("get_player_wealth", int(player.get("id", index))))
+		ranking.append({
+			"id": int(player.get("id", index)),
+			"name": str(player.get("name", "玩家 %d" % (index + 1))),
+			"wealth": wealth,
+			"alive": bool(player.get("alive", true)),
+		})
+	ranking.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a.wealth) != int(b.wealth):
+			return int(a.wealth) > int(b.wealth)
+		return int(a.id) < int(b.id)
+	)
+	return ranking
 
 func _update_financial_popup() -> void:
 	if financial_popup == null: return
@@ -5909,6 +6022,12 @@ func _source_minigame_input_data() -> Dictionary:
 
 func _flush_source_autosave() -> void:
 	if source_save_menu == null: return
+	# A settled match is final: never write an AUTO checkpoint captured before
+	# the last day, and never leave it pending over the settlement screen.
+	if str(state.get("phase", "")) == "game_over":
+		_source_autosave.skip()
+		_ai_pending = false
+		return
 	var blocked := not _source_save_operation_allowed() or _source_modal_open_without_autosave()
 	var result: Dictionary = _source_autosave.flush(game_state, source_save_menu.storage, blocked)
 	if result.is_empty(): return

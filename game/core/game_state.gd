@@ -5197,14 +5197,6 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		bank["deposits"] = max(0, int(bank.get("deposits", 0)) - forfeited_deposit)
 		state["bank"] = bank
 	debtor["cash"] = 0
-	# Ordinary charges exhaust cash and deposit before declaring bankruptcy, but
-	# surrender declares with the account untouched. Retire any remaining
-	# deposit from the bank ledger together with the account so it keeps
-	# matching the living players' deposits.
-	if int(debtor.get("deposit", 0)) > 0:
-		var deposit_ledger: Dictionary = state.get("bank", {})
-		deposit_ledger["deposits"] = max(0, int(deposit_ledger.get("deposits", 0)) - int(debtor["deposit"]))
-		state["bank"] = deposit_ledger
 	debtor["deposit"] = 0
 	debtor["loan"] = 0
 	debtor["loan_due_day"] = 0
@@ -5220,6 +5212,10 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		state["remaining_steps"] = 0
 		state["bank_access"] = false
 		state["bank_landing"] = false
+		# The construction service belongs to the actor who landed on their own
+		# company; a conceded actor never returns to choose its target.
+		state["company_service_pending"] = 0
+	var pending_cleared: bool = _clear_pending_for_departed(debtor_id)
 	var auctions: Array = state.get("bankruptcy_auctions", [])
 	auctions.append(auction)
 	state["bankruptcy_auctions"] = auctions
@@ -5230,6 +5226,54 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	# end_turn is advanced by that caller after its final bookkeeping instead.
 	if was_current_movement and not _settling_company_dividends and not _resolving_news and not _resolving_fate and state.get("phase", "") != "game_over":
 		_advance_to_next_alive(debtor_id)
+	elif pending_cleared and state.get("phase", "") != "game_over" and bool(_player(int(state.get("current_player", -1))).get("alive", false)):
+		# The acting player keeps the turn; rebuild the guard list that the
+		# departed player's pending record used to shape.
+		_set_action_options(int(state.get("current_player", -1)))
+
+
+## Pending card, dice and auction records that name a departing player can
+## never be answered once that player leaves the roster, and leaving them behind
+## blocks the next actor behind a response that can only fail as stale.
+func _clear_pending_for_departed(player_id: int) -> bool:
+	var cleared := false
+	var trap: Dictionary = _pending_trap()
+	if not trap.is_empty() and (int(trap.get("caster_id", -1)) == player_id or int(trap.get("target_id", -1)) == player_id):
+		state["pending_trap"] = {}
+		state.erase("pending_trap_card")
+		cleared = true
+	var finance: Dictionary = _pending_finance()
+	if not finance.is_empty():
+		for field in ["payer_id", "creditor_id", "caster_id"]:
+			if int(finance.get(field, -1)) == player_id:
+				state.erase("pending_finance")
+				cleared = true
+				break
+	var remote: Variant = state.get("pending_remote_dice", {})
+	if typeof(remote) == TYPE_DICTIONARY and not (remote as Dictionary).is_empty():
+		if int((remote as Dictionary).get("player_id", -1)) == player_id:
+			state["pending_remote_dice"] = {}
+			cleared = true
+	return _clear_auction_for_departed(player_id) or cleared
+
+
+## An auction names its caster and recomputes its participants from the living
+## players, so a departed caster or bidder cannot stay in a valid record: the
+## lot keeps its current owner and the auction card stays in the caster's hand,
+## exactly as if the auction had never started.
+func _clear_auction_for_departed(player_id: int) -> bool:
+	var value: Variant = state.get("pending_auction", {})
+	if typeof(value) != TYPE_DICTIONARY:
+		return false
+	var pending: Dictionary = value
+	if pending.is_empty():
+		return false
+	var participants: Array = pending.get("participants", [])
+	var is_caster: bool = int(pending.get("caster_id", -1)) == player_id
+	if not is_caster and not participants.has(player_id):
+		return false
+	state.erase("pending_auction")
+	return true
 
 
 func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:

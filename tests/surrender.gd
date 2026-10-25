@@ -8,6 +8,8 @@ extends SceneTree
 
 const GameState = preload("res://game/core/game_state.gd")
 const CompanyFixture = preload("res://tests/fixtures/company_fixture.gd")
+const AuctionFixture = preload("res://tests/fixtures/auction_fixture.gd")
+const Inventory = preload("res://game/core/inventory_rules.gd")
 
 var checks := 0
 var failures := 0
@@ -50,6 +52,101 @@ func normalize_ledger(game: Object) -> int:
 		total += int(player.deposit)
 	game.state.bank["deposits"] = total
 	return total
+
+
+## A pending trap / tax or remote-dice record that names the conceding player
+## must not survive the concession: the next actor would otherwise be stuck
+## behind a response that can only ever answer "已失效".
+func pending_game(kind: String) -> Object:
+	# The v13 fixture keeps the card supply conserved, which the save validator
+	# checks together with each pending record's own rules.
+	var game: Object = AuctionFixture.new_game(7800)
+	var actor := int(game.state.current_player)
+	var phase := "await_roll" if kind == "remote_dice" else "await_action"
+	AuctionFixture.prepare(game, actor, int(game.state.players[actor].position), phase)
+	match kind:
+		"trap":
+			Inventory.grant_card(game.state.inventory_supply, game.state.players[1].cards, "嫁禍")
+			game.state["pending_trap"] = {"caster_id": actor, "target_id": 1}
+		"finance":
+			Inventory.grant_card(game.state.inventory_supply, game.state.players[1].cards, "嫁禍")
+			game.state["pending_finance"] = {
+				"kind": "tax", "stage": "redirect", "payer_id": 1, "creditor_id": actor,
+				"amount": 3001, "node_id": int(game.state.players[actor].position), "caster_id": actor}
+		"remote_dice":
+			game.state["pending_remote_dice"] = {"player_id": actor, "value": 3}
+	game._set_action_options(actor)
+	return game
+
+
+func pending_cases() -> void:
+	for kind in ["trap", "finance", "remote_dice"]:
+		var game := pending_game(kind)
+		var actor := int(game.state.current_player)
+		var before: Dictionary = GameState.validate_save(game.to_dict())
+		check(bool(before.get("ok", false)), "pending %s state validates before surrender: %s" % [kind, str(before.get("errors", []))])
+		check(bool(game.surrender(actor).get("ok", false)), "surrender succeeds while %s is pending" % kind)
+		match kind:
+			"trap":
+				check((game.state.pending_trap as Dictionary).is_empty() and not game.state.has("pending_trap_card"), "the pending trap record is dropped with its caster")
+			"finance":
+				check(not game.state.has("pending_finance"), "the pending financial response is dropped")
+			"remote_dice":
+				check((game.state.pending_remote_dice as Dictionary).is_empty(), "the pending remote dice roll is dropped")
+		check(not (game.state.action_options as Array).has("respond_trap") and not (game.state.action_options as Array).has("respond_finance"), "the next actor is not offered a stale %s response" % kind)
+		var after: Dictionary = GameState.validate_save(game.to_dict())
+		check(bool(after.get("ok", false)), "state after a pending %s surrender validates: %s" % [kind, str(after.get("errors", []))])
+		check(bool(game.roll().get("ok", false)), "the next actor can roll after a pending %s surrender" % kind)
+
+
+## An auction recomputes its participants from the living roster, so a departed
+## caster or bidder cannot stay in a valid record.
+func auction_case() -> void:
+	var game: Object = AuctionFixture.new_game(7800)
+	var staged: Dictionary = AuctionFixture.stage_card(game, 0)
+	check(bool(staged.get("ok", false)), "auction fixture stages the 拍賣 card")
+	var started: Dictionary = game.choose_action("use_card", {"card_id": "拍賣", "cancel": false})
+	check(bool(started.get("ok", false)) and not (game.auction_response() as Dictionary).is_empty(), "auction fixture leaves a pending auction")
+	if (game.auction_response() as Dictionary).is_empty():
+		return
+	var before: Dictionary = GameState.validate_save(game.to_dict())
+	check(bool(before.get("ok", false)), "pending auction state validates before surrender: " + str(before.get("errors", [])))
+	var caster := int(game.state.current_player)
+	check(bool(game.surrender(caster).get("ok", false)), "the auction caster can surrender")
+	check((game.auction_response() as Dictionary).is_empty(), "surrender cancels the pending auction")
+	var after: Dictionary = GameState.validate_save(game.to_dict())
+	check(bool(after.get("ok", false)), "state after cancelling the auction validates: " + str(after.get("errors", [])))
+
+
+## The construction service is tied to the actor who landed on their own
+## company, so it cannot outlive that actor.
+func company_service_case() -> void:
+	var definition: Dictionary = CompanyFixture.definition()
+	definition.companies[0].company_type = 11
+	var construction: Object = GameState.new_game_on_board(42, 4, definition, {
+		"original_facilities": true, "original_gods": true, "original_companies": true,
+		"start_date": {"year": 1998, "month": 1, "day": 1}})
+	construction.state.god_objects = []
+	construction.state.players[0].stocks.s01 = 1
+	construction.state.companies[0].treasury -= 1
+	construction._update_company_owners()
+	construction.state.board[2].owner = 1
+	construction.state.players[1].properties = [2]
+	construction._recalculate_property_values()
+	construction.state.current_player = 1
+	construction.state.players[1].position = 5
+	construction.state.players[1].previous_position = 4
+	construction.state.phase = "await_action"
+	construction._resolve_company_visit(1, construction.state.board[5])
+	construction._set_action_options(1)
+	check(int(construction.state.company_service_pending) == 1, "construction service is pending for the visiting actor")
+	var before: Dictionary = GameState.validate_save(construction.to_dict())
+	check(bool(before.get("ok", false)), "pending construction state validates before surrender: " + str(before.get("errors", [])))
+	check(bool(construction.surrender(1).get("ok", false)), "the visiting actor can surrender")
+	check(int(construction.state.company_service_pending) == 0, "surrender clears the pending construction service")
+	check(not (construction.state.action_options as Array).has("company_upgrade"), "the next actor is not offered the departed construction service")
+	var after: Dictionary = GameState.validate_save(construction.to_dict())
+	check(bool(after.get("ok", false)), "state after clearing the construction service validates: " + str(after.get("errors", [])))
 
 
 func run() -> void:
@@ -104,6 +201,10 @@ func run() -> void:
 	finished.state.phase = "game_over"
 	finished._sync_state()
 	check(not bool(finished.surrender().get("ok", true)), "surrender refuses a finished match")
+
+	pending_cases()
+	auction_case()
+	company_service_case()
 
 	print("Surrender checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

@@ -980,7 +980,9 @@ func _confirm_source_options_command() -> void:
 		if source_options_panel != null:
 			source_options_panel.call("close_options")
 		var result := _invoke_game("surrender")
-		_append_local_log(_result_text(result, "已投降。"))
+		# A refused concession (shop/minigame still open, not this actor's turn)
+		# must never report that the player surrendered.
+		_append_local_log(_result_text(result, "已投降。" if bool(result.get("ok", false)) else "目前無法投降。"))
 		_handle_result(result)
 	else:
 		_finish_source_options_child(source_options_panel)

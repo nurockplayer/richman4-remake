@@ -29,7 +29,11 @@ const CHECKS := [
 	["trustee_panel", "Panel", 77, 0],
 	["stock_panel", "Panel", 75, 0],
 	["shop_panel", "Panel", 10, 0],
+	["shop_panel_cart", "Panel", 10, 16],
+	["shop_panel_footer", "Panel", 10, 17],
 	["shop_held", "Panel", 11, 0],
+	["shop_held_rows", "Panel", 11, 15],
+	["shop_held_footer", "Panel", 11, 16],
 	["sale_board", "Panel", 73, 0],
 	["sale_tool_icons", "Panel", 74, 0],
 	["sale_confirmation", "Data", 399, 0],
@@ -59,6 +63,12 @@ const EDITION_RESOURCES := {
 	"loading": {"Game": 560, "MultiverseJourney": 601},
 }
 
+## Minigame presenters query every Panel resource in this range except Panel81,
+## which is the click mask rather than artwork.
+const MINIGAME_FIRST := 78
+const MINIGAME_LAST := 111
+const MINIGAME_CLICK_MASK := 81
+
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -85,25 +95,46 @@ func _initialize() -> void:
 			var chunk: int = int(check[3])
 			if EDITION_RESOURCES.has(presenter):
 				resource = int(EDITION_RESOURCES[presenter][edition])
-			var frame: Dictionary = visuals.ui(edition, archive, resource, chunk)
-			var texture: Texture2D = visuals.texture(frame)
-			var status := "found" if texture != null else "fallback"
-			print("ART\t%s\t%s\t%s/%d/%d\t%s" % [
-				presenter, edition, archive, resource, chunk, status,
-			])
-			if texture != null:
+			if _check(visuals, edition, presenter, archive, resource, chunk):
+				found += 1
+			else:
+				missing += 1
+		for resource in range(MINIGAME_FIRST, MINIGAME_LAST + 1):
+			if resource == MINIGAME_CLICK_MASK:
+				continue
+			if _check(
+				visuals, edition, "minigame_%d" % resource, "Panel", resource, 0
+			):
 				found += 1
 			else:
 				missing += 1
 	if not original_root.is_empty():
-		_report_extra(original_root)
+		missing += _report_extra(original_root)
 	print("SUMMARY\tfound=%d\tfallback=%d\tmaps=%d" % [
 		found, missing, visuals.manifest.get("maps", []).size(),
 	])
 	quit(1 if missing > 0 else 0)
 
 
-func _report_extra(original_root: String) -> void:
+func _check(
+	visuals,
+	edition: String,
+	presenter: String,
+	archive: String,
+	resource: int,
+	chunk: int,
+) -> bool:
+	var frame: Dictionary = visuals.ui(edition, archive, resource, chunk)
+	var texture: Texture2D = visuals.texture(frame)
+	var status := "found" if texture != null else "fallback"
+	print("ART\t%s\t%s\t%s/%d/%d\t%s" % [
+		presenter, edition, archive, resource, chunk, status,
+	])
+	return texture != null
+
+
+func _report_extra(original_root: String) -> int:
+	var missing := 0
 	var catalog_path := original_root.path_join("maps/catalog.json")
 	var catalog_status := "missing"
 	if FileAccess.file_exists(catalog_path):
@@ -111,8 +142,24 @@ func _report_extra(original_root: String) -> void:
 			FileAccess.get_file_as_string(catalog_path)
 		)
 		if parsed is Dictionary and parsed.get("maps") is Array:
-			catalog_status = "maps=%d" % parsed.maps.size()
+			if parsed.maps.is_empty():
+				catalog_status = "invalid"
+			else:
+				catalog_status = "maps=%d" % parsed.maps.size()
+		else:
+			catalog_status = "invalid"
 	print("EXTRA\tcatalog\t%s" % catalog_status)
+	if not catalog_status.begins_with("maps="):
+		missing += 1
 	for name in ["help", "audio"]:
 		var path := original_root.path_join("%s/manifest.json" % name)
-		print("EXTRA\t%s\t%s" % [name, "present" if FileAccess.file_exists(path) else "missing"])
+		var status := "missing"
+		if FileAccess.file_exists(path):
+			var parsed: Variant = JSON.parse_string(
+				FileAccess.get_file_as_string(path)
+			)
+			status = "present" if parsed is Dictionary else "invalid"
+		print("EXTRA\t%s\t%s" % [name, status])
+		if status != "present":
+			missing += 1
+	return missing

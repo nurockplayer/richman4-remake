@@ -99,14 +99,29 @@ if [[ "$report_status" -ne 0 ]]; then
   exit 1
 fi
 
-# 5. Publish the zip and its digest outside the worktree.
+# 5. Publish atomically: stage next to the final name, verify the copy, then
+#    rename. A failed rebuild must never leave a partial zip under the
+#    legitimate release name.
 mkdir -p "$output_dir"
 short_sha="$(git rev-parse --short=8 HEAD)"
 zip_name="Richman4-rc1-$short_sha.zip"
-cp "$private_zip" "$output_dir/$zip_name"
-(
-  cd "$output_dir"
-  shasum -a 256 "$zip_name" | tee "$zip_name.sha256"
-)
+staging_zip="$(mktemp "$output_dir/.$zip_name.XXXXXX")"
+staging_sha="$(mktemp "$output_dir/.$zip_name.sha256.XXXXXX")"
+trap 'cleanup; rm -f "$staging_zip" "$staging_sha"' EXIT
+cp "$private_zip" "$staging_zip"
+expected_digest="$(shasum -a 256 "$private_zip" | awk '{print $1}')"
+staged_digest="$(shasum -a 256 "$staging_zip" | awk '{print $1}')"
+[[ "$staged_digest" == "$expected_digest" ]] || {
+  echo "Staged RC copy does not match $private_zip" >&2
+  exit 1
+}
+unzip -tq "$staging_zip" >/dev/null || {
+  echo "Staged RC zip failed its integrity check" >&2
+  exit 1
+}
+printf '%s  %s\n' "$staged_digest" "$zip_name" >"$staging_sha"
+mv -f "$staging_zip" "$output_dir/$zip_name"
+mv -f "$staging_sha" "$output_dir/$zip_name.sha256"
+echo "$staged_digest  $zip_name"
 echo "RC package: $output_dir/$zip_name"
 echo "Art report: $report"

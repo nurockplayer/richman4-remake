@@ -45,7 +45,7 @@ from prepare_lottery_assets import (
 # lottery; Panel21/23/24 the bank/ATM calculator; Panel73/74 the SALE browser;
 # Panel75 the stock board; Panel78-111 the source minigames.  Panel81 is the
 # catching click plane, not artwork, and is never exported.
-MINIGAME_UI_RESOURCES = tuple(index for index in range(79, 112) if index != 81)
+MINIGAME_UI_RESOURCES = tuple(index for index in range(78, 112) if index != 81)
 UI_RESOURCES = {
     "Data": (1, 2, 3),
     "Panel": (
@@ -431,9 +431,10 @@ def _export_resource(
 def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
     """Export the bounded UI resource set for one known edition.
 
-    Missing optional archives or entries remain absent.  Once an explicitly
-    bound entry exists, malformed data and missing configured chunks are hard
-    errors; this keeps a wrong edition/index from silently looking valid.
+    Optional archives that are not present remain absent.  Once an archive is
+    present it must contain every configured entry; malformed data, an entry
+    beyond the index table and missing configured chunks are hard errors.  A
+    silently truncated archive must not look like a complete export.
     The stage must be a private output: this function is a public entrypoint
     and every call writes decoded original artwork.
     """
@@ -451,7 +452,10 @@ def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
         resources = {}
         for index, chunks in index_specs.items():
             if index >= len(archive.entries):
-                continue
+                raise FormatError(
+                    f"UI resource at {archive.path}:{index} is beyond the "
+                    f"archive's {len(archive.entries)} entries"
+                )
             resources[str(index)] = _export_resource(
                 canonical, name, index, chunks, archive, stage
             )

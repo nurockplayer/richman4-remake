@@ -42,6 +42,8 @@ else
   echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
   echo "SKIP: source bank catalog ingress requires RICHMAN4_MAP_CATALOG"
 fi
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
 # Visual fixtures cover layout and controls; native atlas rendering remains a
 # separate gate, and the opaque-background test reports its headless skip.

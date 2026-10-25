@@ -235,6 +235,11 @@ func _run() -> void:
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "persisted options keep the accepted music level")
 	if ui.audio_controller != null:
 		_expect(not bool(ui.audio_controller.get("enabled")), "music switch turns off runtime playback")
+		_expect(is_equal_approx(float(ui.audio_controller.get("volume")), 0.0), "music level zero applies a zero runtime gain")
+	# Issue #148: accepted values reach the runtime consumers, not just the file.
+	_expect_equal(int(ui._source_settings.get("speed", -1)), 0, "accepted speed reaches the runtime settings")
+	_expect_equal(ui._source_preferences.movement_seconds(ui._source_settings), 0.24, "accepted speed paces movement presentation only")
+	_expect_equal(ui.source_hotkeys_bindings.size(), 28, "startup loads a complete ordinary key set")
 
 	# The HUD music switch must keep the same committed preference, otherwise
 	# the next launch reverts it from system-options.json.
@@ -264,6 +269,18 @@ func _run() -> void:
 	_expect(panel.call("is_open"), "in-game toolbar OPTION opens the presenter")
 	_expect(panel.call("view_model").get("mode") == "game", "in-game entry presents the game commands")
 	panel.call("close_options")
+	await _settle()
+
+	# Issue #148: the default source V binding reaches the same host through
+	# the ordinary key dispatch.
+	var options_key := InputEventKey.new()
+	options_key.keycode = KEY_V
+	options_key.pressed = true
+	ui._unhandled_input(options_key)
+	await _settle()
+	_expect(panel.call("is_open"), "source default V binding opens the in-game options host")
+	panel.call("close_options")
+	await _settle()
 
 	# An unavailable edition (for example the synthetic fallback board) must
 	# fail closed: no visible overlay that the modal gate does not know about.

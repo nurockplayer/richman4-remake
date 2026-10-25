@@ -21,6 +21,7 @@ const SleepPresentation = preload("res://game/ui/sleep_presentation.gd")
 const AuctionPresentation = preload("res://game/ui/auction_presentation.gd")
 const TransportPicker = preload("res://game/ui/transport_picker.gd")
 const GameShell = preload("res://game/ui/game_shell.gd")
+const SourceSetupPanel = preload("res://game/ui/source_setup_panel.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 const SourceSaveMenu = preload("res://game/ui/source_save_menu.gd")
 const SourceInventoryPanel = preload("res://game/ui/source_inventory_panel.gd")
@@ -30,7 +31,10 @@ const SourceBankController = preload("res://game/ui/source_bank_controller.gd")
 const SourceMinigameAssets = preload("res://game/platform/source_minigame_assets.gd")
 const SourceMinigameController = preload("res://game/ui/source_minigame_controller.gd")
 const SourceOptionsPanel = preload("res://game/ui/source_options_panel.gd")
+const SourceDatePanel = preload("res://game/ui/source_date_panel.gd")
+const SourceHotkeysPanel = preload("res://game/ui/source_hotkeys_panel.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
+const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
 const SourceMonthlyController = preload("res://game/ui/source_monthly_controller.gd")
 const SourceTrusteeController = preload("res://game/ui/source_trustee_controller.gd")
 const FALLBACK_MAP_ID := "test:classic40"
@@ -85,9 +89,15 @@ var source_minigame_controller: Control
 ## Cached at settings apply so minigame admission never reads settings from disk.
 var _source_minigame_animation := true
 var source_options_panel: Control
+var source_date_panel: Control
+var source_hotkeys_panel: Control
 var system_settings: RefCounted
+var system_hotkeys: RefCounted
 ## Explicit so tests and previews never touch the owner's real settings file.
 var settings_path := SystemSettings.DEFAULT_PATH
+var hotkeys_path := SystemHotkeys.DEFAULT_PATH
+## Committed 28-slot bindings for a future input consumer (Issue #148).
+var source_hotkeys_bindings: Array = []
 var source_monthly_controller: Control
 var legacy_interface_root: Control
 
@@ -199,6 +209,8 @@ var route_status_label: Label
 var _local_log: Array[String] = []
 var _ai_pending := false
 var _options_help_open := false
+## Date child confirmation survives the outer options cancel (source contract).
+var _source_start_date_override: Dictionary = {}
 var _last_rendered_phase := ""
 var _selected_tile := -1
 var _map_catalog: Array = []
@@ -236,6 +248,7 @@ var _inventory_close_callback := Callable()
 var _presentation_generation := 0
 var _presentation_result: Dictionary = {}
 var _presentation_owner: Object
+var _source_setup_return_to_game := false
 var source_trustee_controller: Control
 var _trustee_owner: Object
 var _trustee_generation := -1
@@ -397,6 +410,10 @@ func _build_source_shell() -> void:
 		shell.minimap_node_requested.connect(_on_source_minimap_node_requested)
 	if shell.has_method("set_board_view"):
 		shell.call("set_board_view", board_view)
+	var setup_panel := shell.get_node_or_null("SourceSetupPanel")
+	if setup_panel != null:
+		setup_panel.confirmed.connect(_on_source_setup_confirmed)
+		setup_panel.cancelled.connect(_on_source_setup_cancelled)
 	_build_source_stock_panel()
 	_build_source_save_menu()
 	_build_source_inventory_panel()
@@ -445,6 +462,29 @@ func _build_source_options() -> void:
 	panel.preview_requested.connect(_on_source_options_preview)
 	canvas.add_child(panel)
 	source_options_panel = panel
+	_build_source_options_children(canvas)
+
+
+## The date and hotkey windows are source child windows opened from the title
+## commands; they cover the suspended options presenter until they close.
+func _build_source_options_children(canvas: Control) -> void:
+	system_hotkeys = SystemHotkeys.new()
+	var date_panel := SourceDatePanel.new()
+	date_panel.name = "SourceDatePanelHost"
+	date_panel.z_index = 75
+	date_panel.hide()
+	date_panel.accepted.connect(_on_source_date_accepted)
+	date_panel.cancelled.connect(_on_source_date_cancelled)
+	canvas.add_child(date_panel)
+	source_date_panel = date_panel
+	var hotkeys_panel := SourceHotkeysPanel.new()
+	hotkeys_panel.name = "SourceHotkeysPanelHost"
+	hotkeys_panel.z_index = 75
+	hotkeys_panel.hide()
+	hotkeys_panel.accepted.connect(_on_source_hotkeys_accepted)
+	hotkeys_panel.cancelled.connect(_on_source_hotkeys_cancelled)
+	canvas.add_child(hotkeys_panel)
+	source_hotkeys_panel = hotkeys_panel
 
 
 func _build_source_bank_controller() -> void:
@@ -557,7 +597,70 @@ func _on_source_start_requested() -> void:
 		return
 	if _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_minigame_modal_open():
 		return
-	_on_new_game_pressed()
+	# The legacy popup remains the fallback when no source-edition map is
+	# available, so the public checkout keeps its synthetic-board path.
+	if source_shell == null or not source_shell.has_method("show_setup") or not SourceSetupPanel.has_source_maps(_map_catalog):
+		_on_new_game_pressed()
+		return
+	# MainUI builds the ordinary game state before showing the source title.
+	# Entry intent therefore comes from the visible shell surface, rather than
+	# from the presence of an initialized state behind the title.
+	var title_visible := false
+	if source_shell.has_method("is_title_visible"):
+		title_visible = bool(source_shell.call("is_title_visible"))
+	_source_setup_return_to_game = not title_visible and game_state != null and not state.is_empty() and str(state.get("phase", "")) != "unavailable"
+	var selected := _active_map_definition.duplicate(true)
+	if selected.is_empty():
+		selected = _selected_map_definition.duplicate(true)
+	selected = _source_setup_definition(selected)
+	var player_count := int(_as_array(state.get("players", [])).size())
+	if player_count < 2 or player_count > 4:
+		player_count = PLAYER_COUNT
+	var defaults := _setup_options_from_state(true)
+	if defaults.is_empty():
+		defaults = _default_setup_options(player_count, selected)
+	defaults["player_count"] = player_count
+	var catalog: Array = _map_catalog.duplicate(true)
+	source_shell.call("show_setup", catalog, selected, defaults)
+
+
+func _source_setup_definition(identity: Dictionary) -> Dictionary:
+	# Current board geometry is a display snapshot, not an initial map. Match
+	# the pinned source identity to regain its capabilities and market data.
+	for value in _map_catalog:
+		if value is Dictionary and str(value.get("id", "")) == str(identity.get("id", "")) and _map_source_matches(value.get("source", {}), identity.get("source", {}), true):
+			return value.duplicate(true)
+	return identity.duplicate(true)
+
+
+func _on_source_setup_confirmed(options: Dictionary, map_definition: Dictionary) -> void:
+	var character_ids: Variant = options.get("character_ids", [])
+	var requested_count := int(options.get("player_count", character_ids.size() if character_ids is Array else 0))
+	if requested_count < 2 or requested_count > 4:
+		return
+	var source_definition := _source_setup_definition(map_definition)
+	var effective_options := _default_setup_options(requested_count, source_definition)
+	# The source panel supplies player choices. Ruleset capabilities always
+	# come from the validated initial catalog, never from presentation fields.
+	for key in ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "human_character_ids", "player_count"]:
+		if options.has(key):
+			effective_options[key] = options[key]
+	var before_game := game_state
+	var before_seed := int(state.get("seed", MIN_SEED - 1))
+	if _new_game(null, requested_count, source_definition, effective_options):
+		_source_setup_return_to_game = false
+	elif game_state == before_game and int(state.get("seed", MIN_SEED - 1)) == before_seed:
+		_refresh_log_only()
+
+
+func _on_source_setup_cancelled() -> void:
+	if source_shell == null:
+		return
+	if _source_setup_return_to_game and game_state != null and str(state.get("phase", "")) != "unavailable":
+		source_shell.call("show_game")
+	else:
+		source_shell.call("show_title")
+	_source_setup_return_to_game = false
 
 func _build_source_save_menu() -> void:
 	if source_shell == null:
@@ -738,8 +841,104 @@ func _on_source_options_command(command: String) -> void:
 		if not _open_source_help():
 			_finish_options_help()
 		return
+	if command == "date":
+		_open_source_date_child()
+		return
+	if command == "hotkeys":
+		_open_source_hotkeys_child()
+		return
 	_append_local_log("選項指令「%s」將在後續原版視窗接入。" % command)
 	_refresh_log_only()
+
+
+func _open_source_date_child() -> void:
+	if source_date_panel == null or source_options_panel == null:
+		return
+	var system_date := _system_clock_date()
+	source_date_panel.set_visuals(source_shell.get("_visuals"))
+	var opened: bool = source_date_panel.set_view_model({
+		"edition": _source_bank_edition(),
+		"date": _source_options_date(system_date),
+		"system_date": system_date,
+	})
+	if not opened:
+		# An unavailable model must not leave a visible overlay the modal gate
+		# does not know about; the host reports the failure in the log instead.
+		source_date_panel.hide()
+		_append_local_log("日期資料無法顯示。")
+		_refresh_log_only()
+		return
+	# The source keeps the parent draft while the child window owns input.
+	source_options_panel.suspend_input(true)
+
+
+func _open_source_hotkeys_child() -> void:
+	if source_hotkeys_panel == null or source_options_panel == null:
+		return
+	# Bindings accepted this session win over the file, so a failed save does
+	# not silently revert them when the child is reopened.
+	var bindings: Array = source_hotkeys_bindings.duplicate(true)
+	if bindings.is_empty():
+		var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+		bindings = system_hotkeys.defaults()
+		if bool(loaded.get("ok", false)):
+			bindings = loaded.get("bindings", bindings)
+		else:
+			# A damaged file must stay repairable: show the source defaults and
+			# let confirmation replace it.
+			_append_local_log("熱鍵設定檔無法讀取，已改用原始設定。")
+	source_hotkeys_panel.set_visuals(source_shell.get("_visuals"))
+	var opened: bool = source_hotkeys_panel.set_view_model({
+		"edition": _source_bank_edition(),
+		"bindings": bindings,
+	})
+	if not opened:
+		source_hotkeys_panel.hide()
+		_append_local_log("熱鍵資料無法顯示。")
+		_refresh_log_only()
+		return
+	source_options_panel.suspend_input(true)
+
+
+## The date child never writes a settings file; its committed date survives an
+## outer options cancel and seeds the next setup.  Issue #148 owns the live
+## runtime date consumer.
+func _on_source_date_accepted(date: Dictionary) -> void:
+	_source_start_date_override = date.duplicate(true)
+	_finish_source_options_child(source_date_panel)
+	_append_local_log("起始日期已改為 %d 年 %d 月 %d 日。" % [
+		int(date.get("year", 0)), int(date.get("month", 0)), int(date.get("day", 0)),
+	])
+	_refresh_log_only()
+
+
+func _on_source_date_cancelled() -> void:
+	_finish_source_options_child(source_date_panel)
+	_refresh_log_only()
+
+
+## The hotkey child persists on its own confirmation, independent of the outer
+## options cancel.  Issue #148 owns the InputMap consumer.
+func _on_source_hotkeys_accepted(bindings: Array) -> void:
+	var result: Dictionary = system_hotkeys.write_bindings(hotkeys_path, bindings)
+	if bool(result.get("ok", false)):
+		source_hotkeys_bindings = (result.get("bindings", bindings) as Array).duplicate(true)
+		_append_local_log("熱鍵已儲存。")
+	else:
+		_append_local_log("熱鍵儲存失敗；變更只在目前執行中生效。")
+		source_hotkeys_bindings = bindings.duplicate(true)
+	_finish_source_options_child(source_hotkeys_panel)
+	_refresh_log_only()
+
+
+func _on_source_hotkeys_cancelled() -> void:
+	_finish_source_options_child(source_hotkeys_panel)
+	_refresh_log_only()
+
+
+func _finish_source_options_child(_panel: Control) -> void:
+	if source_options_panel != null and bool(source_options_panel.call("is_open")):
+		source_options_panel.call("suspend_input", false)
 
 
 func _finish_options_help() -> void:
@@ -1658,10 +1857,32 @@ func _select_option_id(option: OptionButton, value: int) -> bool:
 	return false
 
 func _system_start_date() -> Dictionary:
+	# A date confirmed in the options date child outranks the OS clock.
+	if GameCalendar.is_valid(_source_start_date_override):
+		return _source_start_date_override.duplicate(true)
+	return _system_clock_date()
+
+func _system_clock_date() -> Dictionary:
 	var system_date: Variant = Time.get_date_dict_from_system()
 	if system_date is Dictionary and GameCalendar.is_valid(system_date):
 		return {"year": int(system_date.get("year", 0)), "month": int(system_date.get("month", 0)), "day": int(system_date.get("day", 0))}
 	return {}
+
+## Seed for the date child: the committed override, the loaded game's start
+## date, or the host clock, in that order.  The presenter requires a valid date.
+func _source_options_date(system_date: Dictionary) -> Dictionary:
+	if GameCalendar.is_valid(_source_start_date_override):
+		return _source_start_date_override.duplicate(true)
+	var start_date: Variant = state.get("start_date", null)
+	if start_date is Dictionary and GameCalendar.is_valid(start_date):
+		return {
+			"year": int(start_date.get("year", 0)),
+			"month": int(start_date.get("month", 0)),
+			"day": int(start_date.get("day", 0)),
+		}
+	if not system_date.is_empty():
+		return system_date.duplicate(true)
+	return {"year": 1998, "month": 1, "day": 1}
 
 func _default_setup_options(player_count: int, map_definition: Dictionary = {}) -> Dictionary:
 	var date := _system_start_date()
@@ -1745,7 +1966,7 @@ func _setup_date_from_controls() -> Dictionary:
 		return {}
 	return {"year": int(start_year_input.value), "month": int(start_month_input.value), "day": int(start_day_input.value)}
 
-func _setup_options_from_state() -> Dictionary:
+func _setup_options_from_state(derive_human_flags: bool = false) -> Dictionary:
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		return {}
@@ -1757,7 +1978,7 @@ func _setup_options_from_state() -> Dictionary:
 		if not player is Dictionary or not player.has("character_id"):
 			return {}
 		character_ids.append(int(player.get("character_id", -1)))
-	return {
+	var options := {
 		"original_inventory": int(state.get("version", 0)) in [4, 5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_facilities": int(state.get("version", 0)) in [5, 6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
 		"original_gods": int(state.get("version", 0)) in [6, COMPANY_SAVE_VERSION, STATUS_SAVE_VERSION, HAZARD_SAVE_VERSION, PROPERTY_CARD_SAVE_VERSION, REMODEL_SAVE_VERSION, RESEARCH_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION],
@@ -1774,6 +1995,34 @@ func _setup_options_from_state() -> Dictionary:
 		"start_date": {"year": int(start_date.get("year", 0)), "month": int(start_date.get("month", 0)), "day": int(start_date.get("day", 0))},
 		"character_ids": character_ids,
 	}
+	var initial_flags: Variant = state.get("initial_human_flags", null)
+	if initial_flags is Array and initial_flags.size() == player_count:
+		var flags_valid := true
+		for flag in initial_flags:
+			if typeof(flag) != TYPE_BOOL:
+				flags_valid = false
+				break
+		if flags_valid:
+			options["human_flags"] = initial_flags.duplicate()
+	if derive_human_flags and not options.has("human_flags"):
+		# Older saves and games started from the legacy popup keep control
+		# only on the players. The source setup derives it from them so opening
+		# the panel does not silently turn additional humans into AI; restart
+		# keeps its own defaults untouched.
+		var saved_flags: Array = []
+		for player in state.get("players", []):
+			if not player is Dictionary or typeof(player.get("is_human", null)) != TYPE_BOOL:
+				saved_flags.clear()
+				break
+			saved_flags.append(bool(player.is_human))
+		if saved_flags.size() == player_count and saved_flags.count(true) > 0:
+			options["human_flags"] = saved_flags
+	var initial_vehicle: Variant = state.get("initial_vehicle", null)
+	if initial_vehicle is String and ["walking", "motorcycle", "car"].has(initial_vehicle):
+		options["initial_vehicle"] = initial_vehicle
+	if state.has("land_tenure_months"):
+		options["land_tenure_months"] = int(state.land_tenure_months)
+	return options
 
 func _populate_setup_controls() -> void:
 	var player_count := int(_as_array(state.get("players", [])).size())
@@ -1792,8 +2041,11 @@ func _populate_setup_controls() -> void:
 	if not SETUP_WEALTH_MULTIPLIERS.has(wealth_multiplier):
 		wealth_multiplier = 0
 	_select_option_id(wealth_multiplier_option, wealth_multiplier)
+	# A date confirmed in the options date child outranks the running game's.
 	var date_value: Variant = state.get("start_date", null)
-	var date: Dictionary = date_value.duplicate(true) if date_value is Dictionary and GameCalendar.is_valid(date_value) else _system_start_date()
+	var date: Dictionary = _system_start_date()
+	if not GameCalendar.is_valid(_source_start_date_override) and date_value is Dictionary and GameCalendar.is_valid(date_value):
+		date = date_value.duplicate(true)
 	if date.is_empty():
 		date = {"year": MIN_START_YEAR, "month": 1, "day": 1}
 	start_year_input.value = int(date.get("year", MIN_START_YEAR))
@@ -2301,6 +2553,14 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	var effective_setup := setup_options.duplicate(true)
 	if effective_setup.is_empty() and (bool(selected_definition.get("original_facilities", false)) or bool(selected_definition.get("supports_original_companies", false))):
 		effective_setup = _default_setup_options(resolved_players, selected_definition)
+	if effective_setup.has("human_character_ids"):
+		# The source panel selects humans in click order and leaves AI slots
+		# empty; fill them from a local seed RNG so the strict factory contract
+		# (unique character ids per player) still holds.
+		effective_setup = SourceSetupPanel.resolve_players(effective_setup, resolved_players, resolved_seed)
+		if effective_setup.is_empty():
+			_append_local_log("真人角色選擇無效；目前棋局保持不變。")
+			return false
 	var state_script: Variant = load("res://game/core/game_state.gd")
 	var candidate: Variant = null
 	if state_script != null:
@@ -2471,10 +2731,11 @@ func _source_save_operation_allowed() -> bool:
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
+	var setup_open: bool = source_shell != null and source_shell.has_method("is_setup_visible") and source_shell.is_setup_visible()
 	var stocks_open: bool = source_stock_panel != null and source_stock_panel.visible
 	var inspect_open: bool = source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible()
 	var save_open: bool = source_save_menu != null and source_save_menu.visible
-	return title_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_options_modal_open() or _source_minigame_modal_open()
+	return title_open or setup_open or stocks_open or inspect_open or save_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_options_modal_open() or _source_minigame_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
 	return _source_bank_modal_open() or _source_monthly_modal_open() or _source_trustee_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _source_minigame_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)

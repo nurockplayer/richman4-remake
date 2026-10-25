@@ -98,6 +98,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_sourc
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transport.gd
+# Issue #128 source new-game setup surface: hit geometry, ordered humans,
+# deterministic AI fill, catalog capability preservation and restart defaults.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_interaction.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.
@@ -142,6 +147,14 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_audio_selecti
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rendering.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_main_ui.gd
+# Issue #143 source date and 28-slot hotkey child windows.
+RICHMAN4_HOTKEYS_TEST_ROOT="$PWD/.local/system-hotkeys-$BASHPID" run_checked "$GODOT_BIN" --headless --path . --script tests/system_hotkeys.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_date_hint_layout.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_hotkeys_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_hotkeys_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_children_legibility.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_runtime.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_effects.gd

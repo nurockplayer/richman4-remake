@@ -107,6 +107,7 @@ func _test_audio(prefs: RefCounted) -> void:
 	volume_only.player = null
 	volume_only.volume = 0.4
 	_expect(not prefs.apply(_settings(0), volume_only), "audio without a playback gain field is not mutated")
+	_expect(volume_only.enable_calls.is_empty() and volume_only.enabled, "an inapplicable level does not stop playback")
 	_expect(volume_only.volume_calls.is_empty() and is_equal_approx(volume_only.volume, 0.4), "stored startup volume survives an inapplicable level")
 
 

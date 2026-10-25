@@ -51,6 +51,13 @@ func apply(settings: Dictionary, audio: Object) -> bool:
 	var checked := SETTINGS_SCRIPT.new().validate_settings(settings)
 	if not bool(checked.get("ok", false)) or audio == null:
 		return false
+	# Write the playback gain only.  OriginalAudio persists its `volume` field
+	# on every persistent operation (HUD toggle, library change), so a scaled
+	# level must never become the stored startup volume and compound.  Without
+	# that field there is no safe way to apply the level at all.
+	var player: Variant = audio.get("player")
+	if not (player is Object and "volume_linear" in player):
+		return false
 	capture_audio_baseline(audio)
 	var normalized: Dictionary = checked.get("settings", {})
 	var level := clampi(int(normalized.get("music_level", 0)), 0, MUSIC_GAINS.size() - 1)
@@ -61,17 +68,8 @@ func apply(settings: Dictionary, audio: Object) -> bool:
 	# when the enabled state is unchanged; volume changes are independent.
 	if currently_enabled != enabled and audio.has_method("set_enabled"):
 		audio.call("set_enabled", enabled, false)
-	# Write the playback gain only.  OriginalAudio persists its `volume` field
-	# on every persistent operation (HUD toggle, library change), so a scaled
-	# level must never become the stored startup volume and compound.
-	var gain: float = float(MUSIC_GAINS[level]) * startup_volume
-	var player: Variant = audio.get("player")
-	if player is Object and "volume_linear" in player:
-		player.set("volume_linear", gain)
-		return true
-	# No playback gain field means no safe way to apply the level without
-	# rewriting the stored startup volume, so leave the audio object untouched.
-	return false
+	player.set("volume_linear", float(MUSIC_GAINS[level]) * startup_volume)
+	return true
 
 
 ## Source movement pacing inferred from its 6/4/2 tick controls. This is a

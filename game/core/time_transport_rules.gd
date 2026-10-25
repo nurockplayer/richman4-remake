@@ -1,5 +1,6 @@
 class_name RichmanTimeTransportRules
 extends RefCounted
+const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 
 const OriginalInventory = preload("res://game/core/inventory_rules.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
@@ -479,6 +480,7 @@ static func _apply_transport(game: Object, player_id: int, target_kind: String, 
 		var owner := int(source.get("owner", -1))
 		var level := int(source.get("building_level", 0))
 		var chain := bool(source.get("is_chain_store", false))
+		LandTenure.transfer(game, source, destination)
 		source["owner"] = -1
 		source["building_level"] = 0
 		source["is_chain_store"] = false
@@ -499,6 +501,7 @@ static func _apply_transport(game: Object, player_id: int, target_kind: String, 
 		var owner := int(source_record.get("owner", -1))
 		var level := int(source_record.get("building_level", 0))
 		var facility_type := int(source_record.get("facility_type", 0))
+		LandTenure.transfer(game, source_record, destination_record)
 		game._update_facility_records(int(source_record.get("source_object_id", -1)), {"owner": -1, "building_level": 0, "facility_type": 0})
 		game._update_facility_records(int(destination_record.get("source_object_id", -1)), {"owner": owner, "building_level": level, "facility_type": facility_type})
 		var source_canonical := int(game._facility_canonical_index(target_id))

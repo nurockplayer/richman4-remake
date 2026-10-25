@@ -224,7 +224,7 @@ func test_metadata_validation() -> void:
 	subunit_positive.players[0].stocks.s01 = 1
 	subunit_positive.players[0]["stock_average_costs"] = populated_costs()
 	subunit_positive.players[0].stock_average_costs.s01 = 0.5
-	expect(not bool(Game.validate_save(subunit_positive).get("ok", false)), "positive holding cannot use an impossible subunit average")
+	expect(preload("res://game/core/stock_accounting.gd").validate_player(subunit_positive.players[0], Market.symbols()).is_empty(), "source SALE can leave one share with a valid subunit average")
 	var huge_positive: Dictionary = saved.duplicate(true)
 	huge_positive.players[0].stocks.s01 = 1
 	huge_positive.players[0]["stock_average_costs"] = populated_costs()

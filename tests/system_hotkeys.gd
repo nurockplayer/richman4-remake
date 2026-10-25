@@ -33,7 +33,7 @@ func _run() -> void:
 		changed[8] = invalid
 		_expect(not hotkeys.validate_bindings(changed).ok, "public bindings reject unsupported key/modifier/type")
 	changed = expected.duplicate()
-	changed[8] = 65.0
+	changed[8] = 66.0
 	var decoded: Dictionary = hotkeys.validate_bindings(changed, true)
 	_expect(decoded.ok and typeof(decoded.bindings[8]) == TYPE_INT, "JSON whole numbers normalize only on explicit decode")
 	changed[8] = 0
@@ -82,6 +82,24 @@ func _run() -> void:
 		_expect(not hotkeys.read_bindings(path).ok, "malformed JSON rejected")
 		_write(path, " ".repeat(4097))
 		_expect(not hotkeys.read_bindings(path).ok, "oversized file rejected")
+		# A stored map has to be reproducible from the source dialog: the fixed
+		# eight keys keep their defaults, no key besides the default TAB pair is
+		# shared, and at least one function stays bound.
+		var stored_cases := {
+			"duplicate_binding": _with_slot(expected, 10, 0x44),
+			"fixed_binding_changed": _with_slot(expected, 0, 0x51),
+			"zero_bindings": [],
+		}
+		for _unused in range(28):
+			(stored_cases.zero_bindings as Array).append(0)
+		for error_name in stored_cases:
+			_write(path, JSON.stringify({"schema":"richman4.system-hotkeys/v1","bindings":stored_cases[error_name]}))
+			var stored: Dictionary = hotkeys.read_bindings(path)
+			_expect(not stored.ok and stored.status == "unavailable" and str(stored.error) == error_name, "stored %s rejected" % error_name)
+			_expect(stored.bindings == hotkeys.defaults(), "stored %s falls back to defaults" % error_name)
+			var before_bytes := FileAccess.get_file_as_bytes(path)
+			_expect(not hotkeys.write_bindings(path, stored_cases[error_name]).ok, "%s write rejected" % error_name)
+			_expect(FileAccess.get_file_as_bytes(path) == before_bytes, "rejected %s write preserves file bytes" % error_name)
 		_expect(hotkeys.write_bindings(path, expected).ok, "explicit valid write can repair invalid config")
 		var directory := DirAccess.open(root_path)
 		_expect(directory.get_files() == PackedStringArray(["keys.json"]), "temporary files cleaned after writes")
@@ -89,6 +107,11 @@ func _run() -> void:
 		DirAccess.remove_absolute(root_path)
 	print("System hotkeys checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
+
+func _with_slot(bindings: Array, slot: int, value: int) -> Array:
+	var copy: Array = bindings.duplicate(true)
+	copy[slot] = value
+	return copy
 
 func _write(path: String, contents: String) -> void:
 	var file := FileAccess.open(path, FileAccess.WRITE)

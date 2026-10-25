@@ -101,6 +101,13 @@ func _test_audio(prefs: RefCounted) -> void:
 	var invalid := _settings()
 	invalid.erase("view")
 	_expect(not prefs.apply(invalid, audio) and is_equal_approx(audio.player.volume_linear, before), "invalid settings are rejected without audio mutation")
+	# An audio object without a playback gain field must never fall back to a
+	# stored-volume setter: that field is what a later operation persists.
+	var volume_only := FakeAudio.new()
+	volume_only.player = null
+	volume_only.volume = 0.4
+	_expect(not prefs.apply(_settings(0), volume_only), "audio without a playback gain field is not mutated")
+	_expect(volume_only.volume_calls.is_empty() and is_equal_approx(volume_only.volume, 0.4), "stored startup volume survives an inapplicable level")
 
 
 func _test_movement(prefs: RefCounted) -> void:

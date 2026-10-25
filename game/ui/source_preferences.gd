@@ -69,9 +69,8 @@ func apply(settings: Dictionary, audio: Object) -> bool:
 	if player is Object and "volume_linear" in player:
 		player.set("volume_linear", gain)
 		return true
-	if audio.has_method("set_volume"):
-		audio.call("set_volume", gain, false)
-		return true
+	# No playback gain field means no safe way to apply the level without
+	# rewriting the stored startup volume, so leave the audio object untouched.
 	return false
 
 

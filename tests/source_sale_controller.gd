@@ -110,6 +110,22 @@ func controller_checks() -> void:
 	controller.sync(actor,false)
 	controller.close_current()
 	expect(controller.amount_pad == null and not controller.is_open(),"accepted close clears the pad and disposes the controller")
+	# A dispatched close the domain rejects must keep the amount pad too.
+	open_for(actor,0)
+	var rejecting: Control = Controller.new()
+	root.add_child(rejecting)
+	rejecting.action_requested.connect(func(_method: String, _args: Array) -> void:
+		rejecting.apply_action_result({"ok": false, "message": "無法關閉"}))
+	rejecting.sync(actor,false)
+	rejecting.panel.action_requested.emit("category_selected",{"category":"tool"})
+	rejecting.panel.action_requested.emit("item_selected",{"category":"tool","source_id":1,"held_index":-1})
+	var rejected_pad: Control = rejecting.amount_pad
+	expect(rejected_pad != null,"rejecting fixture opens the asking amount pad")
+	rejecting.close_current()
+	expect(rejecting.amount_pad == rejected_pad and rejecting.is_open(),"domain-rejected close keeps the amount pad")
+	expect(rejecting.panel.view_model().view == "reference","domain-rejected close stays on the asking view")
+	rejecting.cancel()
+	rejecting.queue_free()
 	controller.queue_free()
 	await process_frame
 	print("Source SALE controller checks: %d, failures: %d" % [checks,failures])

@@ -491,7 +491,7 @@ func _run() -> void:
 	expect(cancelled_count == 0, "close press alone does not cancel")
 	await _release(viewport, Vector2(5, 470))
 	expect_equal(cancelled_count, 1, "close latch releases outside as cancelled")
-	expect(not panel.is_open(), "board close hides the panel")
+	expect(panel.is_open(), "board close waits for the host to dispose the panel")
 	panel.configure(_board_model())
 	cancelled_count = 0
 	await _release(viewport, Vector2(40, 40), MOUSE_BUTTON_RIGHT)
@@ -502,7 +502,7 @@ func _run() -> void:
 	cancelled_count = 0
 	await _key(viewport, KEY_ESCAPE)
 	expect_equal(cancelled_count, 1, "board Esc cancels through the same close request")
-	expect(not panel.is_open(), "board Esc hides the panel")
+	expect(panel.is_open(), "board Esc waits for the host to dispose the panel")
 
 	# Stock picker: compact positive rows only.
 	var zero_stock := _picker_model("stock", {"stock":[{"source_id":0,"name":"第一公司","quantity":3,"reference_value":30}],"property":[],"tool":[],"card":[]})

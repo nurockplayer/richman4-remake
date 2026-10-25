@@ -379,9 +379,9 @@ func _input(event: InputEvent) -> void:
 func _right_release() -> void:
 	match _view:
 		"board":
-			_is_open = false
-			_reset_latches()
-			hide()
+			# The presenter only asks to close; the host disposes the panel once
+			# the close request is accepted.  Hiding here would strand a panel
+			# that the blocked/pending gate refused to close.
 			cancelled.emit()
 		"picker", "detail", "reference":
 			action_requested.emit("back", {})
@@ -457,10 +457,9 @@ func _release_board() -> void:
 		_render()
 		return
 	if _pressed_close:
+		# As with the right release, EXIT only requests the close; the host
+		# hides the panel when it accepts the request.
 		_pressed_close = false
-		_is_open = false
-		_reset_latches()
-		hide()
 		cancelled.emit()
 		return
 	if _pressed_offer >= 0:

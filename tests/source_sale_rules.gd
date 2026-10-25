@@ -317,7 +317,11 @@ func test_ai_listing_rejection_keeps_slot() -> void:
 	var probe_state := 0
 	for candidate_state in range(1,4096):
 		probe.state = candidate_state
-		if probe.randi_range(0,14) == 0:
+		if probe.randi_range(0,14) != 0:
+			continue
+		probe.randi_range(0,0)
+		# Skip states whose repricing draw would rewrite unrelated offers.
+		if probe.randi_range(0,2) != 0:
 			probe_state = candidate_state
 			break
 	expect(probe_state > 0,"fixture finds a listing-decision RNG state")
@@ -328,8 +332,10 @@ func test_ai_listing_rejection_keeps_slot() -> void:
 	expected.randi_range(0,0)
 	expected.randi_range(0,2)
 	expected.randi_range(0,3)
+	var board_before := JSON.stringify(board.offers[0])
 	Sale.ai_turn(game)
 	expect(board.offers[0].size() == 7,"rejected AI listing restores the dropped seventh offer")
+	expect(JSON.stringify(board.offers[0]) == board_before,"rejected AI listing keeps every offer identity and order")
 	expect(int(game._rng.state) == int(expected.state),"AI listing keeps the source draw order")
 
 func test_surrender_during_sale() -> void:

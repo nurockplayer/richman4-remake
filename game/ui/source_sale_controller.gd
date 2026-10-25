@@ -209,12 +209,11 @@ func _show_confirmation() -> void:
 	confirmation.configure(_visuals,str(_owner.sale_snapshot().edition),_bindings)
 	_render()
 
-func _request(method: String, args: Array) -> bool:
-	if _owner == null or _blocked or _action_pending: return false
+func _request(method: String, args: Array) -> void:
+	if _owner == null or _blocked or _action_pending: return
 	_action_pending = true
 	_last_method = method
 	action_requested.emit(method,args)
-	return true
 
 func apply_action_result(result: Dictionary) -> void:
 	_action_pending = false
@@ -225,6 +224,9 @@ func apply_action_result(result: Dictionary) -> void:
 		finished.emit()
 		return
 	_feedback = str(result.get("message", ""))
+	# Only an accepted close may discard the open amount pad; a rejected close
+	# keeps the player's entry UI while the session stays alive.
+	if result.get("ok", false) and _last_method == "close_sale": _clear_children()
 	if result.get("ok", false) and _last_method in ["sale_create_offer","sale_cancel_offer","sale_accept_offer"]:
 		_view = "board"
 		_selected_item = {}
@@ -235,10 +237,9 @@ func apply_action_result(result: Dictionary) -> void:
 
 func close_current() -> void:
 	if _owner == null: return
-	# A blocked or pending host drops the request; the open amount pad must
-	# survive that drop instead of being torn down before the close is accepted.
-	if not _request("close_sale",[_session_id]): return
-	_clear_children()
+	# The children survive until the domain accepts the close: a blocked,
+	# pending or rejected request keeps the amount pad on screen.
+	_request("close_sale",[_session_id])
 
 func _clear_children() -> void:
 	_child_generation += 1

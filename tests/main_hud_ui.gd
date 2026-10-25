@@ -31,6 +31,30 @@ func _source_assets_available(shell: Control) -> bool:
 	return shell.get("_source_title_texture") != null
 
 
+## True when the control's rect in 640x480 reference-canvas coordinates stays
+## inside the frame.  Source turn controls are children of the game screen.
+func _inside_reference(control: Control) -> bool:
+	if control == null:
+		return false
+	var origin := Vector2.ZERO
+	var node: Node = control
+	while node != null and node is Control and str(node.name) != "ReferenceCanvas":
+		origin += (node as Control).position
+		node = node.get_parent()
+	var rect := Rect2(origin, control.size)
+	return rect.position.x >= 0.0 and rect.position.y >= 0.0 and rect.end.x <= 640.0 and rect.end.y <= 480.0
+
+
+func _dialog_fill(shell: Control) -> Color:
+	var box: Panel = shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") as Panel
+	if box == null:
+		return Color()
+	var style: StyleBox = box.get_theme_stylebox("panel")
+	if style is StyleBoxFlat:
+		return (style as StyleBoxFlat).bg_color
+	return Color()
+
+
 func _set_human_graph_game(ui: Control) -> Object:
 	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
 	_expect(bool(normalized.get("ok", false)), "HUD fixture map normalizes")
@@ -114,10 +138,13 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	var options_control: Button = shell.toolbar_buttons.get("options") as Button
 	_expect(options_control != null and not options_control.disabled, "source options command is available")
 	_expect(not shell.title_option_button.disabled, "source title options opens the presenter")
-	_expect(shell.action_strip.get_parent() == shell.game_screen, "context actions live on the board screen")
-	_expect(shell.roll_button.get_parent() == shell.action_strip and shell.roll_button.get_parent() != shell.hud_panel, "roll is a board-context action")
-	_expect(shell.buy_button.get_parent() == shell.action_strip and shell.upgrade_button.get_parent() == shell.action_strip and shell.end_turn_button.get_parent() == shell.action_strip, "landing actions share the board context strip")
-	_expect(shell.action_strip.find_child("ActionBackground", false, false) == null, "source actions do not mount a permanent navy scaffold")
+	_expect(shell.turn_dialog.get_parent() == shell.game_screen, "the source event box lives on the board screen")
+	_expect(shell.roll_button.get_parent() == shell.game_screen and shell.roll_button.get_parent() != shell.hud_panel, "the GO advance command is a board-context control")
+	_expect(shell.buy_button.get_parent() == shell.choice_selector and shell.upgrade_button.get_parent() == shell.choice_selector and shell.end_turn_button.get_parent() == shell.choice_selector, "landing choices share the source YES/NO picker")
+	_expect(shell.choice_selector.get_parent() == shell.game_screen, "the YES/NO picker is a separate board control")
+	_expect(shell.find_child("SourceActionStrip", true, false) == null, "the board mounts no permanent command strip")
+	_expect(not shell.turn_dialog.visible and not shell.choice_selector.visible, "the event box and picker stay hidden on an ordinary await-roll turn")
+	_expect(_inside_reference(shell.turn_dialog) and _inside_reference(shell.choice_selector) and _inside_reference(shell.roll_button), "source turn controls stay inside the 640x480 frame")
 	for index in range(4):
 		var key: String = ["cash", "property", "stock", "other"][index]
 		var tab: Button = shell.tab_buttons[key]
@@ -146,6 +173,7 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "third cycle returns to the dated panel")
 	_expect(not shell.buy_button.visible and not shell.upgrade_button.visible and not shell.end_turn_button.visible, "non-landing source turn hides unrelated actions")
 	_expect(shell.roll_button.visible and shell.roll_button.text == "GO", "await-roll source turn exposes the bounded GO control")
+	_expect(not shell.turn_dialog.visible and not shell.choice_selector.visible, "await-roll turn shows no decision dialog")
 	game.state.phase = "await_action"
 	game.state.action_options = ["buy", "end_turn"]
 	game._sync_state()
@@ -153,6 +181,10 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	_expect(not shell.roll_button.visible and shell.buy_button.visible and shell.buy_button.text == "YES", "landing source turn exposes only the purchase YES control")
 	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "landing source turn exposes the decline NO control")
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
+	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
+	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")
+	_expect(_dialog_fill(shell) == Color("#4a3524"), "the event box uses the source brown prompt framing")
+	_expect(_inside_reference(shell.turn_dialog) and _inside_reference(shell.choice_selector) and _inside_reference(shell.buy_button) and _inside_reference(shell.end_turn_button), "landing controls stay inside the 640x480 frame")
 	game.state.phase = "await_roll"
 	game._set_action_options(0)
 	game._sync_state()
@@ -174,6 +206,7 @@ func _test_source_purchase_offer(ui: Control, shell: Control, game: Object) -> v
 	_expect(purchase_hint.contains("測試路"), "source landing purchase offer names the current property")
 	_expect(purchase_hint.contains("$1,000"), "source landing purchase offer uses the authoritative property price")
 	_expect(purchase_hint.contains("YES") and purchase_hint.contains("NO"), "source landing purchase offer exposes confirm and decline controls")
+	_expect(str(shell.dialog_text.text) == purchase_hint, "the source event box carries the landing offer text")
 	_expect(game.to_json() == before_purchase_refresh, "source landing purchase refresh does not mutate simulation state")
 
 	game.state.board[2].owner = 0
@@ -199,6 +232,119 @@ func _test_source_purchase_offer(ui: Control, shell: Control, game: Object) -> v
 	game._set_action_options(0)
 	game._sync_state()
 	ui._refresh_from_state()
+
+
+## Issue #101: the ordinary player view keeps no permanent hint/log scaffold,
+## and every turn action stays reachable through the source GO command, event
+## box and YES/NO picker.  Dev mode keeps the raw hint line.
+func _test_source_turn_controls_normal_mode(ui: Control, shell: Control, game: Object) -> void:
+	ui._set_development_path(false)
+	game.state.current_player = 0
+	game.state.players[0].is_human = true
+	game.state.players[0].is_ai = false
+	game.state.players[0].position = 0
+	game.state.players[0].previous_position = -1
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not shell.action_hint_label.visible, "normal mode hides the raw turn hint/log line")
+	_expect(not shell.turn_dialog.visible and not shell.choice_selector.visible, "normal mode mounts no permanent command strip")
+	_expect(shell.roll_button.visible and not shell.roll_button.disabled, "normal mode exposes the GO advance command")
+	_expect(shell.roll_button.text == "GO", "the ordinary advance command keeps the source GO label")
+	var go_style: StyleBox = shell.roll_button.get_theme_stylebox("normal")
+	_expect(go_style is StyleBoxFlat and (go_style as StyleBoxFlat).bg_color == Color("#4a3524"), "the GO command uses the source brown/gold framing instead of navy")
+	# The full-map view hides GO, so the keyboard must not roll from under it.
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	var before_map_enter: String = game.to_json()
+	shell.toggle_full_map_view()
+	_expect(not shell.roll_button.visible, "the full-map view hides the GO advance command")
+	ui._unhandled_input(enter)
+	_expect(ui.get("_presentation_busy") == false and game.to_json() == before_map_enter, "ENTER stays inert while the full-map view hides GO")
+	shell.toggle_full_map_view()
+	_expect(shell.roll_button.visible, "closing the full-map view restores the GO advance command")
+	# Manual p.7: ENTER is the source confirm key, so it advances like SPACE.
+	ui._unhandled_input(enter)
+	_expect(ui.get("_presentation_busy") == true, "ENTER confirms the pending advance command")
+	var board: Node = ui.board_view
+	if board.has_method("_advance_movement"):
+		board._advance_movement(100.0)
+	_expect(ui.get("_presentation_busy") == false, "the source advance finishes its movement presentation")
+
+	# A landing purchase is answered from the separate source YES/NO picker.
+	game.state.current_player = 0
+	game.state.players[0].position = 2
+	game.state.players[0].previous_position = 0
+	game.state.players[0].cash = 5000
+	game.state.board[2].owner = -1
+	game.state.players[0].properties = []
+	game.state.property_action_used = false
+	game.state.phase = "await_action"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "a landing purchase opens the event box and picker")
+	_expect(str(shell.dialog_text.text).contains("測試路"), "the event box names the offered property")
+	_expect(shell.buy_button.visible and shell.buy_button.text == "YES", "the picker offers the source YES tile")
+	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "the picker offers the source NO tile")
+	_expect(_inside_reference(shell.buy_button) and _inside_reference(shell.end_turn_button) and _inside_reference(shell.dialog_text), "the picker and event box stay inside the 640x480 frame")
+	var cash_before := int(game.state.players[0].cash)
+	shell.buy_button.pressed.emit()
+	_expect(int(game.state.board[2].owner) == 0, "the picker YES tile completes the purchase")
+	_expect(int(game.state.players[0].cash) == cash_before - 1000, "the picker YES tile charges the authoritative price")
+
+	# The owned landing offers its upgrade through the same YES tile.
+	game.state.players[0].cash = 5000
+	game.state.property_action_used = false
+	game.state.phase = "await_action"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.upgrade_button.visible and shell.upgrade_button.text == "YES" and not shell.buy_button.visible, "an owned landing offers only the upgrade YES tile")
+	var level_before := int(game.state.board[2].building_level)
+	shell.upgrade_button.pressed.emit()
+	_expect(int(game.state.board[2].building_level) > level_before, "the picker YES tile completes the upgrade")
+
+	# The NO tile declines and hands the turn over.
+	game.state.players[0].position = 2
+	game.state.players[0].previous_position = 0
+	game.state.players[0].cash = 5000
+	game.state.board[2].owner = -1
+	game.state.players[0].properties = []
+	game.state.property_action_used = false
+	game.state.phase = "await_action"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "the landing keeps the NO tile reachable")
+	shell.end_turn_button.pressed.emit()
+	_expect(int(game.state.current_player) == 1, "the picker NO tile declines and ends the turn")
+	_expect(int(game.state.board[2].owner) == -1, "the declined landing leaves the property unowned")
+
+	# The same GO command carries the jail continuation and its own wording.
+	shell.sync_action_state("服刑", false, "", true, "", true, true, "服刑，按服刑推進回合", [], "await_roll", [])
+	_expect(shell.roll_button.visible and shell.roll_button.text == "服刑", "the GO command carries the jail continuation")
+
+	# A turn that only offers the decline action keeps the NO tile but shows no
+	# permanent board message.
+	shell.sync_action_state("擲骰", true, "購買地產", true, "升級", true, false, "請處理目前格位", [], "await_action", ["end_turn"])
+	_expect(shell.choice_selector.visible and shell.end_turn_button.visible, "a decline-only turn keeps the NO tile reachable")
+	_expect(not shell.turn_dialog.visible, "a decline-only turn shows no permanent board message")
+	_expect(not shell.action_hint_label.visible, "the generic turn hint stays out of the normal player view")
+
+	# Dev mode keeps the raw hint/log line for the developer.
+	ui._set_development_path(true)
+	game.state.current_player = 0
+	game.state.players[0].position = 0
+	game.state.players[0].previous_position = -1
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.action_hint_label.visible, "dev mode keeps the raw turn hint line")
+	_expect(str(shell.action_hint_label.text).contains("擲骰"), "dev mode keeps the raw hint copy")
 
 
 func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -> void:
@@ -424,6 +570,8 @@ func _push_viewport_click(viewport: SubViewport, point: Vector2) -> void:
 
 
 func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
+	# Route buttons are built into an HBoxContainer whose sorting is deferred, so
+	# the frame checks below wait for a layout pass before measuring bounds.
 	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
 	var definition: Dictionary = normalized.get("definition", {})
 	var started: bool = ui._new_game(1, 2, definition)
@@ -446,7 +594,7 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	_expect(not shell.title_load_button.disabled, "source title load follows the open load gate")
 	shell.roll_button.pressed.emit()
 	_expect(ui.get("_presentation_busy") == true, "source roll starts the movement presentation")
-	_expect(shell.action_strip.visible, "source GO remains visible as the active movement gate")
+	_expect(shell.roll_button.visible and not shell.turn_dialog.visible, "source GO remains the active movement gate without a decision dialog")
 	_expect(shell.roll_button.visible and shell.roll_button.disabled, "visible source roll is disabled during movement")
 	_expect(source_load != null and source_load.disabled, "visible source load is disabled during movement")
 	_expect(ui.load_button.disabled, "legacy load adapter shares the movement gate")
@@ -458,10 +606,15 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	_expect(source_load != null and not source_load.disabled, "visible source load re-enables after movement")
 	_expect(not shell.roll_button.visible, "source GO hides once the turn awaits a route")
 	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() > 0, "visible source route choices appear after movement")
+	await process_frame
+	await process_frame
 	if shell.route_buttons.get_child_count() > 0:
 		var route: Button = shell.route_buttons.get_child(0) as Button
 		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
+		_expect(route.size.x > 0.0, "the route fallback takes layout space before its bounds are checked")
 		_expect(route != null and route.text.begins_with("前往 ") and not route.text.contains("→"), "visible source route choice uses a player-facing destination label")
+		_expect(_inside_reference(route), "the source route fallback stays inside the 640x480 frame")
+	_expect(shell.turn_dialog.visible, "the route phase explains itself in the source event box")
 	var duplicate_route_labels: Array = shell.callv("_route_destination_labels", [[2, 3]])
 	_expect(duplicate_route_labels.size() == 2 and duplicate_route_labels[0] != duplicate_route_labels[1], "concurrent same-name source route choices remain distinguishable")
 	var ordinary_route_labels: Array = shell.callv("_route_destination_labels", [[2]])
@@ -606,10 +759,11 @@ func _run() -> void:
 	game = _set_human_graph_game(ui)
 	_test_hud_tabs_and_actions(ui, shell, game)
 	_test_source_purchase_offer(ui, shell, game)
+	_test_source_turn_controls_normal_mode(ui, shell, game)
 	_test_source_hud_detail_values(ui, shell, game)
 	await _test_source_full_map_and_player_inspect(ui, shell, game)
 	_test_minimap_input(ui, shell, game)
-	_test_source_roll_presentation_gate(ui, shell)
+	await _test_source_roll_presentation_gate(ui, shell)
 	await _test_source_stock_modal_gate(ui, shell)
 	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)

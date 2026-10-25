@@ -530,7 +530,14 @@ func _source_options_modal_open() -> bool:
 
 
 func _source_options_operation_allowed() -> bool:
-	return source_shell != null and not _presentation_busy
+	if source_shell == null or _presentation_busy or _legacy_save_modal_open():
+		return false
+	if _source_bank_modal_open() or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open():
+		return false
+	for popup in [news_popup, fate_popup, auction_popup]:
+		if popup != null and popup.visible:
+			return false
+	return true
 
 
 func _on_source_options_accepted(settings: Dictionary) -> void:
@@ -2098,9 +2105,25 @@ func _on_audio_pressed() -> void:
 		return
 	var enabled := bool(audio_controller.get("enabled"))
 	audio_controller.call("set_enabled", not enabled)
+	_sync_audio_music_level(not enabled)
 	_append_local_log("原版音樂已%s。" % ("開啟" if not enabled else "關閉"))
 	_update_audio_button()
 	_refresh_log_only()
+
+
+## The HUD music switch is a source preference, not a runtime-only override.
+## Keep system-options.json in step so the next launch does not revert it.
+func _sync_audio_music_level(enabled: bool) -> void:
+	if system_settings == null:
+		return
+	var settings: Dictionary = system_settings.defaults()
+	var loaded: Dictionary = system_settings.read_settings(settings_path)
+	if str(loaded.get("status", "")) == "loaded":
+		settings = loaded.get("settings", settings)
+	settings["music_level"] = 4 if enabled else 0
+	var result: Dictionary = system_settings.write_settings(settings_path, settings)
+	if not bool(result.get("ok", false)):
+		_append_local_log("音樂偏好未能同步到系統選項；下次啟動可能沿用舊設定。")
 
 func _on_audio_config_pressed() -> void:
 	if audio_folder_dialog == null:
@@ -2184,7 +2207,7 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _source_save_operation_allowed() -> bool:
-	return game_state != null and not _source_bank_modal_open() and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
+	return game_state != null and not _source_bank_modal_open() and not _source_shop_modal_open() and not _source_inventory_modal_open() and not _source_help_modal_open() and not _source_options_modal_open() and not _presentation_busy and not _legacy_save_modal_open()
 
 func _source_modal_open() -> bool:
 	var title_open: bool = source_shell != null and source_shell.has_method("is_title_visible") and source_shell.is_title_visible()
@@ -2193,7 +2216,7 @@ func _source_modal_open() -> bool:
 	return title_open or stocks_open or inspect_open or _source_help_modal_open() or _source_inventory_modal_open() or _source_shop_modal_open() or _source_bank_modal_open() or _source_options_modal_open()
 
 func _load_blocked_by_presentation() -> bool:
-	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
+	return _source_bank_modal_open() or _source_shop_modal_open() or _source_inventory_modal_open() or _source_help_modal_open() or _source_options_modal_open() or _presentation_busy or (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible) or (auction_popup != null and auction_popup.visible)
 
 func _reject_load_during_presentation() -> void:
 	_append_local_log("角色移動／事件呈現中，讀取暫時停用。")

@@ -392,6 +392,7 @@ func _test_invalid_models_and_copies(panel: Control) -> void:
 		panel.call("set_view_model", cases[index])
 		await _settle()
 		_expect(not bool(panel.call("is_model_valid")), "invalid model %d fails closed" % index)
+		_expect(not panel.visible, "invalid model %d shows no modal-less overlay" % index)
 		_expect(not bool(panel.call("source_art_available")), "invalid model %d cannot claim source art" % index)
 		var unavailable := panel.find_child("SourceOptionsUnavailable", true, false) as Label
 		_expect(unavailable != null and unavailable.visible and not unavailable.text.is_empty(), "invalid model %d is explicitly unavailable" % index)

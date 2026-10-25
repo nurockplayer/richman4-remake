@@ -178,7 +178,9 @@ func set_view_model(model: Dictionary) -> bool:
 		_is_open = false
 		_closed = false
 		_render()
-		show()
+		# An unavailable model must not leave a visible overlay the host does not
+		# count as modal; ordinary actions and AI would run behind it.
+		hide()
 		return false
 
 	if not same_model or not was_open:
@@ -330,12 +332,16 @@ func close() -> bool:
 func _gui_input(event: InputEvent) -> void:
 	if not event is InputEventMouseButton:
 		return
+	var mouse := event as InputEventMouseButton
+	# A suspended panel is visually behind a child window (help). It must not
+	# consume the right release that belongs to that window.
+	if _suspended and mouse.button_index == MOUSE_BUTTON_RIGHT:
+		return
 	# Handle the event before a signal can synchronously free this panel.
 	var viewport := get_viewport()
 	if viewport != null:
 		viewport.set_input_as_handled()
 	accept_event()
-	var mouse := event as InputEventMouseButton
 	if mouse.button_index == MOUSE_BUTTON_RIGHT:
 		if not mouse.pressed and not _suspended:
 			_cancel()
@@ -357,13 +363,16 @@ func _input(event: InputEvent) -> void:
 	var mouse := event as InputEventMouseButton
 	if mouse.button_index != MOUSE_BUTTON_RIGHT or mouse.pressed:
 		return
+	# While suspended, the active child window owns right-release cancellation.
+	# Returning before set_input_as_handled() lets its _input see the event even
+	# though this panel is later in tree order.
+	if _suspended:
+		return
 	# _input catches a source right release outside the panel bounds.  Mark the
 	# viewport before cancellation because the signal receiver may free us.
 	var viewport := get_viewport()
 	if viewport != null:
 		viewport.set_input_as_handled()
-	if _suspended:
-		return
 	_cancel()
 
 

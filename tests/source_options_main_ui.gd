@@ -41,6 +41,18 @@ func _click(panel: Control, point: Vector2) -> void:
 	panel.call("_handle_left_up", point)
 
 
+## Dispatch through the real viewport so _input ordering and handled flags are
+## exercised, not just the panel's close helper.
+func _right_release(viewport: Viewport, point: Vector2 = Vector2(10, 400)) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_RIGHT
+	event.pressed = false
+	event.position = point
+	event.global_position = point
+	viewport.push_input(event, true)
+	await _settle()
+
+
 func _new_ui(settings_file: String) -> Control:
 	var ui: Control = MainScene.instantiate()
 	# Must be set before entering the tree: _ready applies committed settings.
@@ -96,10 +108,10 @@ func _run() -> void:
 	await _settle()
 	_expect(ui.source_help_controller != null and ui.source_help_controller.is_open(), "help command opens the existing help host")
 	_expect(panel.call("is_open"), "help keeps the parent options presenter open")
-	if ui.source_help_controller != null and ui.source_help_controller.is_open():
-		ui.source_help_controller.help_panel.close_help()
-		await _settle()
-	_expect(not ui.source_help_controller.is_open(), "closing help returns control")
+	# The release lands outside both 640x480 panels, so only _input can close
+	# help; the suspended options panel must not swallow it first.
+	await _right_release(root)
+	_expect(not ui.source_help_controller.is_open(), "real right release closes help from options")
 	_expect(panel.call("is_open") and not bool(panel.call("is_input_suspended")), "options input resumes after help")
 	_expect_equal(panel.call("draft_settings")["speed"], 0, "help does not discard the parent options draft")
 
@@ -116,6 +128,15 @@ func _run() -> void:
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "persisted options keep the accepted music level")
 	if ui.audio_controller != null:
 		_expect(not bool(ui.audio_controller.get("enabled")), "music switch turns off runtime playback")
+
+	# The HUD music switch must keep the same committed preference, otherwise
+	# the next launch reverts it from system-options.json.
+	ui._sync_audio_music_level(true)
+	loaded = settings.read_settings(settings_file)
+	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 4, "HUD music switch persists its enabled state")
+	ui._sync_audio_music_level(false)
+	loaded = settings.read_settings(settings_file)
+	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "HUD music switch persists its disabled state")
 
 	shell.title_option_button.pressed.emit()
 	await _settle()
@@ -135,6 +156,18 @@ func _run() -> void:
 	await _settle()
 	_expect(panel.call("is_open"), "in-game toolbar OPTION opens the presenter")
 	_expect(panel.call("view_model").get("mode") == "game", "in-game entry presents the game commands")
+	panel.call("close_options")
+
+	# An unavailable edition (for example the synthetic fallback board) must
+	# fail closed: no visible overlay that the modal gate does not know about.
+	panel.call("set_view_model", {
+		"edition": "test:classic40",
+		"mode": "game",
+		"settings": SystemSettings.new().defaults(),
+	})
+	await _settle()
+	_expect(not panel.call("is_open"), "unavailable edition is not an open presenter")
+	_expect(not panel.visible, "unavailable edition leaves no visible overlay")
 	panel.call("close_options")
 
 	ui.queue_free()

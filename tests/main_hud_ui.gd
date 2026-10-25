@@ -68,7 +68,7 @@ func _test_title_and_layout(ui: Control, shell: Control) -> void:
 	if _source_assets_available(shell):
 		_expect(shell._title_art.texture != null, "source title composite is loaded")
 		_expect(shell._hud_art.texture != null, "source HUD frame is loaded")
-		_expect(shell._calendar_art.texture != null, "source calendar frame is loaded for a dated game")
+		_expect(shell.calendar_panel.background_art != null and shell.calendar_panel.background_art.texture != null, "source calendar frame is loaded for a dated game")
 		for key in source_keys:
 			_expect(shell.toolbar_buttons[key].icon != null, "source toolbar icon is loaded for %s" % key)
 		shell.title_start_button.mouse_entered.emit()
@@ -135,12 +135,15 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 		shell.select_tab(key)
 		_expect(shell.active_tab == key, "HUD tab selection updates presentation state for %s" % key)
 		_expect(game.to_json() == before_tabs, "HUD tab selection does not mutate simulation for %s" % key)
+	shell.set_view_mode(0)
 	var before_calendar: String = game.to_json()
 	shell.toggle_map_view()
-	_expect(shell.minimap.visible and not shell.calendar_panel.visible, "calendar toggle exposes the minimap")
-	_expect(game.to_json() == before_calendar, "calendar toggle does not mutate simulation")
+	_expect(shell.minimap.visible and not shell.calendar_panel.visible, "view cycle exposes the minimap")
+	_expect(game.to_json() == before_calendar, "view cycle does not mutate simulation")
 	shell.toggle_map_view()
-	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "calendar toggle returns to the dated panel")
+	_expect(shell.calendar_panel.visible and shell.minimap.visible, "second cycle exposes combined calendar and minimap")
+	shell.toggle_map_view()
+	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "third cycle returns to the dated panel")
 	_expect(not shell.buy_button.visible and not shell.upgrade_button.visible and not shell.end_turn_button.visible, "non-landing source turn hides unrelated actions")
 	_expect(shell.roll_button.visible and shell.roll_button.text == "GO", "await-roll source turn exposes the bounded GO control")
 	game.state.phase = "await_action"
@@ -260,12 +263,14 @@ func _test_source_hud_data_geometry(shell: Control) -> void:
 func _test_source_full_map_and_player_inspect(ui: Control, shell: Control, game: Object) -> void:
 	var before_map: String = game.to_json()
 	var map_button: Button = shell.toolbar_buttons.get("map") as Button
+	var view_mode_before: int = shell.view_mode
 	var calendar_visible: bool = shell.calendar_panel.visible
+	var minimap_visible: bool = shell.minimap.visible
 	map_button.pressed.emit()
 	await process_frame
 	_expect(shell.is_full_map_visible(), "source map command opens the full-map view")
 	_expect(shell.full_map_view.visible and shell.full_map_view.size == Vector2(440.0, 440.0), "full-map view occupies the source board region")
-	_expect(shell.calendar_panel.visible == calendar_visible and not shell.minimap.visible, "full-map command does not reduce to the calendar minimap toggle")
+	_expect(shell.view_mode == view_mode_before and shell.calendar_panel.visible == calendar_visible and shell.minimap.visible == minimap_visible, "full-map command does not reduce to the calendar view cycle")
 	var full_map_points: Array = shell.full_map_view.call("_board_points")
 	_expect(full_map_points.size() == game.state.board.size(), "full-map view projects every board node")
 	_expect(game.to_json() == before_map, "full-map command does not mutate simulation state")
@@ -333,7 +338,7 @@ func _test_stock_names(shell: Control) -> void:
 
 func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	var before_state: String = game.to_json()
-	shell.toggle_map_view()
+	shell.set_view_mode(1)
 	var view: Control = shell.board_host.get_child(0)
 	var points: Array[Vector2] = shell.minimap.call("_board_points")
 	var target_index: int = mini(2, points.size() - 1)
@@ -356,7 +361,7 @@ func _test_minimap_input(ui: Control, shell: Control, game: Object) -> void:
 	if target_index >= 0 and view.has_method("get_screen_position_for_index"):
 		var focused_position: Vector2 = view.call("get_screen_position_for_index", target_index)
 		_expect(focused_position.distance_to(view.size * 0.5) < 1.5, "minimap node selection centers the board camera once")
-	shell.toggle_map_view()
+	shell.set_view_mode(0)
 
 
 func _test_calendar_minimap_viewport_input(viewport_size: Vector2i) -> void:
@@ -373,8 +378,7 @@ func _test_calendar_minimap_viewport_input(viewport_size: Vector2i) -> void:
 	await process_frame
 	await process_frame
 	var shell: Control = ui.source_shell
-	var toggle: Button = shell.calendar_toggle_button
-	var point: Vector2 = toggle.get_global_transform_with_canvas() * (toggle.size / 2.0)
+	shell.set_view_mode(0)
 	var before_state: String = game.to_json()
 	var board_view: Control = shell.board_host.get_child(0)
 	var before_pan: Vector2 = board_view.map_pan if board_view.get("map_pan") is Vector2 else Vector2.ZERO
@@ -382,15 +386,24 @@ func _test_calendar_minimap_viewport_input(viewport_size: Vector2i) -> void:
 	shell.minimap.node_selected.connect(func(index: int) -> void: minimap_selections.append(index))
 	_expect(shell.calendar_panel.visible and not shell.minimap.visible, "calendar starts visible in %s viewport" % viewport_size)
 	for round_trip in range(2):
-		await _push_viewport_click(viewport, point)
-		_expect(shell.minimap.visible and not shell.calendar_panel.visible, "calendar toggle opens minimap on %s round %d" % [viewport_size, round_trip + 1])
-		_expect(toggle.is_visible_in_tree(), "calendar toggle remains visible over minimap on %s round %d" % [viewport_size, round_trip + 1])
-		await _push_viewport_click(viewport, point)
-		_expect(shell.calendar_panel.visible and not shell.minimap.visible, "same visible control returns to calendar on %s round %d" % [viewport_size, round_trip + 1])
-	_expect(minimap_selections.is_empty(), "calendar toggle clicks do not reach minimap on %s" % viewport_size)
-	_expect(board_view.get("map_pan") == before_pan, "calendar toggle clicks do not pan board on %s" % viewport_size)
+		await _push_viewport_key(viewport, KEY_TAB)
+		_expect(shell.minimap.visible and not shell.calendar_panel.visible, "view hotkey opens minimap on %s round %d" % [viewport_size, round_trip + 1])
+		await _push_viewport_key(viewport, KEY_TAB)
+		_expect(shell.calendar_panel.visible and shell.minimap.visible, "view hotkey opens the combined group on %s round %d" % [viewport_size, round_trip + 1])
+		await _push_viewport_key(viewport, KEY_TAB)
+		_expect(shell.calendar_panel.visible and not shell.minimap.visible, "view hotkey returns to the calendar on %s round %d" % [viewport_size, round_trip + 1])
+	_expect(minimap_selections.is_empty(), "view hotkey does not reach minimap on %s" % viewport_size)
+	_expect(board_view.get("map_pan") == before_pan, "view hotkey does not pan the board on %s" % viewport_size)
 	_expect(game.to_json() == before_state, "calendar/minimap round trips preserve simulation on %s" % viewport_size)
 	viewport.queue_free()
+	await process_frame
+
+
+func _push_viewport_key(viewport: SubViewport, keycode: int) -> void:
+	var key := InputEventKey.new()
+	key.keycode = keycode
+	key.pressed = true
+	viewport.push_input(key, true)
 	await process_frame
 
 

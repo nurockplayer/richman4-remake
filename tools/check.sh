@@ -142,6 +142,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/main_hud_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_sunday.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_input.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_main_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_view_modes.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_view_modes_main_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/original_help.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_controller.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_help_panel.gd

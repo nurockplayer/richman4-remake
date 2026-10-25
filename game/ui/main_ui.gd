@@ -596,19 +596,24 @@ func _on_source_stocks_requested() -> void:
 		source_stock_panel.show()
 
 func _on_source_roll_requested() -> void:
+	if source_save_menu != null and source_save_menu.visible: return
 	_on_roll_pressed()
 
 func _on_source_buy_requested() -> void:
+	if source_save_menu != null and source_save_menu.visible: return
 	_on_buy_pressed()
 
 func _on_source_upgrade_requested() -> void:
+	if source_save_menu != null and source_save_menu.visible: return
 	_on_upgrade_pressed()
 
 func _on_source_end_turn_requested() -> void:
+	if source_save_menu != null and source_save_menu.visible: return
 	_on_end_turn_pressed()
 
 func _on_source_route_requested(next_index: int) -> void:
 	if _source_inventory_modal_open(): return
+	if source_save_menu != null and source_save_menu.visible: return
 	_on_route_selected(next_index)
 
 func _on_source_minimap_pan_requested(delta: Vector2) -> void:
@@ -2093,7 +2098,9 @@ func _load_game() -> void:
 	_load_game_from_path(SAVE_PATH)
 
 func _source_save_operation_allowed() -> bool:
-	if game_state == null or _load_blocked_by_presentation() or _legacy_save_modal_open():
+	# LOAD can reconstruct a game from a validated snapshot, so this guard must
+	# not require a live one; SAVE checks for a serializable game at ingress.
+	if _load_blocked_by_presentation() or _legacy_save_modal_open():
 		return false
 	if source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible():
 		return false
@@ -2635,6 +2642,8 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 		return {"ok": false, "message": "請先關閉遊戲說明。"}
 	if _legacy_save_modal_open():
 		return {"ok": false, "message": "請先完成舊版存檔選擇。"}
+	if source_save_menu != null and source_save_menu.visible:
+		return {"ok": false, "message": "請先完成存檔操作。"}
 	if _presentation_busy:
 		return {"ok": false, "message": "角色移動中。"}
 	var is_shop_response := _source_shop_modal_open() and (method in ["leave_shop", "acknowledge_shop_gift"] or method == "choose_action" and not args.is_empty() and str(args[0]) in ["buy_item", "sell_item"])
@@ -2785,7 +2794,7 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_shell.call("set_toolbar_enabled", "options", false)
 		source_shell.call("set_toolbar_enabled", "ai", false)
 		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", _source_save_operation_allowed())
+		source_shell.call("set_toolbar_enabled", "save", game_state != null and _source_save_operation_allowed())
 		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
 		var inventory_enabled := _source_inventory_operation_allowed()
 		source_shell.call("set_toolbar_enabled", "cards", inventory_enabled)

@@ -39,6 +39,7 @@ var _mode := MODE_LOAD
 var _edition := "Game"
 var _visuals: Object = null
 var _frozen_save_payload: Dictionary = {}
+var _last_scan_ok := false
 var _generation := 0
 var _busy := false
 var _menu_open := false
@@ -93,6 +94,7 @@ func open(
 	_picker_show()
 	_clear_message()
 	_layout_surface()
+	_last_scan_ok = false
 
 	var guard := _guard_result()
 	if not bool(guard.get("ok", false)):
@@ -100,8 +102,9 @@ func open(
 		return
 
 	var scan_result: Variant = _scan_storage()
+	_last_scan_ok = _scan_ok(scan_result)
 	_configure_picker(scan_result)
-	if not _scan_ok(scan_result):
+	if not _last_scan_ok:
 		_show_message(_scan_error(scan_result))
 
 
@@ -290,6 +293,11 @@ func _on_picker_confirmed(slot_id: int, fingerprint: String, preview: Dictionary
 		_show_message(str(guard.get("message", DEFAULT_GUARD_MESSAGE)))
 		return
 	if _mode == MODE_SAVE:
+		# Without a successful scan there is no verified occupancy or
+		# fingerprint, so a SAVE must not guess at an empty destination.
+		if not _last_scan_ok:
+			_show_message(SCAN_ERROR_MESSAGE)
+			return
 		_save_slot(slot_id, fingerprint)
 		return
 	if str(preview.get("status", "")) != SaveSlots.STATUS_VALID:
@@ -422,11 +430,12 @@ func _refresh_after_error(previous_message: String) -> void:
 		_show_message(previous_message + "\n" + str(guard.get("message", DEFAULT_GUARD_MESSAGE)))
 		return
 	var scan_result: Variant = _scan_storage()
+	_last_scan_ok = _scan_ok(scan_result)
 	_configure_picker(scan_result)
 	_picker_show()
 	_menu_open = true
 	show()
-	if not _scan_ok(scan_result):
+	if not _last_scan_ok:
 		_show_message(previous_message + "\n" + _scan_error(scan_result))
 	else:
 		_show_message(previous_message)

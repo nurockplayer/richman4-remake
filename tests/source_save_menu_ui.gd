@@ -19,6 +19,17 @@ class TestUI extends "res://game/ui/main_ui.gd":
 		_selected_map_definition = _map_catalog[0].duplicate(true)
 		_update_map_selector()
 
+class FailingScanStorage extends RefCounted:
+	var inner: Object
+	func _init(inner_storage: Object) -> void:
+		inner = inner_storage
+	func scan() -> Dictionary:
+		return {"ok": false, "status": "error", "error": "fixture_scan_failure"}
+	func read(slot_id: Variant, fingerprint: Variant = null) -> Dictionary:
+		return inner.read(slot_id, fingerprint)
+	func write(slot_id: Variant, payload: Variant, fingerprint: Variant = null) -> Dictionary:
+		return inner.write(slot_id, payload, fingerprint)
+
 var checks := 0
 var failures := 0
 var temp_root := ""
@@ -87,6 +98,15 @@ func run() -> void:
 		# Isolate failures from subsequent, already existing entry assertions.
 		ui.direct_save_calls = 0
 		ui.direct_load_calls = 0
+	# Queued HUD action signals must not advance the live game behind the picker.
+	shell.save_requested.emit()
+	check(menu.visible and menu.get("picker").get_mode() == "save", "save picker opens for the action boundary check")
+	var guarded_progress: String = ui.game_state.to_json()
+	shell.roll_requested.emit()
+	shell.end_turn_requested.emit()
+	await process_frame
+	check(ui.game_state.to_json() == guarded_progress, "queued source actions cannot mutate the game while the picker is open")
+	menu.cancel()
 	shell.load_requested.emit()
 	check(menu.visible and not shell.is_title_visible(), "HUD LOAD opens chooser over current game")
 	_press_row(viewport, menu, 1)
@@ -133,6 +153,18 @@ func run() -> void:
 	check(saved_game != null and saved_game.to_json() == ui.game_state.to_json(), "slot payload is exactly the core snapshot without presentation or controller metadata")
 	check(FileAccess.get_file_as_bytes(store.default_path()) == default_bytes, "slot writes leave existing default untouched")
 	check(ui.game_state.to_json() == unchanged, "save and confirmations preserve live state and RNG")
+
+	# A failed scan must not let SAVE guess at an unverified destination.
+	var occupied_seed := int(store.read(1).snapshot.seed)
+	menu.storage = FailingScanStorage.new(store)
+	shell.save_requested.emit()
+	check(menu.visible and menu.get("message_label").visible, "failed scan reports the error in save mode")
+	_press_row(viewport, menu, 1)
+	await process_frame
+	check(menu.visible and not menu.is_busy(), "failed scan blocks the unverified save")
+	check(int(store.read(1).snapshot.seed) == occupied_seed, "failed scan leaves the destination untouched")
+	menu.cancel()
+	menu.storage = store
 
 	# Supported legacy choice stays explicit and uses the validated candidate.
 	shell.show_title()
@@ -183,6 +215,17 @@ func run() -> void:
 		var saved_ai: Object = Game.from_dict(store.read(2).snapshot)
 		check(saved_ai != null and saved_ai.to_json() == ai_before, "AI save preserves the exact core snapshot")
 		check(ui.game_state.to_json() == ai_before, "AI save never advances state or RNG")
+
+	# LOAD stays reachable when no live game could be initialized (missing
+	# catalog); it reconstructs the game from the validated snapshot.
+	var live_game: Object = ui.game_state
+	ui.game_state = null
+	shell.show_title()
+	shell.title_load_button.pressed.emit()
+	check(menu.visible and menu.get("picker").get_mode() == "load", "title LOAD opens without a live game")
+	menu.cancel()
+	ui.game_state = live_game
+	shell.show_game()
 
 	viewport.queue_free()
 	await settle()

@@ -93,8 +93,8 @@ RICHMAN4_MAP_CATALOG="$PWD/.local/imported-original/maps/catalog.json" bash tool
 1. 以 `tools/disk_guard.sh` 檢查磁碟，再用 `tools/bootstrap_private_assets.sh` 驗證（或取回）固定 revision 的 private source；預設共用 cache 是 `/Volumes/KIOXIA/richman4-cache`。
 2. 從 private source 匯出所有執行期可載入的衍生素材到 ignored `.local/`：地圖 catalog（`import_original.py`）、場景／角色／UI 圖（`decode_original_ground.py`，含 `Panel` 的銀行、商店、庫存、彩券、SALE、股票、月結、信託與小遊戲資源）以及說明內容（`export_original_help.py`）。
 3. 呼叫 `tools/package_macos.sh`，把 catalog、場景 manifest、說明 manifest 與 `Media/Music` 放進 `.app/Contents/Resources/Original/`，並執行 `tools/check.sh`。
-4. 以 `tools/rc_art_report.gd` 對封裝後的 `Contents/Resources/Original` 做 headless 煙霧測試：逐一檢查各 presenter 的素材 key 是否載入到真實 texture；任何缺圖都會讓建置失敗。
-5. 把 `Richman4-private.zip` 複製到 `<cache>/rc/Richman4-rc1-<short-sha>.zip`，同時寫出 `.sha256`；worktree 的 `build/` 與暫存目錄在結束時刪除。
+4. 以 `tools/rc_art_report.gd` 對封裝後的 `Contents/Resources/Original` 做 headless 煙霧測試：逐一檢查各 presenter 的素材 key（含 `Panel` 78–111 的每個小遊戲資源，`81` 點擊遮罩除外）是否載入到真實 texture；任何缺圖、缺少地圖 catalog，或缺少說明／音訊 manifest 都會讓建置失敗。
+5. 把 `Richman4-private.zip` 先複製到 `<cache>/rc/` 內的暫存檔，核對 SHA-256 與 zip 完整性後才改名為 `Richman4-rc1-<short-sha>.zip` 並寫出 `.sha256`；worktree 的 `build/` 與暫存目錄在結束時刪除。
 
 ```sh
 orb-test --heavy --host -- bash tools/package_rc.sh

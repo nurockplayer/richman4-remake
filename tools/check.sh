@@ -27,6 +27,17 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_pan
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd
 run_checked python3 tools/test_prepare_inventory_assets.py
 run_checked python3 -m unittest tests.test_source_shop_assets -v
+# Issue #155 source lottery rules, settlement, save shape, presenter and host.
+run_checked python3 tools/test_prepare_lottery_assets.py
+run_checked "$GODOT_BIN" --headless --path . --script tests/lottery_rules.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/lottery_source_contract.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_core.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_settlement.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_public_purchase.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_ui.gd
 if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_ui.gd
@@ -38,9 +49,11 @@ if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   # Issue #135 source bank catalog ingress uses the real map catalog. Missing
   # bank atlases are reported as presentation skips by the focused tests.
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_catalog.gd
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_admission.gd
 else
   echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
   echo "SKIP: source bank catalog ingress requires RICHMAN4_MAP_CATALOG"
+  echo "SKIP: source lottery catalog admission requires RICHMAN4_MAP_CATALOG"
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd

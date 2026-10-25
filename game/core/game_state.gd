@@ -4603,6 +4603,8 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 					_record_event("bank_landed", {"player_id": player_id, "tile": tile_index})
 				elif not bank_passed_before_god:
 					_record_event("bank_passed", {"player_id": player_id, "tile": tile_index})
+		"lottery":
+			if final_landing: LotteryFlow.admit(self, player_id)
 		"unsupported":
 			_record_event("unsupported_landing" if final_landing else "unsupported_passed", {"player_id": player_id, "tile": tile_index, "name": tile.get("name", "")})
 
@@ -4814,7 +4816,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_lottery"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5101,6 +5103,7 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 	var debtor: Dictionary = _player(debtor_id)
 	if debtor.is_empty() or not bool(debtor.get("alive", false)):
 		return
+	LotteryFlow.clear_player(state, debtor_id)
 	AllianceRules.clear_for_player(self, debtor_id)
 	var debtor_is_current: bool = int(state.get("current_player", -1)) == debtor_id
 	var was_current_movement: bool = debtor_is_current and state.get("phase", "") in ["await_roll", "await_route", "await_bank"]
@@ -5251,6 +5254,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
+	if state.get("phase", "") == "await_lottery":
+		return _error("請先完成彩券購買事件")
 	var normalized: String = action.to_lower().strip_edges()
 	var bank_token := pending_bank_visit()
 	if BankVisit.has_pending(state) or state.get("phase", "") == "await_bank":
@@ -6568,6 +6573,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			if not _is_companies():
 				_decrement_market_trends()
 			_settle_company_dividends()
+			LotteryFlow.settle_day(self)
 			_apply_month_boundary()
 			if state.get("phase", "") == "game_over":
 				return
@@ -6935,6 +6941,9 @@ func run_ai_turn() -> Dictionary:
 			return _error("目前玩家無法行動")
 	if not bool(player.get("is_ai", false)):
 		return _error("目前玩家不是 AI")
+	if state.get("phase", "") == "await_lottery":
+		LotteryFlow.ai_turn(self)
+		return _result(true, "AI 彩券操作完成", {"completed": true})
 	if not _pending_finance().is_empty():
 		return _result(true, "等待人類玩家回應金融付款", {"player_id": player_id, "awaiting_response": true, "completed": false})
 	if _trap_pending():
@@ -7992,7 +8001,7 @@ static func validate_board_definition(definition: Dictionary, original_facilitie
 		var kind: Variant = tile.get("kind", null)
 		if _valid_int(tile.get("type_and_idx", null), 2001, 3999) and (typeof(kind) != TYPE_STRING or kind != "property"):
 			errors.append("housing source must remain a property %d" % index)
-		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate"]
+		var graph_kinds: Array = ["start", "rest", "property", "points", "card", "bank", "unsupported", "stock", "tax", "event", "news", "fate", "lottery"]
 		if facility_mode:
 			graph_kinds.append("facility")
 		if typeof(kind) != TYPE_STRING or not graph_kinds.has(kind):
@@ -8431,12 +8440,16 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if graph_save:
 		allowed_phases.append("await_route")
 	if companies_save:
-		allowed_phases.append("await_bank")
+		allowed_phases.append_array(["await_bank", "await_lottery"])
 	if source_shop_save:
 		allowed_phases.append("await_shop")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
+	var lottery_errors: Array = LotteryFlow.validate(data, companies_save)
+	if not lottery_errors.is_empty():
+		errors.append_array(lottery_errors)
+		return {"ok": false, "errors": errors}
 	var bank_visit_errors: Array = BankVisit.validate(data, companies_save)
 	if not bank_visit_errors.is_empty():
 		# Reject incoherent continuation data before generic cross-field checks
@@ -8782,7 +8795,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("board index mismatch %d" % index)
 			var allowed_board_kinds: Array = ["start", "property", "event", "tax", "bank", "stock", "rest"]
 			if graph_save:
-				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate"])
+				allowed_board_kinds.append_array(["points", "card", "unsupported", "news", "fate", "lottery"])
 			if facility_save:
 				allowed_board_kinds.append("facility")
 			if not _valid_string(tile.get("kind", null)) or not allowed_board_kinds.has(tile.get("kind", "")):
@@ -9751,6 +9764,8 @@ static func _canonicalize_json_numbers(value: Variant) -> Variant:
 static func from_dict(data: Dictionary) -> Richman4GameState:
 	var candidate: Dictionary = data.duplicate(true)
 	_migrate_news_source_kind(candidate)
+	if bool(candidate.get("original_companies", false)) and not candidate.has("lottery_tickets") and not candidate.has("lottery_draw_day") and not candidate.has("lottery_pending"):
+		LotteryFlow.initialize(candidate)
 	if SourceShop.supports_save(candidate) and not candidate.has("shop_visit") and not candidate.has("shop_sequence"):
 		SourceShop.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
@@ -9794,6 +9809,8 @@ static func _migrate_news_source_kind(data: Dictionary) -> void:
 		var tile: Dictionary = tile_value
 		if int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 2 and str(tile.get("kind", "")) == "unsupported":
 			tile["kind"] = "news"
+		elif int(tile.get("type_and_idx", -1)) >= 0 and int(tile.get("type_and_idx", -1)) < 2001 and int(tile.get("event_code", -1)) == 9 and str(tile.get("kind", "")) == "unsupported":
+			tile["kind"] = "lottery"
 		elif int(tile.get("type_and_idx", -1)) == 0 and int(tile.get("event_code", -1)) == 3 and str(tile.get("kind", "")) in ["rest", "unsupported"]:
 			tile["kind"] = "fate"
 
@@ -9828,3 +9845,10 @@ func acknowledge_shop_gift(visit_id: int) -> Dictionary:
 
 func leave_shop(visit_id: int) -> Dictionary:
 	return SourceShop.leave(self, visit_id)
+
+
+func purchase_lottery(number: int) -> Dictionary:
+	return LotteryFlow.purchase(self, number)
+
+func leave_lottery() -> Dictionary:
+	return LotteryFlow.leave(self)

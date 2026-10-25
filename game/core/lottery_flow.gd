@@ -38,7 +38,7 @@ static func leave(game: Object) -> Dictionary:
 	game.state.lottery_pending = -1
 	game.state.phase = "await_action"
 	game._set_action_options(int(game.state.current_player))
-	return game._result(true, "已離开彩券行")
+	return game._result(true, "已離開彩券行")
 
 static func ai_turn(game: Object) -> void:
 	var player: Dictionary = game._player(int(game.state.current_player))

@@ -38,6 +38,8 @@ if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
 else
   echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
 fi
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd

@@ -184,6 +184,22 @@ func _run() -> void:
 	panel.call("close_options")
 	await _settle()
 	_expect(FileAccess.file_exists(hotkeys_file), "outer options cancel keeps the committed hotkeys")
+
+	# A failed save keeps the accepted session bindings when the child reopens.
+	var session_keys: Array = key_store.defaults()
+	session_keys[8] = 0x5a
+	var saved_path: String = ui.hotkeys_path
+	ui.hotkeys_path = scratch.path_join("missing-dir/hotkeys.json")
+	ui._on_source_hotkeys_accepted(session_keys)
+	ui.hotkeys_path = saved_path
+	ui._open_source_options("title")
+	await _settle()
+	ui._open_source_hotkeys_child()
+	await _settle()
+	_expect_equal(hotkeys_panel.call("draft_bindings"), session_keys, "reopen after a failed save keeps the session bindings")
+	hotkeys_panel.call("close_hotkeys")
+	panel.call("close_options")
+	await _settle()
 	ui._open_source_options("title")
 	await _settle()
 	_expect(panel.call("is_open"), "title options reopen after the hotkey child")

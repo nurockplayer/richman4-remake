@@ -772,15 +772,20 @@ func _open_source_date_child() -> void:
 func _open_source_hotkeys_child() -> void:
 	if source_hotkeys_panel == null or source_options_panel == null:
 		return
-	var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
-	if not bool(loaded.get("ok", false)):
-		_append_local_log("熱鍵資料無法顯示。")
-		_refresh_log_only()
-		return
+	# Bindings accepted this session win over the file, so a failed save does
+	# not silently revert them when the child is reopened.
+	var bindings: Array = source_hotkeys_bindings.duplicate(true)
+	if bindings.is_empty():
+		var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+		if not bool(loaded.get("ok", false)):
+			_append_local_log("熱鍵資料無法顯示。")
+			_refresh_log_only()
+			return
+		bindings = loaded.get("bindings", system_hotkeys.defaults())
 	source_hotkeys_panel.set_visuals(source_shell.get("_visuals"))
 	var opened: bool = source_hotkeys_panel.set_view_model({
 		"edition": _source_bank_edition(),
-		"bindings": loaded.get("bindings", system_hotkeys.defaults()),
+		"bindings": bindings,
 	})
 	if not opened:
 		source_hotkeys_panel.hide()

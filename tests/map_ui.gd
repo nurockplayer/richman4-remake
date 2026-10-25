@@ -5,6 +5,7 @@ const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 const MainScene = preload("res://game/main.tscn")
 const BoardView = preload("res://game/ui/board_view.gd")
 const GameState = preload("res://game/core/game_state.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 var checks := 0
 var failures := 0
@@ -168,7 +169,7 @@ func _test_legacy_perimeter() -> void:
 	view.queue_free()
 
 func _test_catalog_fallback(ui: Control) -> void:
-	ui._load_map_catalog("user://map-ui-catalog-does-not-exist.json")
+	ui._load_map_catalog(UserPaths.resolve("user://map-ui-catalog-does-not-exist.json"))
 	_expect(not bool(ui._map_catalog_ok), "missing catalog enters explicit fallback")
 	_expect(ui._map_catalog.size() == 1, "missing catalog exposes one test board")
 	_expect(str(ui.map_selector.get_item_text(0)).contains("測試棋盤"), "fallback selector names test board")
@@ -185,7 +186,7 @@ func _test_catalog_selection_and_map8(ui: Control, raw_fixture: Dictionary) -> v
 	var map_eight_with_housing := raw_fixture.duplicate(true)
 	map_eight_with_housing["map_number"] = 8
 	var payload := {"schema": "richman4.map-catalog/v1", "version": 1, "count": 2, "maps": [map_one, map_eight_with_housing]}
-	var path := "user://map-ui-catalog.json"
+	var path := UserPaths.resolve("user://map-ui-catalog.json")
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(JSON.stringify(payload))
 	file.close()

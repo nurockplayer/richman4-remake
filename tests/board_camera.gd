@@ -2,6 +2,7 @@ extends SceneTree
 
 const BoardView = preload("res://game/ui/board_view.gd")
 const Visuals = preload("res://game/platform/original_visuals.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 class TextBoard extends "res://game/ui/board_view.gd":
 	var texts: Array = []
@@ -45,7 +46,7 @@ func _make_definition() -> Dictionary:
 	}
 
 func _make_visuals() -> Visuals:
-	var folder := "user://board-camera-fixture"
+	var folder := UserPaths.resolve("user://board-camera-fixture")
 	DirAccess.make_dir_recursive_absolute(folder)
 	var scene := {
 		"id": "Game:1",

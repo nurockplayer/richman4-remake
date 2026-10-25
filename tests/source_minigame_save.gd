@@ -6,6 +6,7 @@ extends SceneTree
 
 const Core = preload("res://game/core/game_state.gd")
 const Maps = preload("res://game/content/original_maps.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
 
 var checks := 0
@@ -88,7 +89,7 @@ func _test_pending_session_is_not_saveable(definition: Dictionary) -> void:
 	game.configure_minigames(true)
 	game._resolve_landing(0)
 	_expect(str(game.state.phase) == "await_minigame", "landing admits the pending session")
-	_expect(not game.save_to_path("user://source_minigame_pending.json"), "pending session refuses a direct save")
+	_expect(not game.save_to_path(UserPaths.resolve("user://source_minigame_pending.json")), "pending session refuses a direct save")
 	_expect(Core.from_dict(game.to_dict()) == null, "pending session is not a loadable save")
 	var before: String = game.to_json()
 	_expect(not game.choose_action("end_turn").get("ok", false) and game.to_json() == before, "pending session excludes ordinary turn actions")

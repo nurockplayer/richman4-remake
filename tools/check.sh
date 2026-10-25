@@ -7,9 +7,17 @@ mkdir -p .local build
 # paths. Keep Godot from scanning/importing those multi-GB local caches into a
 # second per-worktree .godot/imported copy.
 touch .local/.gdignore build/.gdignore
-# Remove the current check's temp log even if the run is interrupted or errexit fires.
+# Every check resolves its runtime write roots (save slots, autosave, legacy
+# save, settings, hotkeys, audio) under this throwaway root, so a headless run
+# can never read or write the owner's real userdata. Run a single check by hand
+# the same way:
+#   RICHMAN4_USER_ROOT="$(mktemp -d)" godot --headless --path . --script tests/save_slots.gd
+richman4_user_root="$(mktemp -d)"
+export RICHMAN4_USER_ROOT="$richman4_user_root"
+# Remove the current check's temp log and the throwaway user root even if the
+# run is interrupted or errexit fires.
 current_check_log=""
-trap 'rm -f "$current_check_log"' EXIT
+trap 'rm -f "$current_check_log"; rm -rf "$richman4_user_root"' EXIT
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
@@ -64,6 +72,9 @@ else
   echo "SKIP: source lottery catalog admission requires RICHMAN4_MAP_CATALOG"
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+# Every default write root must follow RICHMAN4_USER_ROOT; this guard fails if
+# an ordinary MainUI run creates or modifies anything in the owner's userdata.
+run_checked "$GODOT_BIN" --headless --path . --script tests/userdata_isolation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_autosave.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave.gd

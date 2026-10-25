@@ -2,8 +2,9 @@ extends RefCounted
 class_name RichmanSystemHotkeys
 ## Source VK words only. No global InputMap mutation or implicit owner I/O.
 
+const UserPaths = preload("res://game/platform/user_paths.gd")
+
 const SCHEMA := "richman4.system-hotkeys/v1"
-const DEFAULT_PATH := "user://system-hotkeys.json"
 const MAX_BYTES := 4096
 const DEFAULTS := [0x26,0x27,0x28,0x25,0x0d,0x1b,0x09,0x09,0x59,0x4e,0x20,0x44,0x57,0x58,0x43,0x45,0x46,0x4d,0xbc,0xbe,0x41,0x56,0x53,0x4c,0x48,0x21,0x22,0x1151]
 const NAMED_KEYS := {
@@ -20,6 +21,11 @@ const GODOT_TO_SOURCE := {
 	KEY_UP:0x26, KEY_RIGHT:0x27, KEY_DOWN:0x28, KEY_INSERT:0x2d,
 	KEY_KP_MULTIPLY:0x6a, KEY_KP_ADD:0x6b, KEY_KP_SUBTRACT:0x6d, KEY_KP_DIVIDE:0x6f,
 }
+
+## The runtime default honours RICHMAN4_USER_ROOT so tests never touch the
+## owner's hotkey file.
+static func default_path() -> String:
+	return UserPaths.path("system-hotkeys.json")
 
 func defaults() -> Array:
 	return DEFAULTS.duplicate()

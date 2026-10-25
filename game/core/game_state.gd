@@ -1656,6 +1656,12 @@ func _settle_company_dividends() -> void:
 		_record_event("company_dividend", {"company_id":int(company.id),"company_name":str(company.display_name),"pool":int(settlement.pool),"distributed":int(settlement.distributed),"rounding_remainder":int(settlement.pool)-int(settlement.distributed)})
 	for player_id in payouts:
 		var player := _player(int(player_id))
+		# Charging an earlier holder can bankrupt it, and that bankruptcy can
+		# cascade through company ownership and chair financing into a holder
+		# that has not been paid yet. Its balances were zeroed and its deposit
+		# ledger already settled, so the precomputed payout must be skipped
+		# instead of credited to a dead account.
+		if not bool(player.get("alive", false)): continue
 		var payout := int(payouts[player_id])
 		var old_deposit := int(player.deposit)
 		var new_deposit := old_deposit + payout

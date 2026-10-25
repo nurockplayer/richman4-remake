@@ -167,6 +167,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_audio_selecti
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rendering.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_main_ui.gd
+# In-game SURRENDER: core transition and the options confirmation host.
+run_checked "$GODOT_BIN" --headless --path . --script tests/surrender.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/surrender_ui.gd
 # Issue #148 runtime consumers for the source options values.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_preferences.gd
 # Issue #143 source date and 28-slot hotkey child windows.

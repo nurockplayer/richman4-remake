@@ -15,12 +15,20 @@ from decode_original_images import decode_entry, parse_mkf, parse_visual_resourc
 from prepare_lottery_assets import decode_flic, write_png as write_flic_png, _rewrite_base_paths, AssetError
 
 EDITIONS = ("Game", "MultiverseJourney")
+REPO_ROOT = Path(__file__).resolve().parent.parent
 # Source background callers copy these opaquely. Other SMP callers skip WORD0.
 OPAQUE = {(80, 0), (91, 0), (92, 0)} | {(79, digit) for digit in range(10)}
 
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def refuse_worktree_output(output: Path) -> None:
+    """Original assets and derived output must stay out of tracked paths."""
+    target = output.resolve()
+    if target == REPO_ROOT or REPO_ROOT in target.parents:
+        raise AssetError("output must be outside the git work tree")
 
 
 # Semantic source identity, not a global edition-index offset. The two payloads
@@ -71,6 +79,7 @@ def prepare_catching_bomb(archive, output: Path, scene: dict, edition: str) -> d
 
 def prepare_bomb_overlay(zip_path: Path, output: Path, base_manifest: Path) -> dict:
     """Prepare only the two semantic bomb resources; retain the frozen scene."""
+    refuse_worktree_output(output)
     if output.exists() and any(output.iterdir()):
         raise AssetError("output must be a fresh scoped directory")
     output.mkdir(parents=True, exist_ok=True)
@@ -92,6 +101,7 @@ def prepare_bomb_overlay(zip_path: Path, output: Path, base_manifest: Path) -> d
 
 
 def prepare(zip_path: Path, output: Path, base_manifest: Path, grid_path: Path, catching_path: Path) -> dict:
+    refuse_worktree_output(output)
     if output.exists() and any(output.iterdir()):
         raise AssetError("output must be a fresh scoped directory")
     output.mkdir(parents=True, exist_ok=True)

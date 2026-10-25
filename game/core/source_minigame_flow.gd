@@ -13,6 +13,10 @@ func admit(game: Object, player_id: int, encounter_id: int, animation: bool, inp
 	var player: Dictionary = game._player(player_id)
 	var tile: Dictionary = game.state.board[int(player.position)]
 	var kind: String = KINDS.get(int(tile.get("event_code", 0)), "")
+	# An unrecognised source code has no model and no panel; entering
+	# await_minigame would block finish and soft-lock the turn. Treat it as an
+	# ordinary landing instead.
+	if kind.is_empty(): return
 	var shortcut := bool(player.get("is_ai", false)) or not animation
 	_identity = {"kind":kind, "edition":str(game.state.get("map_source",{}).get("edition","Game")), "player_id":player_id, "character_id":int(player.get("character_id",0)), "encounter_id":encounter_id, "shortcut":shortcut}
 	if shortcut:

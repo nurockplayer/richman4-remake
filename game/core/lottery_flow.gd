@@ -55,6 +55,9 @@ static func ai_turn(game: Object) -> void:
 static func settle_day(game: Object) -> void:
 	if not game._is_companies() or not game._is_setup(): return
 	var state: Dictionary = game.state
+	# The winner is fixed once the game is over; a same-day draw would still
+	# award cash to a ranked player afterwards.
+	if str(state.get("phase", "")) == "game_over": return
 	var day := int(state.get("elapsed", 0))
 	if day <= 0 or int(state.get("date", {}).get("day", 0)) != 15 or int(state.lottery_draw_day) >= day: return
 	state.lottery_draw_day = day

@@ -38,8 +38,26 @@ func validate_bindings(value: Variant, json_numbers := false) -> Dictionary:
 		if (word >> 8) not in [0,0x11] or not _known_key(word & 0xff):
 			return _unavailable("unsupported_binding")
 		result.append(word)
-	# Source defaults duplicate TAB, and an unfinished edit can commit zero.
-	# Rejecting an attempted duplicate assignment belongs to the presenter.
+	# A stored map must be reproducible from the source dialog: something stays
+	# bound, the first eight fixed bindings keep their defaults, and an edited
+	# key never shares a code with another row. The source's default TAB pair is
+	# its only duplicate, and blank or unfinished Ctrl-only rows remain valid.
+	var bound := 0
+	var seen := {}
+	for index in range(result.size()):
+		var word: int = int(result[index])
+		if word == 0:
+			continue
+		bound += 1
+		if seen.has(word) and not (word == 0x09 and int(seen[word]) == 6 and index == 7):
+			return _unavailable("duplicate_binding")
+		if not seen.has(word):
+			seen[word] = index
+	if bound == 0:
+		return _unavailable("zero_bindings")
+	for index in range(8):
+		if int(result[index]) != int(DEFAULTS[index]):
+			return _unavailable("fixed_binding_changed")
 	return {"ok":true, "bindings":result}
 
 func key_name(word: int) -> String:

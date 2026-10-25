@@ -31,6 +31,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd
 run_checked python3 tools/test_prepare_inventory_assets.py
+run_checked python3 tools/test_prepare_minigame_assets.py
 run_checked python3 -m unittest tests.test_source_shop_assets -v
 # Issue #155 source lottery rules, settlement, save shape, presenter and host.
 run_checked python3 tools/test_prepare_lottery_assets.py
@@ -40,6 +41,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_core.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_settlement.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_bankruptcy.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_game_over.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_public_purchase.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_lottery_controller.gd
@@ -63,6 +65,9 @@ else
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_autosave.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_menu_ui.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
@@ -91,6 +96,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_mode
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_source_reclaim.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_balloon_recovery.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_runner.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_unknown_kind.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
@@ -299,6 +305,7 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ai.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_distance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_bankruptcy.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/bankruptcy_deposit_ledger.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/god_card_ai_terminal.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/engineering_vehicle_save.gd

@@ -347,6 +347,15 @@ func _source_binding_matches(key: InputEventKey, word: int) -> bool:
 	return pressed_word == (word & 0xff)
 
 
+func _source_advance_ready() -> bool:
+	# The source GO control is the only visible advance command; when the shell
+	# hides it (full-map view, decision phase) the keyboard must not roll.
+	if source_shell == null:
+		return true
+	var go := source_shell.get("roll_button") as Button
+	return go != null and go.visible and not go.disabled
+
+
 func _source_view_binding() -> int:
 	if system_hotkeys == null:
 		return int(SystemHotkeys.DEFAULTS[7])
@@ -392,9 +401,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					command = "save"
 				elif event.keycode == KEY_L and source_hotkeys_bindings[23] == 0x4c:
 					command = "load"
-			elif not event.ctrl_pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+			elif not event.ctrl_pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and _source_advance_ready():
 				# Manual p.7: ENTER is the source confirm command, so it confirms
-				# the pending advance command when nothing else owns the key.
+				# the pending advance command when nothing else owns the key.  A
+				# hidden GO control (full-map view, pending event) stays inert.
 				command = "roll"
 			elif not event.ctrl_pressed and event.keycode == KEY_N:
 				if state.get("phase", "") == "game_over":

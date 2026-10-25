@@ -254,10 +254,18 @@ func _test_source_turn_controls_normal_mode(ui: Control, shell: Control, game: O
 	_expect(shell.roll_button.text == "GO", "the ordinary advance command keeps the source GO label")
 	var go_style: StyleBox = shell.roll_button.get_theme_stylebox("normal")
 	_expect(go_style is StyleBoxFlat and (go_style as StyleBoxFlat).bg_color == Color("#4a3524"), "the GO command uses the source brown/gold framing instead of navy")
-	# Manual p.7: ENTER is the source confirm key, so it advances like SPACE.
+	# The full-map view hides GO, so the keyboard must not roll from under it.
 	var enter := InputEventKey.new()
 	enter.keycode = KEY_ENTER
 	enter.pressed = true
+	var before_map_enter: String = game.to_json()
+	shell.toggle_full_map_view()
+	_expect(not shell.roll_button.visible, "the full-map view hides the GO advance command")
+	ui._unhandled_input(enter)
+	_expect(ui.get("_presentation_busy") == false and game.to_json() == before_map_enter, "ENTER stays inert while the full-map view hides GO")
+	shell.toggle_full_map_view()
+	_expect(shell.roll_button.visible, "closing the full-map view restores the GO advance command")
+	# Manual p.7: ENTER is the source confirm key, so it advances like SPACE.
 	ui._unhandled_input(enter)
 	_expect(ui.get("_presentation_busy") == true, "ENTER confirms the pending advance command")
 	var board: Node = ui.board_view
@@ -562,6 +570,8 @@ func _push_viewport_click(viewport: SubViewport, point: Vector2) -> void:
 
 
 func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
+	# Route buttons are built into an HBoxContainer whose sorting is deferred, so
+	# the frame checks below wait for a layout pass before measuring bounds.
 	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
 	var definition: Dictionary = normalized.get("definition", {})
 	var started: bool = ui._new_game(1, 2, definition)
@@ -596,9 +606,12 @@ func _test_source_roll_presentation_gate(ui: Control, shell: Control) -> void:
 	_expect(source_load != null and not source_load.disabled, "visible source load re-enables after movement")
 	_expect(not shell.roll_button.visible, "source GO hides once the turn awaits a route")
 	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() > 0, "visible source route choices appear after movement")
+	await process_frame
+	await process_frame
 	if shell.route_buttons.get_child_count() > 0:
 		var route: Button = shell.route_buttons.get_child(0) as Button
 		_expect(route.visible and not route.disabled, "visible source route choice is enabled after movement")
+		_expect(route.size.x > 0.0, "the route fallback takes layout space before its bounds are checked")
 		_expect(route != null and route.text.begins_with("前往 ") and not route.text.contains("→"), "visible source route choice uses a player-facing destination label")
 		_expect(_inside_reference(route), "the source route fallback stays inside the 640x480 frame")
 	_expect(shell.turn_dialog.visible, "the route phase explains itself in the source event box")
@@ -750,7 +763,7 @@ func _run() -> void:
 	_test_source_hud_detail_values(ui, shell, game)
 	await _test_source_full_map_and_player_inspect(ui, shell, game)
 	_test_minimap_input(ui, shell, game)
-	_test_source_roll_presentation_gate(ui, shell)
+	await _test_source_roll_presentation_gate(ui, shell)
 	await _test_source_stock_modal_gate(ui, shell)
 	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)

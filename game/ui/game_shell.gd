@@ -101,6 +101,7 @@ var end_turn_button: Button
 var turn_dialog: Control
 var dialog_text: Label
 var choice_selector: Control
+var choice_divider: ColorRect
 var action_hint_label: Label
 var portrait: TextureRect
 var player_name_label: Label
@@ -448,13 +449,13 @@ func _build_source_turn_controls() -> void:
 	end_turn_button.size = Vector2(62.0, 26.0)
 	end_turn_button.pressed.connect(func() -> void: end_turn_requested.emit())
 	choice_selector.add_child(end_turn_button)
-	var divider := ColorRect.new()
-	divider.name = "SourceChoiceDivider"
-	divider.color = SOURCE_DIALOG_BORDER
-	divider.position = Vector2(71.0, 4.0)
-	divider.size = Vector2(6.0, 18.0)
-	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	choice_selector.add_child(divider)
+	choice_divider = ColorRect.new()
+	choice_divider.name = "SourceChoiceDivider"
+	choice_divider.color = SOURCE_DIALOG_BORDER
+	choice_divider.position = Vector2(71.0, 4.0)
+	choice_divider.size = Vector2(6.0, 18.0)
+	choice_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	choice_selector.add_child(choice_divider)
 
 	roll_button = _choice_button("GO", "roll", SOURCE_GO_FILL, SOURCE_GO_BORDER, SOURCE_GO_TEXT)
 	roll_button.name = "SourceAdvanceCommand"
@@ -746,9 +747,12 @@ func _render_turn_controls() -> void:
 	buy_button.visible = phase == "await_action" and can_buy
 	upgrade_button.visible = phase == "await_action" and can_upgrade and not can_buy
 	end_turn_button.visible = phase == "await_action" and can_end
-	end_turn_button.text = "NO" if buy_button.visible or upgrade_button.visible else "結束"
 	# A lone decline control keeps the source row but sits centred on it.
-	end_turn_button.position = Vector2(86.0, 0.0) if buy_button.visible or upgrade_button.visible else Vector2(43.0, 0.0)
+	var paired_choice := buy_button.visible or upgrade_button.visible
+	end_turn_button.text = "NO" if paired_choice else "結束"
+	end_turn_button.position = Vector2(86.0, 0.0) if paired_choice else Vector2(43.0, 0.0)
+	if choice_divider != null:
+		choice_divider.visible = paired_choice
 	for child in route_buttons.get_children():
 		route_buttons.remove_child(child)
 		child.queue_free()

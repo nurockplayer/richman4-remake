@@ -81,6 +81,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_menu_ui.gd
+# One process saves slot 1 through the source menu; the next process loads it
+# through the load menu and rolls the resumed human turn. Both share the
+# check's isolated RICHMAN4_USER_ROOT.
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_relaunch.gd -- a
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_relaunch.gd -- b
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
 # Visual fixtures cover layout and controls; native atlas rendering remains a
 # separate gate, and the opaque-background test reports its headless skip.
@@ -162,6 +167,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/main_hud_ui.gd
+# Settlement screen: all-AI completion, day limit, wealth target, last survivor,
+# restart/title/quit choices, frozen autosave and the disabled surrender row.
+run_checked "$GODOT_BIN" --headless --path . --script tests/match_settlement_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_sunday.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_input.gd

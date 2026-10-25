@@ -13,6 +13,10 @@ static func initialize(state: Dictionary) -> void:
 
 static func admit(game: Object, player_id: int) -> void:
 	if not game._is_companies(): return
+	# Source shop and bank visits skip sleeping actors because their auto-turn
+	# driver cannot answer an interactive modal. Keep the lottery identical:
+	# otherwise the sleeping turn aborts on await_lottery and the game waits.
+	if game._sleep_active(game._player(player_id)): return
 	game.state.lottery_pending = player_id
 	game.state.phase = "await_lottery"
 	game.state.action_options = []

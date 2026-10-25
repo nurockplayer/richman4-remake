@@ -55,5 +55,12 @@ func _initialize() -> void:
 		var invalid: Dictionary = game.to_dict()
 		invalid.lottery_tickets = bad
 		expect(not Game.validate_save(invalid).ok and Game.from_dict(invalid) == null, "invalid ticket shape rejected")
+	var sleeper = fresh()
+	sleeper.state.players[0].dream_days = 2
+	sleeper.state.players[0].position = 3
+	sleeper._resolve_landing(0, false)
+	expect(sleeper.state.phase != "await_lottery" and int(sleeper.state.lottery_pending) == -1 and int(sleeper.state.jackpot) == 0, "sleeping actor skips the interactive lottery")
+	var sleep_result: Dictionary = sleeper.run_sleep_turn()
+	expect(bool(sleep_result.get("ok", false)), "sleep turn still completes after a lottery tile")
 	print("Lottery core checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

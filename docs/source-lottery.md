@@ -19,6 +19,12 @@ nodes reach the lottery through the original map factory. Original company
 capability owns its shared pool; smaller development boards do not acquire an
 independent lottery economy.
 
+Only a human actor receives the purchase modal. An AI encounter is resolved by
+the AI turn, which then continues to that actor's ordinary action and end turn
+in the same call, so a saved AI-pending encounter resumes through one ordinary
+dispatch. Sleeping actors skip the encounter, matching the source shop and bank
+admission convention; their auto-turn driver cannot answer an interactive modal.
+
 On the 15th, dividend settlement precedes the lottery draw. An empty ticket
 array advances the saved draw identity without drawing a number or opening a
 lottery presentation. If any one player owns more than ten tickets, the number

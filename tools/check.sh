@@ -7,9 +7,13 @@ mkdir -p .local build
 # paths. Keep Godot from scanning/importing those multi-GB local caches into a
 # second per-worktree .godot/imported copy.
 touch .local/.gdignore build/.gdignore
+# Remove the current check's temp log even if the run is interrupted or errexit fires.
+current_check_log=""
+trap 'rm -f "$current_check_log"' EXIT
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
+  current_check_log="$check_log"
   local status=0 reported=0
   "$@" >"$check_log" 2>&1 || status=$?
   cat "$check_log"

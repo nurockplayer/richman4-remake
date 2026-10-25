@@ -34,7 +34,7 @@ from decode_original_images import (
 
 # Source identity is kept separate from presentation coordinates.  These are
 # archive indices, not screen positions; see docs/original-ui-assets.md.
-UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
+UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75, 77)}
 
 # The two editions do not use the same jump resource numbers.  The first four
 # Game jump resources (and first eight MJ resources) are 640x480 map images;

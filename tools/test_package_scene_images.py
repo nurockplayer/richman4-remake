@@ -191,7 +191,7 @@ class PackageSceneTests(unittest.TestCase):
             group = export_ui_resources("Game", source, stage)
             self.assertEqual(set(group), {"Panel"})
             self.assertEqual(group["Panel"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
-            self.assertEqual(set(group["Panel"]["resources"]), {"0", "1", "2", "75"})
+            self.assertEqual(set(group["Panel"]["resources"]), {"0", "1", "2", "25", "75", "76"})
             record = group["Panel"]["resources"]["75"]["chunks"]["0"]
             self.assertEqual(record["logical"], {"width": 3, "height": 1, "anchor_x": -2, "anchor_y": 5})
             width, height, pixels = read_png_rgba((stage / record["path"]).read_bytes())
@@ -203,7 +203,7 @@ class PackageSceneTests(unittest.TestCase):
             path = stage / "manifest.json"
             path.write_text(json.dumps(manifest))
             _, paths = validate(path)
-            self.assertEqual(len(paths), 4)
+            self.assertEqual(len(paths), 6)
             (stage / group["Panel"]["resources"]["1"]["chunks"]["0"]["path"]).write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path)

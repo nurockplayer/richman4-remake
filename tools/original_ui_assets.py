@@ -11,7 +11,8 @@ from decode_original_images import (
 
 # Source identity is kept separate from presentation coordinates.  These are
 # archive indices, not screen positions; see docs/original-ui-assets.md.
-UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 75)}
+# Panel25/76 are the S17/S18 monthly report clerk, cards and dividend frame.
+UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 25, 75, 76)}
 
 
 def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:

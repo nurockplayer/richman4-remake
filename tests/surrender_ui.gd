@@ -121,15 +121,24 @@ func run() -> void:
 	check(int(duel.state.get("winner", -1)) == 1 and int(ui.state.get("winner", -1)) == 1, "the last remaining player wins the concession")
 
 	# A refused concession (the match is already over, so the actor cannot act)
-	# must report the refusal, never a successful surrender.
+	# must report the refusal, never a successful surrender. The finished match
+	# disables the row outright, so the reachable path is a command that still
+	# arrives from a stale source; the host must refuse and say so.
 	var frozen: String = duel.to_json()
 	var log_size: int = ui._local_log.size()
 	ui._open_source_options("game")
 	await settle()
+	# The manual confirmation emit above leaves the dialog visible; a fresh
+	# hidden dialog proves the disabled row cannot raise it again.
+	ui._source_options_confirmation.hide()
+	check(ui.source_options_panel.is_command_disabled("surrender"), "a finished match disables the surrender row")
 	press_row(ui.source_options_panel, "modecmd1")
 	await settle()
-	ui._source_options_confirmation.confirmed.emit()
+	check(not ui._source_options_confirmation.visible, "the disabled row never asks for confirmation")
+	check(ui._local_log.size() == log_size and duel.to_json() == frozen, "the disabled row leaves the finished match alone")
+	ui._on_source_options_command("surrender")
 	await settle()
+	check(not ui._source_options_confirmation.visible, "a refused surrender never reaches the confirmation")
 	check(ui._local_log.size() == log_size + 1 and str(ui._local_log[-1]) != "已投降", "a refused concession never claims success")
 	check(duel.to_json() == frozen, "a refused concession leaves the finished match alone")
 

@@ -33,6 +33,8 @@ const DAY_COLUMN_STEP := 23.0
 const DAY_ROW_STEP := 14.0
 const DAY_BOX_SIZE := Vector2(20.0, 14.0)
 const SUNDAY_RED := Color("#ff0000")
+const FALLBACK_PAPER := Color("#d8e6d3")
+const FALLBACK_UNAVAILABLE := Color("#193a4a")
 const HITBOXES := {
 	"sun": Rect2(8.0, 8.0, 27.0, 27.0),
 	"moon": Rect2(38.0, 8.0, 27.0, 27.0),
@@ -278,7 +280,9 @@ func _build() -> void:
 	_fallback = ColorRect.new()
 	_fallback.name = "SourceCalendarFallback"
 	_fallback.size = LOGICAL_SIZE
-	_fallback.color = Color("#193a4a")
+	# The art-free fallback keeps the light source panel tone so the dark source
+	# date ink stays readable; the unavailable state switches to dark.
+	_fallback.color = FALLBACK_PAPER
 	_fallback.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_surface.add_child(_fallback)
 	_unavailable = Label.new()
@@ -306,6 +310,7 @@ func _render() -> void:
 	_source_art_available = false
 	background_art = null
 	_fallback.show()
+	_fallback.color = FALLBACK_PAPER if _snapshot_valid else FALLBACK_UNAVAILABLE
 	_unavailable.visible = not _snapshot_valid
 	if not _snapshot_valid:
 		return
@@ -362,6 +367,18 @@ func _draw_day(date_value: Dictionary) -> void:
 func _draw_month(date_value: Dictionary) -> void:
 	_make_label("SourceCalendarMonth", _month_text(int(date_value.month)), Rect2(20, 32, 80, 32), 28, Color("#101010"), HORIZONTAL_ALIGNMENT_CENTER)
 	_make_label("SourceCalendarYear", str(int(date_value.year)), Rect2(140, 8, 60, 28), 24, Color("#101010"), HORIZONTAL_ALIGNMENT_LEFT)
+	if background_art == null:
+		# The source month chunks embed the weekday headers; the art-free
+		# fallback draws the same Sunday-first row so the grid stays readable.
+		for column in range(WEEKDAY_LABELS.size()):
+			_make_label(
+				"SourceCalendarWeekdayHeader%d" % column,
+				WEEKDAY_LABELS[column],
+				Rect2(DAY_CENTERS_ORIGIN.x - 10.0 + DAY_COLUMN_STEP * float(column), 72.0, DAY_BOX_SIZE.x, 16.0),
+				12,
+				Color("#101010"),
+				HORIZONTAL_ALIGNMENT_CENTER
+			)
 	var centers := day_centers()
 	var selected_day := int(date_value.day)
 	for day in centers:

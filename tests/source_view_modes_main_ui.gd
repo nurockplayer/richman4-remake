@@ -95,6 +95,16 @@ func _run() -> void:
 	viewport.push_input(_key(KEY_TAB, true), true)
 	await _settle()
 	_expect(shell.view_mode == 2, "TAB echo does not cycle")
+	var shifted := _key(KEY_TAB)
+	shifted.shift_pressed = true
+	viewport.push_input(shifted, true)
+	await _settle()
+	_expect(shell.view_mode == 2, "Shift+Tab keeps ordinary focus traversal")
+	var controlled := _key(KEY_TAB)
+	controlled.ctrl_pressed = true
+	viewport.push_input(controlled, true)
+	await _settle()
+	_expect(shell.view_mode == 2, "Ctrl+Tab is not the source view binding")
 
 	ui._presentation_busy = true
 	viewport.push_input(_key(KEY_TAB), true)

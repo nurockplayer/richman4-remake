@@ -272,7 +272,16 @@ func _process(_delta: float) -> void:
 ## MainUI owns the modal/movement/pending-action gates; a runtime hotkey host
 ## (device bindings) can later replace this key without touching the shell.
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB and _source_view_operation_allowed():
+	if not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo or key.keycode != KEY_TAB:
+		return
+	# Only the unmodified source binding takes the key; Shift+Tab and friends
+	# keep their ordinary focus traversal.
+	if key.shift_pressed or key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
+		return
+	if _source_view_operation_allowed():
 		_on_source_view_requested()
 		get_viewport().set_input_as_handled()
 

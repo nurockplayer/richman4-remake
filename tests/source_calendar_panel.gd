@@ -98,6 +98,7 @@ func _run() -> void:
 		await _test_calendar(panel)
 		await _test_invalid_and_edition(panel)
 		await _test_art_scale(panel)
+		await _test_art_free_fallback(panel)
 	viewport.queue_free()
 	await _settle()
 	print("Source calendar panel checks: %d, failures: %d" % [checks, failures])
@@ -197,3 +198,25 @@ func _test_art_scale(panel: Control) -> void:
 	frames = panel.call("source_frames")
 	_expect(frames.has("Panel2.7"), "month style resolves complete Panel2 chunk")
 	_expect(bool(panel.call("source_art_available")), "complete source resolver reports art available")
+
+
+func _test_art_free_fallback(panel: Control) -> void:
+	panel.call("configure_assets", null, "Game")
+	panel.call("set_style", "day")
+	_expect(bool(panel.call("present", _snapshot({"year": 2024, "month": 1, "day": 1}))), "art-free snapshot still presents")
+	await _settle()
+	var fallback := _find(panel, "SourceCalendarFallback") as ColorRect
+	_expect(fallback != null and fallback.visible, "art-free calendar keeps the fallback surface visible")
+	if fallback != null:
+		_expect_equal(fallback.color, Color("#d8e6d3"), "art-free fallback keeps the light source paper under dark source ink")
+	_expect(not bool(panel.call("source_art_available")), "empty catalog reports no source art")
+	_expect(_find(panel, "SourceCalendarDay") != null, "art-free day style still renders the date")
+	panel.call("set_style", "month")
+	await _settle()
+	for column in range(7):
+		_expect(_find(panel, "SourceCalendarWeekdayHeader%d" % column) != null, "art-free month grid draws source weekday header %d" % column)
+	_expect(_find(panel, "SourceCalendarDay31") != null, "art-free month grid renders every day cell")
+	panel.call("present", _snapshot({"year": 1997, "month": 1, "day": 1}))
+	await _settle()
+	if fallback != null:
+		_expect_equal(fallback.color, Color("#193a4a"), "unavailable calendar keeps the dark panel under its warning text")

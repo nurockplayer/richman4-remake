@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import sys
 import tempfile
 
@@ -31,11 +32,60 @@ from decode_original_images import (
     parse_visual_resource,
     write_png,
 )
+from prepare_lottery_assets import (
+    AssetError as FlicError,
+    decode_flic,
+    write_png as write_flic_png,
+)
 
 # Source identity is kept separate from presentation coordinates.  These are
 # archive indices, not screen positions; see docs/original-ui-assets.md.
-# Panel25/76 are the S17/S18 monthly report clerk, cards and dividend frame.
-UI_RESOURCES = {"Data": (1, 2, 3), "Panel": (0, 1, 2, 25, 75, 76, 77)}
+# Panel25/76/77 are the S17/S18 monthly report clerk, cards, dividend frame and
+# trustee panel; Panel10/11 the source shop and inventory; Panel12-17 the S29/S30
+# lottery; Panel21/23/24 the bank/ATM calculator; Panel73/74 the SALE browser;
+# Panel75 the stock board; Panel78-111 the source minigames.  Panel81 is the
+# catching click plane, not artwork, and is never exported.
+MINIGAME_UI_RESOURCES = tuple(index for index in range(79, 112) if index != 81)
+UI_RESOURCES = {
+    "Data": (1, 2, 3),
+    "Panel": (
+        0, 1, 2, 10, 11, 12, 13, 14, 15, 16, 17, 21, 23, 24, 25, 73, 74, 75,
+        76, 77, *MINIGAME_UI_RESOURCES,
+    ),
+}
+
+# FLIC cutouts keep their own animation timing; the caller settings come from
+# the existing lottery and minigame preparations.
+FLIC_UI_SETTINGS = {
+    14: {"max_frames": 64, "transparent_index_zero": True,
+         "caller": {"x": 8, "y": 8, "delay_ms": 100, "loop": True}},
+    16: {"max_frames": 64, "transparent_index_zero": False,
+         "caller": {"x": 183, "y": 75, "delay_ms": 50, "loop": False}},
+    17: {"max_frames": 64, "transparent_index_zero": True,
+         "caller": {"x": 205, "y": 0, "delay_ms": 50, "loop": False}},
+    78: {"max_frames": 20, "transparent_index_zero": True,
+         "caller": {"flags": 1, "delay_ms": 114, "loop": False,
+                    "skip_on_release": False}},
+}
+FLIC_UI_RESOURCES = {
+    (edition, "Panel", index): settings
+    for edition in ("Game", "MultiverseJourney")
+    for index, settings in FLIC_UI_SETTINGS.items()
+}
+
+# SMP/SPR chunks whose source word zero stays opaque because the caller blits
+# them as a rectangle.  Every other chunk keeps WORD0 transparent.  These
+# policies come from the bounded shop, inventory, lottery and minigame
+# preparations; anything unlisted keeps the historical transparent cutout.
+OPAQUE_UI_CHUNKS = {
+    ("Panel", 10): lambda chunk: chunk in (0, 1, 16, 17),
+    ("Panel", 11): lambda chunk: chunk in (0, 1, 15, 16),
+    ("Panel", 12): lambda chunk: chunk not in (1, 2, 7, 8),
+    ("Panel", 15): lambda chunk: chunk == 0 or 7 <= chunk <= 21,
+    ("Panel", 79): lambda chunk: 0 <= chunk <= 9,
+    ("Panel", 80): lambda chunk: chunk == 0,
+    ("Panel", 91): lambda chunk: chunk == 0,
+}
 
 # The two editions do not use the same jump resource numbers.  The first four
 # Game jump resources (and first eight MJ resources) are 640x480 map images;
@@ -95,6 +145,10 @@ RAW_RGB555_RESOURCES.update(
     {
         ("Game", "Data", 560),
         ("MultiverseJourney", "Data", 601),
+        # The catching background is a headerless 640x480 RGB555 surface; the
+        # source copies it opaquely, so its zero words stay opaque.
+        ("Game", "Panel", 92),
+        ("MultiverseJourney", "Panel", 92),
     }
 )
 RAW_RGB555_WIDTH = 640
@@ -195,6 +249,81 @@ def _raw_rgb555_visual(path: Path, index: int, payload: bytes) -> VisualResource
     )
 
 
+def _export_flic_resource(
+    edition: str,
+    archive_name: str,
+    index: int,
+    settings: dict,
+    archive,
+    entry,
+    payload: bytes,
+    stage: Path,
+) -> dict:
+    """Decode one configured FLIC animation into private frame PNGs."""
+
+    try:
+        width, height, frames = decode_flic(
+            payload, max_frames=int(settings["max_frames"])
+        )
+    except (FlicError, ValueError, IndexError, struct.error) as error:
+        raise FormatError(
+            f"unsupported FLIC UI resource at {archive.path}:{index}: {error}"
+        ) from error
+    if not frames:
+        raise FormatError(f"FLIC UI resource at {archive.path}:{index} has no frames")
+    transparent = bool(settings["transparent_index_zero"])
+    output_chunks = {}
+    for number, (pixels, palette) in enumerate(frames):
+        relative = (
+            Path("images")
+            / edition
+            / "ui"
+            / archive_name
+            / str(index)
+            / f"{number}.png"
+        )
+        target = stage / relative
+        write_flic_png(target, pixels, palette, width, height, transparent)
+        output_chunks[str(number)] = {
+            "path": relative.as_posix(),
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "width": width,
+            "height": height,
+            "logical": {
+                "width": width,
+                "height": height,
+                "anchor_x": 0,
+                "anchor_y": 0,
+            },
+            "frame_index": number,
+        }
+    return {
+        "resource_index": index,
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "signature": "FLIC",
+        "format": "FLIC",
+        "pixel_format": "rgba8888",
+        "transparent_index_zero": transparent,
+        "caller": dict(settings["caller"]),
+        "source": _source_record(
+            edition, archive_name, index, archive, entry, payload
+        ),
+        "output": {
+            "format": "png",
+            "pixel_format": "rgba8888",
+            "transparent_index_zero": transparent,
+        },
+        "chunks": output_chunks,
+    }
+
+
+def _transparent_word_zero(archive_name: str, index: int, chunk: int) -> bool:
+    """Return the source-documented WORD0 policy for one SMP/SPR chunk."""
+
+    opaque = OPAQUE_UI_CHUNKS.get((archive_name, index))
+    return True if opaque is None else not opaque(chunk)
+
+
 def _export_resource(
     edition: str,
     archive_name: str,
@@ -208,6 +337,12 @@ def _export_resource(
     entry = archive.entries[index]
     payload = decode_entry(archive, entry)
     binding = (edition, archive_name, index)
+    flic_settings = FLIC_UI_RESOURCES.get(binding)
+    if flic_settings is not None:
+        return _export_flic_resource(
+            edition, archive_name, index, flic_settings, archive, entry,
+            payload, stage,
+        )
     if binding in RAW_RGB555_RESOURCES:
         visual = _raw_rgb555_visual(archive.path, index, payload)
         transparent_word_zero = False
@@ -249,33 +384,44 @@ def _export_resource(
         )
         target = stage / relative
         # UI sprites and atlas fragments use a zero background around their
-        # irregular edges.  Headerless map/loading pixels are opaque,
-        # including their real black background, so the raw binding opts out
-        # below.
+        # irregular edges.  Background blits and the headerless map/loading
+        # surfaces keep their real black pixels opaque.
+        chunk_transparent = transparent_word_zero
+        if visual.signature in ("SMP", "SPR"):
+            chunk_transparent = _transparent_word_zero(
+                archive_name, index, chunk.index
+            )
         write_png(
             target,
             chunk,
             visual,
             pixel_format="rgb555",
-            transparent_word_zero=transparent_word_zero,
+            transparent_word_zero=chunk_transparent,
         )
-        output_chunks[str(chunk.index)] = _frame_record(relative, target, chunk)
+        record = _frame_record(relative, target, chunk)
+        record["transparent_word_zero"] = chunk_transparent
+        output_chunks[str(chunk.index)] = record
 
     payload_sha256 = hashlib.sha256(payload).hexdigest()
+    transparency = (
+        "per-chunk"
+        if output_format in ("SMP", "SPR")
+        else transparent_word_zero
+    )
     return {
         "resource_index": index,
         "payload_sha256": payload_sha256,
         "signature": visual.signature,
         "format": output_format,
         "pixel_format": "rgb555",
-        "transparent_word_zero": transparent_word_zero,
+        "transparent_word_zero": transparency,
         "source": _source_record(
             edition, archive_name, index, archive, entry, payload
         ),
         "output": {
             "format": "png",
             "pixel_format": "rgb555",
-            "transparent_word_zero": transparent_word_zero,
+            "transparent_word_zero": transparency,
         },
         "chunks": output_chunks,
     }

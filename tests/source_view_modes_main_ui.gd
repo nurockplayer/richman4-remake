@@ -3,13 +3,14 @@ extends SceneTree
 ## Focused MainUI checks for the source view hotkey and the existing options
 ## boundary.  Source slot7 TAB cycles the three window groups in memory, the
 ## host gates keep it out of every modal/pending-action state, and only a
-## successful parent OK persists and re-applies the chosen view.  A
-## worktree-local settings path keeps the owner's settings untouched.
+## successful parent OK persists and re-applies the chosen view.  Worktree-local
+## settings and hotkey paths keep the owner's files untouched.
 
 const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const SystemSettings = preload("res://game/platform/system_settings.gd")
+const SystemHotkeys = preload("res://game/platform/system_hotkeys.gd")
 
 var checks := 0
 var failures := 0
@@ -49,6 +50,7 @@ func _run() -> void:
 	_expect(not DirAccess.dir_exists_absolute(scratch), "view fixture requires a new temporary directory")
 	_expect(DirAccess.make_dir_recursive_absolute(scratch) == OK, "view fixture directory is created")
 	var settings_file := scratch.path_join("settings.json")
+	var hotkeys_file := scratch.path_join("hotkeys.json")
 	var viewport := SubViewport.new()
 	viewport.size = Vector2i(1280, 960)
 	viewport.handle_input_locally = true
@@ -58,6 +60,7 @@ func _run() -> void:
 	viewport.notify_mouse_entered()
 	var ui: Control = MainScene.instantiate()
 	ui.settings_path = settings_file
+	ui.hotkeys_path = hotkeys_file
 	viewport.add_child(ui)
 	await _settle()
 	ui.set_process(false)
@@ -105,6 +108,19 @@ func _run() -> void:
 	viewport.push_input(controlled, true)
 	await _settle()
 	_expect(shell.view_mode == 2, "Ctrl+Tab is not the source view binding")
+
+	# The hotkey child window persists slot7; an accepted remap replaces TAB.
+	var remapped: Array = SystemHotkeys.new().defaults()
+	remapped[7] = 0x74
+	ui.source_hotkeys_bindings = remapped
+	viewport.push_input(_key(KEY_TAB), true)
+	await _settle()
+	_expect(shell.view_mode == 2, "a remapped slot7 stops the TAB cycle")
+	for expected in [0, 1, 2]:
+		viewport.push_input(_key(KEY_F5), true)
+		await _settle()
+		_expect(shell.view_mode == expected, "the remapped slot7 cycles on F5")
+	ui.source_hotkeys_bindings = SystemHotkeys.new().defaults()
 
 	ui._presentation_busy = true
 	viewport.push_input(_key(KEY_TAB), true)
@@ -170,6 +186,7 @@ func _run() -> void:
 	await create_timer(0.15).timeout
 	var restarted: Control = MainScene.instantiate()
 	restarted.settings_path = settings_file
+	restarted.hotkeys_path = hotkeys_file
 	viewport.add_child(restarted)
 	await _settle()
 	restarted.set_process(false)
@@ -178,8 +195,9 @@ func _run() -> void:
 	await create_timer(0.15).timeout
 	viewport.queue_free()
 	await _settle()
-	if FileAccess.file_exists(settings_file):
-		DirAccess.remove_absolute(settings_file)
+	for file in [settings_file, hotkeys_file]:
+		if FileAccess.file_exists(file):
+			DirAccess.remove_absolute(file)
 	if DirAccess.dir_exists_absolute(scratch):
 		DirAccess.remove_absolute(scratch)
 	print("Source view modes MainUI checks: %d, failures: %d" % [checks, failures])

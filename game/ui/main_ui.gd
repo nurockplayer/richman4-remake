@@ -281,22 +281,39 @@ func _process(_delta: float) -> void:
 		return
 	_maybe_schedule_ai_turn()
 
-## Source slot7 TAB cycles the window group before Godot's focus traversal.
-## MainUI owns the modal/movement/pending-action gates; a runtime hotkey host
-## (device bindings) can later replace this key without touching the shell.
+## Source slot7 cycles the window group before Godot's focus traversal.
+## MainUI owns the modal/movement/pending-action gates; the key comes from the
+## same persisted bindings the hotkey child window writes, so a remapped slot7
+## works without a global InputMap.  #148 still owns the full runtime host.
 func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
-	if not key.pressed or key.echo or key.keycode != KEY_TAB:
+	if not key.pressed or key.echo:
 		return
-	# Only the unmodified source binding takes the key; Shift+Tab and friends
-	# keep their ordinary focus traversal.
-	if key.shift_pressed or key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
+	# Shift/Alt/Meta keep their ordinary focus traversal and shortcuts.
+	if key.shift_pressed or key.alt_pressed or key.meta_pressed:
+		return
+	var word := _source_view_binding()
+	if word == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
+		return
+	var pressed_word: int = system_hotkeys.event_key(key) if system_hotkeys != null else (0x09 if key.keycode == KEY_TAB else 0)
+	if pressed_word != (word & 0xff):
 		return
 	if _source_view_operation_allowed():
 		_on_source_view_requested()
 		get_viewport().set_input_as_handled()
+
+
+func _source_view_binding() -> int:
+	if system_hotkeys == null:
+		return int(SystemHotkeys.DEFAULTS[7])
+	if source_hotkeys_bindings.is_empty():
+		var loaded: Dictionary = system_hotkeys.read_bindings(hotkeys_path)
+		source_hotkeys_bindings = (loaded.get("bindings", system_hotkeys.defaults()) as Array).duplicate(true)
+	if source_hotkeys_bindings.size() != 28:
+		return int(SystemHotkeys.DEFAULTS[7])
+	return int(source_hotkeys_bindings[7])
 
 
 func _unhandled_input(event: InputEvent) -> void:

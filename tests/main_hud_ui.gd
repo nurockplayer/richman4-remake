@@ -373,6 +373,14 @@ func _test_release_feedback_states(ui: Control, shell: Control) -> void:
 	game._sync_state()
 	ui._refresh_from_state()
 	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "an AI turn shows its waiting text in release builds")
+	# A finance key that exists but holds nothing is not an active response and
+	# must not mask the AI waiting text.
+	ui.state["pending_finance"] = {}
+	ui._sync_waiting_status()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "an empty pending finance entry does not mask the AI waiting text")
+	ui.state.erase("pending_finance")
+	ui._sync_waiting_status()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "clearing the finance entry restores the ordinary AI waiting text")
 
 	# A turn with nothing but 結束 explains the lone control.
 	game.state.current_player = 0
@@ -401,11 +409,29 @@ func _test_release_feedback_states(ui: Control, shell: Control) -> void:
 	ui._sync_waiting_status()
 	_expect(not shell.status_toast.visible, "the checkpoint status clears with the pending checkpoint")
 
+	# A rejection returned by the simulation core (not a UI gate) answers too.
+	var core_rejection: Dictionary = ui._invoke_game("choose_route", [3])
+	_expect(not bool(core_rejection.get("ok", true)) and not str(core_rejection.get("message", "")).is_empty(), "the simulation core rejects a route outside its phase")
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text) == str(core_rejection.get("message", "")), "a simulation-level rejection shows the same board toast")
+	shell.advance_status_toast(2.5)
+
 	game.state.phase = "await_roll"
 	game._set_action_options(0)
 	game._sync_state()
 	ui._refresh_from_state()
 	_expect(not shell.status_toast.visible, "an ordinary human turn keeps the board free of status text")
+
+	# ENTER outside a route decision still confirms the GO advance command.
+	var go_enter := InputEventKey.new()
+	go_enter.keycode = KEY_ENTER
+	go_enter.pressed = true
+	var before_go: String = game.to_json()
+	ui._unhandled_input(go_enter)
+	_expect(game.to_json() != before_go, "ENTER keeps confirming GO when no route decision owns the turn")
+	var board: Node = ui.board_view
+	if board.has_method("_advance_movement"):
+		board._advance_movement(100.0)
+	_expect(ui.get("_presentation_busy") == false, "the ENTER advance finishes its movement presentation")
 	ui._set_development_path(true)
 
 
@@ -432,9 +458,22 @@ func _test_route_keyboard_and_reaction_gate(ui: Control, shell: Control) -> void
 	await process_frame
 	await process_frame
 	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() == 2, "the route decision exposes both destinations")
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	# The old ENTER→GO habit must never commit an unseen destination at a fork.
+	ui._input(enter)
+	_expect(int(game.state.players[0].position) == 1 and str(game.state.phase) == "await_route", "ENTER without a selected destination never commits a route")
+	# Route controls whose parent is hidden (a title or menu screen) stay inert.
+	shell.game_screen.hide()
 	var right := InputEventKey.new()
 	right.keycode = KEY_RIGHT
 	right.pressed = true
+	ui._input(right)
+	ui._input(enter)
+	_expect(int(game.state.players[0].position) == 1 and str(game.state.phase) == "await_route", "route controls under a hidden parent ignore keyboard input")
+	shell.game_screen.show()
+	_expect(shell.route_buttons.is_visible_in_tree(), "showing the board restores the route controls")
 	ui._input(right)
 	_expect(ui.get_viewport().gui_get_focus_owner() == shell.route_buttons.get_child(0), "RIGHT selects the first route destination")
 	ui._input(right)
@@ -445,9 +484,6 @@ func _test_route_keyboard_and_reaction_gate(ui: Control, shell: Control) -> void
 	ui._input(number)
 	_expect(ui.get_viewport().gui_get_focus_owner() == shell.route_buttons.get_child(0), "a number key selects the matching destination")
 	ui._input(right)
-	var enter := InputEventKey.new()
-	enter.keycode = KEY_ENTER
-	enter.pressed = true
 	ui._input(enter)
 	_expect(int(game.state.players[0].position) == 3, "ENTER confirms the keyboard-selected route")
 	var board: Node = ui.board_view

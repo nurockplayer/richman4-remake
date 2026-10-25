@@ -331,7 +331,7 @@ func _route_keyboard_active() -> bool:
 	if str(state.get("phase", "")) != "await_route" or source_shell == null:
 		return false
 	var routes: Variant = source_shell.get("route_buttons")
-	if not (routes is Control) or not (routes as Control).visible:
+	if not (routes is Control) or not (routes as Control).is_visible_in_tree():
 		return false
 	return _is_human_turn() and not _as_array(state.get("route_options", [])).is_empty()
 
@@ -357,7 +357,10 @@ func _handle_route_key(event: InputEvent) -> bool:
 				_route_keyboard_index = -1
 				return false
 		KEY_ENTER, KEY_KP_ENTER:
-			_route_keyboard_index = clampi(_route_keyboard_index, 0, count - 1)
+			# ENTER only confirms a destination the player has selected, so it
+			# can never commit an unseen route from the old ENTER→GO habit.
+			if _route_keyboard_index < 0 or _route_keyboard_index >= count:
+				return false
 			var next_index := int(options[_route_keyboard_index])
 			_route_keyboard_index = -1
 			_on_route_selected(next_index)
@@ -3586,6 +3589,11 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 				source_lottery_controller.capture_transition(game_state, before, result.get("state", _read_snapshot()))
 			if bool(result.get("ok", false)):
 				_source_autosave.capture_transition(game_state, before, _read_snapshot(), bool(_source_settings.get("autosave", false)))
+			elif result.has("ok") and not bool(result.get("ok", true)) and not bool(result.get("awaiting_response", false)) and method not in ["run_ai_turn", "run_sleep_turn"]:
+				# A simulation-level rejection (stale turn, invalid choice) gets
+				# the same visible answer as a UI gate.  AI/sleep turns are
+				# excluded because their waiting results are not player input.
+				_toast_status(str(result.get("message", "")))
 			result["_presentation_before"] = before
 			result["_presentation_generation"] = _presentation_generation
 			result["_presentation_owner"] = game_state
@@ -3596,9 +3604,14 @@ func _invoke_game(method: String, args: Array = []) -> Dictionary:
 ## Every pre-simulation rejection answers the player in the board status toast,
 ## so release builds (which have no hint row) are never silently inert.
 func _reject(message: String) -> Dictionary:
-	if source_shell != null and source_shell.has_method("show_status_toast"):
-		source_shell.call("show_status_toast", message)
+	_toast_status(message)
 	return {"ok": false, "message": message}
+
+
+func _toast_status(message: String) -> void:
+	if message.is_empty() or source_shell == null or not source_shell.has_method("show_status_toast"):
+		return
+	source_shell.call("show_status_toast", message)
 
 func _handle_result(result: Dictionary) -> void:
 	if _legacy_save_modal_open() or _presentation_busy:
@@ -4086,7 +4099,8 @@ func _waiting_status_text() -> String:
 	if not auction_pending.is_empty():
 		var bidder_id := int(auction_pending.get("bidder_id", -1))
 		return "請%s回應拍賣" % _player_name(bidder_id) if _human_auction_response_pending() else "拍賣進行中"
-	if state.has("pending_finance"):
+	var pending_finance: Variant = state.get("pending_finance", {})
+	if pending_finance is Dictionary and not (pending_finance as Dictionary).is_empty():
 		return "請回應付款選擇"
 	if not _pending_trap_for_ui().is_empty():
 		return "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"

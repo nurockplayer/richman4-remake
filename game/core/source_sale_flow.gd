@@ -132,7 +132,8 @@ static func _decorated(game: Object, offer: Dictionary) -> Dictionary:
 	result["name"] = game.get_stock_name(Market.symbol(int(offer.source_id))) if offer.category == "stock" else str(_item(str(offer.category), int(offer.source_id)).get("name", ""))
 	if offer.category == "property":
 		var tile := _property(game, int(offer.source_id))
-		result.merge({"name": str(tile.get("name", "")), "location": str(tile.get("name", "")), "development": str(tile.get("building_level", 0)) + " 級", "rent": int(tile.get("rent", 0)), "lease": int(tile.get("lease_months", 0)), "kind": "facility" if tile.get("kind") == "facility" else "land", "property_kind": "facility" if tile.get("kind") == "facility" else "land"}, true)
+		var identity := _property_identity(tile)
+		result.merge({"name": str(tile.get("name", "")), "location": str(tile.get("name", "")), "development": str(tile.get("building_level", 0)) + " 級", "rent": int(tile.get("rent", 0)), "lease": int(tile.get("lease_months", 0)), "kind": "facility" if tile.get("kind") == "facility" else "land", "property_kind": "facility" if tile.get("kind") == "facility" else "land", "building_level": int(identity.building_level), "building_type": int(identity.building_type)}, true)
 	return result
 
 static func snapshot(game: Object) -> Dictionary:

@@ -13,6 +13,7 @@ const SOURCE_TICKS := [6, 4, 2]
 const COMMAND_SLOTS := {
 	10: "roll",
 	12: "stocks",
+	13: "sale",
 	14: "cards",
 	15: "tools",
 	16: "inspect",

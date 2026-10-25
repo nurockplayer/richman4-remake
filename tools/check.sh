@@ -35,16 +35,40 @@ if [[ -n "${RICHMAN4_MAP_CATALOG:-}" ]]; then
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_catalog.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_lifecycle.gd
   run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_ui.gd
+  # Issue #135 source bank catalog ingress uses the real map catalog. Missing
+  # bank atlases are reported as presentation skips by the focused tests.
+  run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_catalog.gd
 else
   echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
+  echo "SKIP: source bank catalog ingress requires RICHMAN4_MAP_CATALOG"
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
+# Issue #135 source bank encounter, accounting, save schema, financing and UI.
+# Visual fixtures cover layout and controls; native atlas rendering remains a
+# separate gate, and the opaque-background test reports its headless skip.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_effects.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visit_schema.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_loans.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance_actor.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/special_finance_boundaries.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_amount_regressions.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_controller_host.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_modal.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visual.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_opaque_background.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/news_bank_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/setup_controls.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.

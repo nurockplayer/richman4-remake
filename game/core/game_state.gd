@@ -5214,7 +5214,12 @@ func _declare_bankruptcy(debtor_id: int, creditor_id: int, debt: int, reason: St
 		state["bank_landing"] = false
 		# The construction service belongs to the actor who landed on their own
 		# company; a conceded actor never returns to choose its target.
-		state["company_service_pending"] = 0
+		# The construction service belongs to the actor who landed on their own
+		# company; a conceded actor never returns to choose its target. Only
+		# touch the key when the match tracks services so the saved shape of
+		# other games stays byte-identical.
+		if int(state.get("company_service_pending", 0)) > 0:
+			state["company_service_pending"] = 0
 	var pending_cleared: bool = _clear_pending_for_departed(debtor_id)
 	var auctions: Array = state.get("bankruptcy_auctions", [])
 	auctions.append(auction)

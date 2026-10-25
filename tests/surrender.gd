@@ -149,6 +149,16 @@ func company_service_case() -> void:
 	check(bool(after.get("ok", false)), "state after clearing the construction service validates: " + str(after.get("errors", [])))
 
 
+## A ruleset that never tracked company services must not gain the key from a
+## bankruptcy: the serialized save is part of the deterministic replay contract.
+func shape_case() -> void:
+	var legacy: Object = GameState.new_game(42, 4)
+	check(not legacy.state.has("company_service_pending"), "default match does not track company services")
+	legacy.surrender(int(legacy.state.current_player))
+	check(not legacy.state.has("company_service_pending"), "surrender never adds the company service key to a match that does not track it")
+	check(bool(GameState.validate_save(legacy.to_dict()).get("ok", false)), "a default-match surrender validates")
+
+
 func run() -> void:
 	var game := fresh()
 	check(game != null, "surrender fixture constructs")
@@ -205,6 +215,7 @@ func run() -> void:
 	pending_cases()
 	auction_case()
 	company_service_case()
+	shape_case()
 
 	print("Surrender checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)

@@ -61,9 +61,18 @@ func apply(settings: Dictionary, audio: Object) -> bool:
 	# when the enabled state is unchanged; volume changes are independent.
 	if currently_enabled != enabled and audio.has_method("set_enabled"):
 		audio.call("set_enabled", enabled, false)
+	# Write the playback gain only.  OriginalAudio persists its `volume` field
+	# on every persistent operation (HUD toggle, library change), so a scaled
+	# level must never become the stored startup volume and compound.
+	var gain: float = float(MUSIC_GAINS[level]) * startup_volume
+	var player: Variant = audio.get("player")
+	if player is Object and "volume_linear" in player:
+		player.set("volume_linear", gain)
+		return true
 	if audio.has_method("set_volume"):
-		audio.call("set_volume", MUSIC_GAINS[level] * startup_volume, false)
-	return audio.has_method("set_enabled") and audio.has_method("set_volume")
+		audio.call("set_volume", gain, false)
+		return true
+	return false
 
 
 ## Source movement pacing inferred from its 6/4/2 tick controls. This is a

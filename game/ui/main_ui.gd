@@ -2672,6 +2672,9 @@ func _sync_audio_music_level(enabled: bool) -> void:
 	var result: Dictionary = system_settings.write_settings(settings_path, settings)
 	if not bool(result.get("ok", false)):
 		_append_local_log("音樂偏好未能同步到系統選項；下次啟動可能沿用舊設定。")
+	# Keep the live gain in step with the switch: enabling after a committed
+	# music level of zero would otherwise report playback and stay silent.
+	_apply_source_settings(settings)
 
 func _on_audio_config_pressed() -> void:
 	if audio_folder_dialog == null:

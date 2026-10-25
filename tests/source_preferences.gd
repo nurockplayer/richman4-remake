@@ -9,9 +9,15 @@ var checks := 0
 var failures := 0
 
 
+class FakePlayer extends RefCounted:
+	var volume_linear := 1.0
+
+
 class FakeAudio extends RefCounted:
 	var enabled := true
+	## Mirrors OriginalAudio: this field is what a persistent operation stores.
 	var volume := 0.5
+	var player := FakePlayer.new()
 	var enable_calls: Array = []
 	var volume_calls: Array = []
 
@@ -22,6 +28,7 @@ class FakeAudio extends RefCounted:
 	func set_volume(value: float, persist := true) -> void:
 		volume_calls.append([value, persist])
 		volume = value
+		player.volume_linear = value
 
 
 func _initialize() -> void:
@@ -74,25 +81,26 @@ func _test_audio(prefs: RefCounted) -> void:
 	prefs.capture_audio_baseline(audio)
 	audio.volume = 0.9
 	_expect(prefs.apply(_settings(2), audio), "valid preferences apply to audio")
-	_expect_equal(audio.volume_calls, [[0.4, false]], "music gain multiplies captured startup volume")
+	_expect(is_equal_approx(audio.player.volume_linear, 0.4), "music gain multiplies captured startup volume")
+	_expect_equal(audio.volume_calls, [], "runtime gain never rewrites the persisted startup volume")
 	_expect_equal(audio.enable_calls, [], "unchanged enabled state does not restart audio")
 	_expect(prefs.apply(_settings(0), audio), "music disable applies")
 	_expect_equal(audio.enable_calls, [[false, false]], "music level zero disables at runtime without persistence")
-	_expect_equal(audio.volume_calls[1], [0.0, false], "disabled music still applies zero runtime gain")
+	_expect(is_equal_approx(audio.player.volume_linear, 0.0), "disabled music still applies zero runtime gain")
 	prefs.apply(_settings(0), audio)
 	_expect_equal(audio.enable_calls.size(), 1, "repeated disabled apply does not restart or toggle audio")
 	var second := FakeAudio.new()
 	second.volume = 0.25
 	prefs.capture_audio_baseline(second)
 	prefs.apply(_settings(4), second)
-	_expect_equal(second.volume_calls[0], [0.25, false], "baseline is captured independently per audio object")
+	_expect(is_equal_approx(second.player.volume_linear, 0.25), "baseline is captured independently per audio object")
 	audio.enabled = true
 	prefs.apply(_settings(4), audio)
-	_expect_equal(audio.volume_calls[3], [0.5, false], "switching back retains the first object's startup baseline")
-	var before := audio.volume_calls.size()
+	_expect(is_equal_approx(audio.player.volume_linear, 0.5), "switching back retains the first object's startup baseline")
+	var before := audio.player.volume_linear
 	var invalid := _settings()
 	invalid.erase("view")
-	_expect(not prefs.apply(invalid, audio) and audio.volume_calls.size() == before, "invalid settings are rejected without audio mutation")
+	_expect(not prefs.apply(invalid, audio) and is_equal_approx(audio.player.volume_linear, before), "invalid settings are rejected without audio mutation")
 
 
 func _test_movement(prefs: RefCounted) -> void:

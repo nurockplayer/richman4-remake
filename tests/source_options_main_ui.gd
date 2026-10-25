@@ -235,7 +235,11 @@ func _run() -> void:
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "persisted options keep the accepted music level")
 	if ui.audio_controller != null:
 		_expect(not bool(ui.audio_controller.get("enabled")), "music switch turns off runtime playback")
-		_expect(is_equal_approx(float(ui.audio_controller.get("volume")), 0.0), "music level zero applies a zero runtime gain")
+		var player: Variant = ui.audio_controller.get("player")
+		_expect(is_equal_approx(float(player.get("volume_linear")), 0.0), "music level zero applies a zero runtime gain")
+		# The persisted startup volume is what audio.cfg stores on the next
+		# persistent operation; the runtime level must never become it.
+		_expect(float(ui.audio_controller.get("volume")) > 0.0, "runtime gain leaves the stored startup volume alone")
 	# Issue #148: accepted values reach the runtime consumers, not just the file.
 	_expect_equal(int(ui._source_settings.get("speed", -1)), 0, "accepted speed reaches the runtime settings")
 	_expect_equal(ui._source_preferences.movement_seconds(ui._source_settings), 0.24, "accepted speed paces movement presentation only")
@@ -246,6 +250,9 @@ func _run() -> void:
 	ui._sync_audio_music_level(true)
 	loaded = settings.read_settings(settings_file)
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 4, "HUD music switch persists its enabled state")
+	if ui.audio_controller != null:
+		var hud_player: Variant = ui.audio_controller.get("player")
+		_expect(is_equal_approx(float(hud_player.get("volume_linear")), float(ui.audio_controller.get("volume"))), "HUD music switch restores the full runtime gain")
 	ui._sync_audio_music_level(false)
 	loaded = settings.read_settings(settings_file)
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "HUD music switch persists its disabled state")

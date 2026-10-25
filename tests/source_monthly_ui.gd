@@ -6,6 +6,19 @@ const TitleTestUI = preload("res://tests/fixtures/source_bank_ui_harness.gd")
 var checks := 0
 var failures := 0
 
+
+class BankStub extends RefCounted:
+	## Minimal host seam: a pending source bank visit that can complete.
+	var calls: Array = []
+	var state: Dictionary = {}
+
+	func pending_bank_visit() -> Dictionary:
+		return {"kind": "landing", "player_id": 3, "node_id": 1}
+
+	func resume_bank_visit() -> Dictionary:
+		calls.append("resume_bank_visit")
+		return {"ok": true, "message": "done", "state": {}}
+
 func _initialize() -> void:
 	call_deferred("run")
 
@@ -91,6 +104,24 @@ func run() -> void:
 		ui.game_state = Core.from_dict(JSON.parse_string(serialized))
 		ui._refresh_from_state({"state": ui.game_state.get_snapshot()})
 		check(not controller.is_open() and ui.game_state.to_json() == serialized, "load adopts settled state without historical replay")
+	# A report is withheld while a bank visit is pending, so the bank must be
+	# able to finish even though the report queue already makes is_open() true.
+	game = monthly_game(14)
+	ui._cancel_presentation()
+	ui.game_state = game
+	ui._refresh_from_state({"state": game.get_snapshot()})
+	controller = ui.find_child("SourceMonthlyController", true, false)
+	ui._on_end_turn_pressed()
+	await settle()
+	check(controller != null and controller.is_open(), "precondition: the day15 report is queued")
+	if controller != null:
+		check(not bool(ui._invoke_game("roll").get("ok", true)), "a queued report still blocks ordinary actions")
+		var stub := BankStub.new()
+		ui.game_state = stub
+		var resumed := ui._invoke_game("resume_bank_visit")
+		check(bool(resumed.get("ok", false)) and stub.calls.has("resume_bank_visit"), "a pending bank visit can finish while a report is queued")
+		ui.game_state = game
+		ui._cancel_presentation()
 	viewport.queue_free()
 	await settle()
 	print("Monthly MainUI checks: %d, failures: %d" % [checks, failures])

@@ -101,6 +101,7 @@ func _run() -> void:
 		await _test_dividend_model_and_geometry(panel)
 		await _test_interest_model_and_geometry(panel)
 		await _test_invalid_models_and_fallback(panel)
+		await _test_missing_art_fallbacks(panel)
 		await _test_release_and_timer_race(panel, source_script)
 
 	panel.queue_free()
@@ -345,6 +346,39 @@ func _test_invalid_models_and_fallback(panel: Node) -> void:
 	negative_interest["players"][0]["interest"] = -1
 	panel.call("set_view_model", negative_interest)
 	expect(not bool(panel.call("is_model_valid")), "negative settled interest is invalid")
+
+
+func _test_missing_art_fallbacks(panel: Node) -> void:
+	# THIN worktrees have no private Panel25/76 art; the text fallback must
+	# still be readable and must identify every player.
+	panel.call("set_visuals", null)
+	panel.call("set_view_model", _dividend_model())
+	await _settle()
+	expect(bool(panel.call("is_model_valid")), "text fallback accepts a valid dividend report")
+	expect(not bool(panel.call("source_art_available")), "missing Panel76 is reported as absent")
+	var background := panel.find_child("MonthlyFallbackBackground", true, false) as ColorRect
+	expect(background != null and background.color.get_luminance() > 0.5, "dividend fallback uses a light backing for dark labels")
+	var title := panel.find_child("DividendTitle", true, false) as Label
+	expect(title != null and title.get_theme_color("font_color") == Color("#101010"), "dividend fallback title uses dark ink")
+	var payout := panel.find_child("DividendPayout1_0", true, false) as Label
+	expect(payout != null and payout.text == "6,975", "dividend fallback still prints the payout")
+	var total := panel.find_child("DividendPlayerTotal0", true, false) as Label
+	expect(total != null and total.text == "7,641", "dividend fallback still prints the player total")
+
+	panel.call("set_view_model", _interest_model())
+	await _settle()
+	expect(bool(panel.call("is_model_valid")), "text fallback accepts a valid interest report")
+	expect(not bool(panel.call("source_art_available")), "missing Panel25 is reported as absent")
+	var identities: Array = []
+	for ordinal in range(4):
+		var label := panel.find_child("InterestCharacterName%d" % ordinal, true, false) as Label
+		expect(label != null and not label.text.strip_edges().is_empty(), "missing character art still names player %d" % ordinal)
+		identities.append(label.text if label != null else "")
+	expect(identities == ["約翰喬", "沙隆巴斯", "錢夫人", "阿土仔"], "fallback identities match the report players")
+	var deposit := panel.find_child("InterestDeposit2", true, false) as Label
+	expect(deposit != null and deposit.text == "$59,233", "interest fallback still prints the deposit")
+	var loan := panel.find_child("InterestInterest1", true, false) as Label
+	expect(loan != null and loan.text == "貸款中", "interest fallback keeps the loan marker")
 
 
 func _test_release_and_timer_race(panel: Node, source_script: Script) -> void:

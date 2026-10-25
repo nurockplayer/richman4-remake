@@ -133,7 +133,12 @@ presenter 與 controller 未改語意；main 已分歧的 MainUI 接線重新推
 且銀行 modal 開啟時延後顯示）。測試改用 main 既有的
 `tests/fixtures/source_bank_ui_harness.gd`，不再依賴 stack 專用的 `source_title_ui.gd`。
 
-本移植的 focused headless 結果：核心 51／0、presenter 134／0、controller 19／0、
-lifecycle 5／0、focus 11／0、money 33／0、MainUI 16／0、deferred 10／0、final 7／0；
+本移植的 focused headless 結果：核心 51／0、presenter 149／0、controller 22／0、
+lifecycle 5／0、focus 11／0、money 33／0、MainUI 19／0、deferred 10／0、final 7／0；
 `tools/replay.gd -- 42 4` 與 main 相同雜湊（turn 268、winner 2）。native 焦點與
 normal catalog 證據沿用上節，未在此 worktree 重跑。
+
+獨立 oracle 審查在移植版找到三類問題，已修正並補測試：銀行續行必須優先於已排隊但
+尚未顯示的月報（否則兩者互等）；沒有 Panel76 時分紅表改用淺色紙底與深色標題，
+沒有 Panel25 角色圖時利息卡補上玩家姓名；presenter 拒絕的畸形報表不再讓 controller
+卡成無法關閉的 modal。對應測試：銀行／報表共存、缺素材可讀性、畸形報表放行。

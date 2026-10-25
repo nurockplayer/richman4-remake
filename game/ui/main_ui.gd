@@ -2587,12 +2587,16 @@ func _is_human_turn() -> bool:
 	return (not _source_inventory_modal_open() or _inventory_applying) and not _source_shop_modal_open() and not _legacy_save_modal_open() and not _presentation_busy and not SleepPresentation.automatic(player) and game_state != null and bool(player.get("is_human", false)) and not bool(player.get("bankrupt", true)) and state.get("phase", "") != "game_over"
 
 func _invoke_game(method: String, args: Array = []) -> Dictionary:
-	if _source_monthly_modal_open():
+	# A pending bank visit outranks a queued report: the report is withheld
+	# until the bank closes, so the bank must be able to finish even while the
+	# report queue is non-empty.
+	var bank_open := _source_bank_modal_open()
+	var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
+	var bank_allowed := bank_open and (method in ["resume_bank_visit", "complete_bank_visit"] or bank_action)
+	if bank_open and not bank_allowed:
+		return {"ok": false, "message": "請先完成銀行操作。"}
+	if _source_monthly_modal_open() and not bank_allowed:
 		return {"ok": false, "message": "請先看完本期報表。"}
-	if _source_bank_modal_open():
-		var bank_action := method == "choose_action" and not args.is_empty() and str(args[0]) in SourceBankController.BANK_ACTIONS
-		if method not in ["resume_bank_visit", "complete_bank_visit"] and not bank_action:
-			return {"ok": false, "message": "請先完成銀行操作。"}
 	if _source_inventory_modal_open() and not _inventory_applying:
 		return {"ok": false, "message": "請先完成卡片／道具操作。"}
 	if _source_help_modal_open():

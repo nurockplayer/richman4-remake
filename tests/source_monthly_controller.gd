@@ -88,6 +88,24 @@ func run() -> void:
 	controller.cancel()
 	controller.capture_transition(owner, {"event_log": full}, {"event_log": [event("dividend")]})
 	expect(not controller.is_open(), "unrelated or rewound log does not replay a historical report")
+	# A report the real presenter rejects must not leave an unacknowledgeable
+	# modal behind; the producer is complete today, but the queue is a guard.
+	var real: Control = script.new()
+	root.add_child(real)
+	var base := {"event_log": [{"type": "turn_started", "day": 14, "turn": 1}]}
+	var malformed := {"event_log": base.event_log + [{"type": "monthly_statement", "day": 15, "turn": 1, "report": {"kind": "interest"}}]}
+	real.capture_transition(owner, base, malformed)
+	real.sync(owner, false)
+	await settle()
+	expect(not real.is_open() and real.report_panel == null, "a rejected report cannot lock the modal guard")
+	real.capture_transition(owner, base, {"event_log": base.event_log + [event("dividend")]})
+	real.sync(owner, false)
+	await settle()
+	expect(real.is_open() and real.report_panel != null, "a valid report still presents after a rejected one")
+	real.report_panel.continue_report()
+	await settle()
+	expect(not real.is_open(), "acknowledging the valid report releases the controller")
+	real.queue_free()
 	controller.queue_free()
 	await settle()
 	print("Monthly controller checks: %d, failures: %d" % [checks, failures])

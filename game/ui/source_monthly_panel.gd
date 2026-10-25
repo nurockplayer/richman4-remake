@@ -38,6 +38,9 @@ const SOURCE_DARK := Color("#101010")
 const SOURCE_WHITE := Color("#ffffff")
 const SOURCE_SHADOW := Color("#101010")
 const LOAN_RED := Color("#c21f28")
+# Text fallback paper used when source art is unavailable: the source labels
+# are dark, so the backing must stay light enough to read them.
+const FALLBACK_PAPER := Color("#e7dfbd")
 
 signal continued
 
@@ -308,13 +311,15 @@ func _clear_dynamic_children() -> void:
 
 
 func _build_dividend() -> void:
-	_fallback_background.color = Color.BLACK
 	var panel_source := _resolve_source(76, 0)
 	var panel_texture: Texture2D = panel_source.get("texture") as Texture2D
 	var panel_frame: Dictionary = panel_source.get("frame", {})
 	_source_frames["Panel76.0"] = panel_frame.duplicate(true)
 	_source_art_status["background"] = panel_texture != null
 	_source_art_available = panel_texture != null
+	# Without Panel76 the source artwork is absent; use readable paper instead
+	# of black so the dark source labels stay legible.
+	_fallback_background.color = Color.BLACK if panel_texture != null else FALLBACK_PAPER
 	if panel_texture != null:
 		var panel_art := _add_texture(
 			"DividendPanelArt",
@@ -326,7 +331,17 @@ func _build_dividend() -> void:
 		panel_art.z_index = 0
 
 	var title_center := DIVIDEND_PANEL_ORIGIN + Vector2(296.0, 25.0)
-	_make_centered_label("DividendTitle", "上市公司分紅", title_center, Vector2(300.0, 36.0), 28, SOURCE_WHITE, SOURCE_SHADOW)
+	# White title with a dark shadow sits on the source frame; on the paper
+	# fallback it needs the same dark ink as the table labels.
+	_make_centered_label(
+		"DividendTitle",
+		"上市公司分紅",
+		title_center,
+		Vector2(300.0, 36.0),
+		28,
+		SOURCE_WHITE if panel_texture != null else SOURCE_DARK,
+		SOURCE_SHADOW if panel_texture != null else Color.TRANSPARENT,
+	)
 	_make_label("DividendHeaderCompany", "公司", Rect2(DIVIDEND_PANEL_ORIGIN + Vector2(18.0, 82.0), Vector2(42.0, 24.0)), 16, SOURCE_DARK, HORIZONTAL_ALIGNMENT_LEFT)
 	_make_centered_label(
 		"DividendHeaderPlayer",
@@ -484,6 +499,25 @@ func _build_interest() -> void:
 			var anchor := _anchor_for(character_frame)
 			var position := Vector2(600.0, anchor_y) - anchor
 			_add_texture("InterestCharacter%d" % ordinal, character_texture, position, logical, character_frame)
+		else:
+			# Without the character pose the accounts would only show amounts;
+			# name each one so players stay distinguishable.
+			var identity := ColorRect.new()
+			identity.name = "InterestCharacterFallback%d" % ordinal
+			identity.position = Vector2(567.0, anchor_y - 36.0)
+			identity.size = Vector2(66.0, 72.0)
+			identity.color = FALLBACK_PAPER
+			identity.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_surface.add_child(identity)
+			var name_label := _make_centered_label(
+				"InterestCharacterName%d" % ordinal,
+				str(player["name"]),
+				Vector2(600.0, anchor_y),
+				Vector2(62.0, 24.0),
+				14,
+				SOURCE_DARK,
+			)
+			name_label.clip_text = true
 
 	_source_art_available = _all_source_art_available()
 

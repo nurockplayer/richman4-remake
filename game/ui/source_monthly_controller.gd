@@ -95,6 +95,13 @@ func _show_next() -> void:
 	# Attach first so that timer has a scene-tree lifetime.
 	report_panel.set_visuals(_visuals)
 	report_panel.set_view_model(_queue[0])
+	# A report the presenter rejects could never be acknowledged, and the
+	# non-empty queue is a modal guard. Drop it instead of locking the game.
+	if report_panel.has_method("is_model_valid") and not bool(report_panel.call("is_model_valid")):
+		_queue.pop_front()
+		_clear_panel()
+		call_deferred("_after_close", generation)
+		return
 	show()
 
 func _on_continued(generation: int, display_id: int) -> void:

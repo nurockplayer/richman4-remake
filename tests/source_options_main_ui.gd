@@ -118,6 +118,19 @@ func _run() -> void:
 	_expect_equal(model.get("edition"), str(shell.get("_source_edition")), "title entry uses the active source edition")
 	_expect_equal(panel.call("draft_settings")["music_level"], 4, "options mirror enabled audio when no settings file exists")
 
+	# A source title entry must not fire from keyboard focus while the options
+	# presenter owns input.  START and LOAD run their real host handlers here;
+	# EXIT shares the same predicate but would end this test process if the
+	# guard regressed, so only the predicate is asserted for it.
+	_expect(ui._source_title_entry_blocked(), "open options presenter blocks source title entries")
+	var before_title_entries: String = ui.game_state.to_json()
+	shell.title_start_button.pressed.emit()
+	shell.title_load_button.pressed.emit()
+	await _settle()
+	_expect(not shell.is_setup_visible(), "blocked title START leaves the setup closed")
+	_expect(ui.source_save_menu == null or not ui.source_save_menu.visible, "blocked title LOAD leaves the save menu closed")
+	_expect(ui.game_state.to_json() == before_title_entries, "blocked source title entries preserve the match")
+
 	_click(panel, Vector2(81 + 1, 17 + 4))
 	_expect_equal(panel.call("draft_settings")["speed"], 0, "options draft records the pressed speed row")
 	_click(panel, Vector2(227 + 10, 119 + 10))
@@ -257,6 +270,10 @@ func _run() -> void:
 	loaded = settings.read_settings(settings_file)
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "HUD music switch persists its disabled state")
 
+	# The options help child above switched the shell to the board, so return to
+	# the title before exercising its OPTION entry again.  A hidden source title
+	# refuses input by design.
+	shell.show_title()
 	shell.title_option_button.pressed.emit()
 	await _settle()
 	_expect(panel.call("is_open"), "title OPTION reopens the presenter")

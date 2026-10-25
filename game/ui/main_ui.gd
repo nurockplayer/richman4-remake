@@ -476,7 +476,7 @@ func _on_source_start_requested() -> void:
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		player_count = PLAYER_COUNT
-	var defaults := _setup_options_from_state()
+	var defaults := _setup_options_from_state(true)
 	if defaults.is_empty():
 		defaults = _default_setup_options(player_count, selected)
 	defaults["player_count"] = player_count
@@ -1412,7 +1412,7 @@ func _setup_date_from_controls() -> Dictionary:
 		return {}
 	return {"year": int(start_year_input.value), "month": int(start_month_input.value), "day": int(start_day_input.value)}
 
-func _setup_options_from_state() -> Dictionary:
+func _setup_options_from_state(derive_human_flags: bool = false) -> Dictionary:
 	var player_count := int(_as_array(state.get("players", [])).size())
 	if player_count < 2 or player_count > 4:
 		return {}
@@ -1450,10 +1450,11 @@ func _setup_options_from_state() -> Dictionary:
 				break
 		if flags_valid:
 			options["human_flags"] = initial_flags.duplicate()
-	if not options.has("human_flags"):
+	if derive_human_flags and not options.has("human_flags"):
 		# Older saves and games started from the legacy popup keep control
-		# only on the players. Derive it so opening the source setup does not
-		# silently turn additional humans into AI.
+		# only on the players. The source setup derives it from them so opening
+		# the panel does not silently turn additional humans into AI; restart
+		# keeps its own defaults untouched.
 		var saved_flags: Array = []
 		for player in state.get("players", []):
 			if not player is Dictionary or typeof(player.get("is_human", null)) != TYPE_BOOL:

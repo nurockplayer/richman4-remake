@@ -119,8 +119,10 @@ func _run() -> void:
 			_expect(restart_options.get("human_flags", []) == [true, true, false] and restart_options.get("initial_vehicle", "") == "car", "restart setup defaults preserve the selected source controls")
 			var saved_flags: Array = ui.state.get("initial_human_flags", [])
 			ui.state.erase("initial_human_flags")
-			var derived_options: Dictionary = ui._setup_options_from_state()
+			var derived_options: Dictionary = ui._setup_options_from_state(true)
+			var restart_only: Dictionary = ui._setup_options_from_state()
 			_expect(derived_options.get("human_flags", []) == [true, true, false], "source setup derives human control from players when older saves omit it")
+			_expect(not restart_only.has("human_flags"), "restart defaults stay unchanged for saves without stored controls")
 			ui.state["initial_human_flags"] = saved_flags
 	var ordered_options := ui._default_setup_options(4, ui._selected_map_definition)
 	ordered_options.erase("character_ids")

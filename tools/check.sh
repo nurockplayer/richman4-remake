@@ -7,19 +7,24 @@ mkdir -p .local build
 # paths. Keep Godot from scanning/importing those multi-GB local caches into a
 # second per-worktree .godot/imported copy.
 touch .local/.gdignore build/.gdignore
+# Remove the current check's temp log even if the run is interrupted or errexit fires.
+current_check_log=""
+trap 'rm -f "$current_check_log"' EXIT
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
-  if ! "$@" >"$check_log" 2>&1; then
-    cat "$check_log"
-    return 1
-  fi
+  current_check_log="$check_log"
+  local status=0 reported=0
+  "$@" >"$check_log" 2>&1 || status=$?
   cat "$check_log"
   # Godot can report a script parse/runtime error yet return status zero.
-  if grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
-    echo "Godot reported an error; evidence: $check_log" >&2
-    return 1
+  if (( status == 0 )) && grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
+    echo "Godot reported an error (see output above)" >&2
+    reported=1
   fi
+  # The log was already printed; don't leave one temp file per check behind.
+  rm -f "$check_log"
+  (( status == 0 && reported == 0 ))
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
@@ -80,6 +85,20 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_visual.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_bank_opaque_background.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/news_bank_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_shapes.gd
+# Issue #157 source minigames S31–S33: deterministic models, public AI shortcut
+# completion and the asset-free presenter/controller path.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_models.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_source_reclaim.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_balloon_recovery.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_ai_runner.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_save.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_minigame_main_ui.gd
+# Native render gates need an actual display and the private source scene.
+if [[ "${RICHMAN4_MINIGAME_NATIVE_CHECKS:-0}" == "1" ]]; then
+  run_checked "$GODOT_BIN" --path . --script tests/source_minigame_bomb_mapping_native.gd
+fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
@@ -93,6 +112,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_sourc
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transport.gd
+# Issue #128 source new-game setup surface: hit geometry, ordered humans,
+# deterministic AI fill, catalog capability preservation and restart defaults.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_interaction.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.

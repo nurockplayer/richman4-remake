@@ -3513,11 +3513,14 @@ func _request_quit() -> void:
 
 
 func _close_end_overlay() -> void:
-	end_overlay.hide()
 	# The settled match has no legal action left, so the only safe place to
-	# return to is the title, where a new match or load can start.
-	if source_shell != null and source_shell.has_method("show_title"):
-		source_shell.call("show_title")
+	# return to is the title, where a new match or load can start. Without a
+	# shell there is no title to reach; keep the settlement and its quit choice
+	# up instead of revealing an inert board with no way out.
+	if source_shell == null or not source_shell.has_method("show_title"):
+		return
+	end_overlay.hide()
+	source_shell.call("show_title")
 
 func _is_human_turn() -> bool:
 	var player := _current_player()

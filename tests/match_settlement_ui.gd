@@ -18,6 +18,21 @@ class CountingStorage extends RefCounted:
 		return {"ok": true, "status": "written", "slot": 1}
 
 
+## Minimal monthly report so the terminal-state/modal ordering can be driven
+## without a real dividend cycle.
+class FakeMonthlyPanel extends Control:
+	signal continued
+
+	func set_visuals(_visuals: Variant) -> void:
+		pass
+
+	func set_view_model(_model: Dictionary) -> void:
+		pass
+
+	func is_model_valid() -> bool:
+		return true
+
+
 func _initialize() -> void:
 	call_deferred("run")
 
@@ -196,6 +211,26 @@ func _test_day_limit_end(ui: Control) -> void:
 	var winner := int(game.state.winner)
 	_expect_overlay(ui, game, winner, "期限結束", "day-limit")
 
+	# A terminal state reached while a monthly report is open must settle as
+	# soon as that report is acknowledged, instead of staying hidden behind it.
+	ui.source_monthly_controller.panel_factory = func() -> Control: return FakeMonthlyPanel.new()
+	var before: Dictionary = game.to_dict()
+	var after: Dictionary = before.duplicate(true)
+	var events: Array = after.get("event_log", []).duplicate(true)
+	events.append({"type": "monthly_statement", "report": {"kind": "dividend", "amount": 1000}})
+	after["event_log"] = events
+	ui.source_monthly_controller.capture_transition(game, before, after)
+	ui.source_monthly_controller.sync(game, false)
+	_expect(ui._source_monthly_modal_open(), "a monthly report opens over the settled match")
+	ui._update_end_overlay("game_over")
+	_expect(not ui.end_overlay.visible, "the settlement waits behind the open report")
+	var panel: Control = ui.source_monthly_controller.report_panel
+	panel.continued.emit()
+	await _settle()
+	await _settle()
+	_expect(not ui._source_monthly_modal_open(), "acknowledging the report closes it")
+	_expect(ui.end_overlay.visible, "the settlement appears once the report closes")
+
 	# The return control goes to the title instead of leaving a dead board.
 	var close := ui.end_overlay.find_child("SettlementClose", true, false) as Button
 	close.pressed.emit()
@@ -248,6 +283,16 @@ func _test_last_survivor_end(ui: Control) -> void:
 	_expect(int(game.state.winner) == 0, "last survivor wins the match")
 	_expect_overlay(ui, game, 0, "最後一位存活", "last-survivor")
 	_expect(ui.end_detail.text.contains("已破產"), "last-survivor ranking marks the conceded player")
+
+	# Without a source shell there is no title to return to; the close control
+	# must keep the settlement (and its quit choice) rather than strand the player.
+	var shell: Control = ui.source_shell
+	ui.source_shell = null
+	var close := ui.end_overlay.find_child("SettlementClose", true, false) as Button
+	close.pressed.emit()
+	await _settle()
+	_expect(ui.end_overlay.visible, "settlement stays up when no title screen exists")
+	ui.source_shell = shell
 
 
 func run() -> void:

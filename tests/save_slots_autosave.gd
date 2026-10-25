@@ -13,10 +13,10 @@ var _legacy_path := ""
 class FaultIO extends SaveSlotsScript.FileSystemIO:
 	var mode := ""
 
-	func acquire_write_lock(destination: String) -> Dictionary:
+	func acquire_write_lock(destination: String, now_seconds: Variant = null) -> Dictionary:
 		if mode == "lock":
 			return {"ok": false, "path": destination + ".write-lock", "io_error": ERR_BUSY}
-		return super.acquire_write_lock(destination)
+		return super.acquire_write_lock(destination, now_seconds)
 
 	func write_bytes(path: String, bytes: PackedByteArray) -> Dictionary:
 		if mode == "write" and path.contains(".tmp."):

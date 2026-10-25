@@ -215,7 +215,8 @@ func commit_autosave(ui: Control, enabled: bool) -> void:
 	check(panel.call("is_open"), "real options presenter opens for daily toggle")
 	var settings: Dictionary = panel.call("draft_settings")
 	settings["autosave"] = enabled
-	panel.accepted.emit(settings)
+	panel.set("_draft_settings", settings)
+	check(panel.call("_accept"), "real options OK accepts the daily toggle")
 	await settle()
 	check(not panel.call("is_open") and bool(ui._source_settings.get("autosave", false)) == enabled, "persisted parent OK applies daily toggle")
 	check(ui.SystemSettings.new().read_settings(ui.settings_path).get("settings", {}).get("autosave") == enabled, "daily toggle persisted to owned settings path")

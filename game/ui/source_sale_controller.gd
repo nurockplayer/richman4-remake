@@ -224,6 +224,9 @@ func apply_action_result(result: Dictionary) -> void:
 		finished.emit()
 		return
 	_feedback = str(result.get("message", ""))
+	# Only an accepted close may discard the open amount pad; a rejected close
+	# keeps the player's entry UI while the session stays alive.
+	if result.get("ok", false) and _last_method == "close_sale": _clear_children()
 	if result.get("ok", false) and _last_method in ["sale_create_offer","sale_cancel_offer","sale_accept_offer"]:
 		_view = "board"
 		_selected_item = {}
@@ -234,7 +237,8 @@ func apply_action_result(result: Dictionary) -> void:
 
 func close_current() -> void:
 	if _owner == null: return
-	_clear_children()
+	# The children survive until the domain accepts the close: a blocked,
+	# pending or rejected request keeps the amount pad on screen.
 	_request("close_sale",[_session_id])
 
 func _clear_children() -> void:

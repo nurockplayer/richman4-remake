@@ -368,13 +368,20 @@ func _input(event: InputEvent) -> void:
 		if mouse.button_index == MOUSE_BUTTON_RIGHT and not mouse.pressed:
 			get_viewport().set_input_as_handled()
 			_right_release()
+	elif event is InputEventKey:
+		var key := event as InputEventKey
+		# Esc is the same close gesture as the source right release and EXIT:
+		# it emits cancelled on the board and back on every inner view.
+		if key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			_right_release()
 
 func _right_release() -> void:
 	match _view:
 		"board":
-			_is_open = false
-			_reset_latches()
-			hide()
+			# The presenter only asks to close; the host disposes the panel once
+			# the close request is accepted.  Hiding here would strand a panel
+			# that the blocked/pending gate refused to close.
 			cancelled.emit()
 		"picker", "detail", "reference":
 			action_requested.emit("back", {})
@@ -450,10 +457,9 @@ func _release_board() -> void:
 		_render()
 		return
 	if _pressed_close:
+		# As with the right release, EXIT only requests the close; the host
+		# hides the panel when it accepts the request.
 		_pressed_close = false
-		_is_open = false
-		_reset_latches()
-		hide()
 		cancelled.emit()
 		return
 	if _pressed_offer >= 0:

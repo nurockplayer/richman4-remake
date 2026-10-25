@@ -110,6 +110,12 @@ func run() -> void:
 		row_button.pressed.emit()
 		await process_frame
 	expect(panel.selected_symbol() == "s01" and panel.current_screen() == "overview", "actual row button click refreshes selection safely")
+	var second_row_button: Button = panel.find_child("StockSelect_s02", true, false)
+	expect(second_row_button != null, "rebuilt table exposes the next selectable row")
+	if second_row_button != null:
+		second_row_button.pressed.emit()
+		await process_frame
+	expect(panel.selected_symbol() == "s02" and panel.current_screen() == "overview", "second row click rebuilds the table again without a freed row")
 	var guard_panel := StockPanel.new()
 	root.add_child(guard_panel)
 	await process_frame
@@ -239,6 +245,12 @@ func run() -> void:
 	expect(panel.selected_symbol() == "s01", "successful trade keeps selected symbol")
 	var status_label: Label = panel.find_child("StockStatus", true, false)
 	expect(status_label != null and status_label.text == str(result.get("message", "交易完成")), "successful trade result remains visible until the next stock open")
+	var traded_json: String = game.to_json()
+	panel.close_panel()
+	expect(not panel.visible, "explicit close after a trade hides the panel")
+	panel.open_for(game.get_snapshot(), Fixture.definition())
+	expect(game.to_json() == traded_json, "close and reopen keep the traded game and RNG state equal")
+	expect(panel.visible and panel.selected_symbol() == "s01" and panel.current_screen() == "overview", "reopen restores the source overview selection")
 	var reopened_game: Object = make_game()
 	if reopened_game != null:
 		panel.open_for(reopened_game.get_snapshot(), Fixture.definition())
@@ -253,13 +265,32 @@ func run() -> void:
 		expect(pad.visible, "failed trade result keeps quantity pad open")
 		pad.find_child("QuantityClear", true, false).pressed.emit()
 
+	var closed_requests: Array = []
+	panel.trade_requested.connect(func(action: String, _symbol: String, _quantity: int) -> void: closed_requests.append(action))
 	game.state.market.closed_days = 128
 	game._sync_state()
 	panel.set_snapshot(game.get_snapshot(), Fixture.definition())
+	expect(pad == null or not pad.visible, "closing the market dismisses the pending quantity pad")
+	panel._on_quantity_accepted(1)
+	expect(closed_requests.is_empty(), "closed market rejects a pending quantity submission")
 	panel.clear_selection()
 	panel.select_symbol("s01")
 	expect(panel.trade_limit("buy_stock").error == "本日休市", "closed market is a visible domain gate")
-	expect(panel.find_child("StockRow_s01", true, false) == null, "closed market leaves overview data rows blank")
+	var closed_row: Control = panel.find_child("StockRow_s01", true, false)
+	expect(closed_row != null, "closed market keeps the source blank data rows")
+	if closed_row != null:
+		var closed_labels: Array = []
+		for child in closed_row.get_children():
+			if child is Label:
+				closed_labels.append(child)
+		var all_blank := closed_labels.size() == 6
+		for label in closed_labels:
+			all_blank = all_blank and str(label.text).is_empty()
+		expect(all_blank, "closed market rows carry no live quote values")
+		expect(closed_row.find_child("StockSelect_s01", true, false) == null, "closed market blank rows are not selectable")
+	expect(buy_button.disabled and sell_button.disabled, "closed market disables both trade actions")
+	expect(panel.show_detail("s01") and panel.current_screen() == "overview", "closed market keeps live quote detail unavailable")
+	expect(panel.market_closed_overlay_visible(), "closed market keeps the closure overlay after a detail request")
 	var closed_overlay: Label = panel.find_child("MarketClosedOverlay", true, false)
 	var exit_button: Button = panel.find_child("StockExit", true, false)
 	expect(panel.market_closed_overlay_visible() and closed_overlay != null and closed_overlay.text == "本日休市", "closed market renders the source closure overlay")

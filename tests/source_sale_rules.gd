@@ -11,6 +11,7 @@ func _initialize() -> void:
 	test_boundaries()
 	test_save_validation()
 	test_ai_continuation()
+	test_surrender_during_sale()
 	print("Source SALE rules checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
 
@@ -265,3 +266,14 @@ func test_ai_continuation() -> void:
 	var result: Dictionary = game.run_ai_match(4)
 	expect(result.get("completed_turns",0) == 4,"public AI runner progresses with SALE integration")
 	valid_roundtrip(game,"AI progression")
+
+func test_surrender_during_sale() -> void:
+	var game := sale_game()
+	open_for(game,0)
+	var before: String = game.to_json()
+	expect(not game.surrender().ok,"surrender while the SALE session is open rejects")
+	expect(game.to_json() == before,"rejected surrender is atomic")
+	expect(game.state.phase == "await_sale","SALE session survives a rejected surrender")
+	expect(game.close_sale(int(game.sale_snapshot().session_id)).ok,"actor closes SALE")
+	expect(game.surrender().ok,"surrender after SALE closes")
+	valid_roundtrip(game,"surrender after SALE")

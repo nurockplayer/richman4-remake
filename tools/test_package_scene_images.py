@@ -27,10 +27,17 @@ from original_ui_assets import (
     RAW_RGB555_HEIGHT,
     RAW_RGB555_WIDTH,
     REQUIRED_UI_CHUNKS,
+    UPDATE_LOCK_NAME,
     export_ui_resources,
     update_ui_manifest,
 )
-from test_decode_original_images import make_mkf, make_smp, make_spr, read_png_rgba
+from test_decode_original_images import (
+    init_git_repo,
+    make_mkf,
+    make_smp,
+    make_spr,
+    read_png_rgba,
+)
 import package_scene_images
 from package_scene_images import validate
 
@@ -404,6 +411,25 @@ class PackageSceneTests(unittest.TestCase):
                 export_ui_resources("Game", source, root / "stage")
             self.assertEqual(calls, [1, 2, 3, 479, 560])
 
+    def test_export_rejects_public_git_stage_and_accepts_ignored_stage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repository = Path(temp) / "repository"
+            init_git_repo(repository)
+            source = repository / "source" / "Game"
+            source.mkdir(parents=True)
+            payload = make_smp((0x03E0,))
+            item = (payload, len(payload), 24, 2)
+            (source / "Panel.mkf").write_bytes(make_mkf([item] * 77))
+
+            with self.assertRaisesRegex(InputError, "must be ignored"):
+                export_ui_resources("Game", source, repository / "public-stage")
+            self.assertFalse((repository / "public-stage").exists())
+
+            group = export_ui_resources(
+                "Game", source, repository / ".local" / "ui-stage"
+            )
+            self.assertEqual(set(group), {"Panel"})
+
     def test_invalid_or_truncated_bound_resources_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -534,6 +560,66 @@ class PackageSceneTests(unittest.TestCase):
                 )
             self.assertEqual(manifest_path.read_bytes(), before_missing)
             self.assertEqual(preserved_temp.read_bytes(), b"leave this unrelated file alone")
+
+    def test_ui_manifest_update_lock_rejects_concurrent_writer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "Game"
+            source.mkdir(parents=True)
+            raw = self._make_raw_rgb555()
+            save_load = self._make_smp_chunks(7)
+            (source / "map.mkf").write_bytes(
+                make_mkf([(make_smp((0x03E0,)), len(make_smp((0x03E0,))), 24, 2)])
+            )
+            (source / "Data.mkf").write_bytes(
+                self._indexed_archive(
+                    561,
+                    {
+                        479: (save_load, len(save_load), 12 + 7 * 12, 14),
+                        560: (raw, len(raw), 4, len(raw) - 4),
+                    },
+                )
+            )
+            output = root / "scene"
+            output.mkdir()
+            existing = output / "images" / "base.png"
+            chunk = VisualChunk(0, 1, 1, 0, 0, struct.pack("<H", 0x03E0))
+            write_png(existing, chunk, VisualResource("SMP", 1, 0, None, (chunk,)),
+                      pixel_format="rgb555")
+            manifest = {
+                "schema": "richman4.scene-images/v1",
+                "characters": {},
+                "maps": [
+                    {
+                        "world_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "image": {
+                            "path": "images/base.png",
+                            "sha256": hashlib.sha256(existing.read_bytes()).hexdigest(),
+                            "width": 1,
+                            "height": 1,
+                        },
+                    }
+                ],
+            }
+            manifest_path = output / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            before = manifest_path.read_bytes()
+
+            lock = output / UPDATE_LOCK_NAME
+            lock.mkdir()
+            try:
+                with self.assertRaisesRegex(InputError, "update lock already exists"):
+                    update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+                self.assertEqual(manifest_path.read_bytes(), before)
+                self.assertFalse((output / "images" / "Game").exists())
+            finally:
+                lock.rmdir()
+
+            update_ui_manifest(root / "source", manifest_path, editions={"Game"})
+            self.assertIn(
+                "Game", json.loads(manifest_path.read_text(encoding="utf-8"))["ui"]
+            )
+            self.assertFalse(lock.exists())
 
     def test_ui_manifest_rolls_back_partial_copy_and_retries(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 
 from decode_original_images import (
@@ -103,6 +104,10 @@ REQUIRED_UI_CHUNKS = {
     ("Game", "Data", 479): tuple(range(7)),
     ("MultiverseJourney", "Data", 520): tuple(range(11)),
 }
+# Incremental updates read, merge and replace the manifest.  Serialize them
+# with an exclusive lock next to the manifest so two concurrent exports cannot
+# drop each other's newly added resource references.
+UPDATE_LOCK_NAME = ".ui-update-lock"
 
 
 def _canonical_edition(edition: str) -> str:
@@ -281,8 +286,13 @@ def export_ui_resources(edition: str, directory: Path, stage: Path) -> dict:
     Missing optional archives or entries remain absent.  Once an explicitly
     bound entry exists, malformed data and missing configured chunks are hard
     errors; this keeps a wrong edition/index from silently looking valid.
+    The stage must be a private output: this function is a public entrypoint
+    and every call writes decoded original artwork.
     """
 
+    stage = stage.expanduser().resolve()
+    assert_disjoint_paths(directory, stage)
+    assert_private_output(stage)
     canonical = _canonical_edition(edition)
     result = {}
     for name, index_specs in _resource_specs(canonical).items():
@@ -425,6 +435,40 @@ def update_ui_manifest(
         raise InputError(f"scene manifest does not exist: {manifest_path}")
     assert_disjoint_paths(source, output)
     assert_private_output(output)
+    update_lock = output / UPDATE_LOCK_NAME
+    try:
+        update_lock.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise InputError(
+            f"cannot update UI assets: update lock already exists: {update_lock}"
+        ) from exc
+    except OSError as exc:
+        raise InputError(f"cannot create update lock {update_lock}: {exc}") from exc
+    try:
+        return _update_ui_manifest_locked(source, manifest_path, output, editions)
+    finally:
+        try:
+            update_lock.rmdir()
+        except OSError as lock_exc:
+            active_error = sys.exc_info()[1]
+            if active_error is None:
+                raise InputError(
+                    f"cannot release update lock {update_lock}: {lock_exc}"
+                ) from lock_exc
+            raise InputError(
+                f"{active_error}; cannot release update lock {update_lock}: "
+                f"{lock_exc}"
+            ) from active_error
+
+
+def _update_ui_manifest_locked(
+    source: Path,
+    manifest_path: Path,
+    output: Path,
+    editions: set[str] | None,
+) -> dict:
+    """Merge and publish one incremental UI slice under the update lock."""
+
     _validate_existing_scene_manifest(manifest_path)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

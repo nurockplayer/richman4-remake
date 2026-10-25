@@ -119,9 +119,11 @@ func _test_movement(prefs: RefCounted) -> void:
 
 
 func _test_hotkeys(prefs: RefCounted) -> void:
-	var bindings: Array = []
-	bindings.resize(28)
-	bindings.fill(0)
+	# The dialog only ever persists a full source map: the first eight fixed
+	# keys keep their defaults and an edited key cannot collide with another
+	# slot. Start from the source defaults so the fixture is a map the dialog
+	# could actually write.
+	var bindings: Array = HOTKEYS.new().defaults()
 	bindings[10] = 0x52
 	bindings[12] = 0x1157
 	bindings[24] = 0x48

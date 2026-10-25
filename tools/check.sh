@@ -201,6 +201,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/gods_facility_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_finance.gd
+# A dividend charge can bankrupt a holder mid-settlement and cascade into
+# another holder before the payout loop reaches its precomputed dividend.
+run_checked "$GODOT_BIN" --headless --path . --script tests/company_dividend_cascade.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_insurance.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_market_cards.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ai.gd

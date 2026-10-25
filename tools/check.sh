@@ -7,19 +7,24 @@ mkdir -p .local build
 # paths. Keep Godot from scanning/importing those multi-GB local caches into a
 # second per-worktree .godot/imported copy.
 touch .local/.gdignore build/.gdignore
+# Remove the current check's temp log even if the run is interrupted or errexit fires.
+current_check_log=""
+trap 'rm -f "$current_check_log"' EXIT
 run_checked() {
   local check_log
   check_log="$(mktemp "$PWD/.local/check.XXXXXX")"
-  if ! "$@" >"$check_log" 2>&1; then
-    cat "$check_log"
-    return 1
-  fi
+  current_check_log="$check_log"
+  local status=0 reported=0
+  "$@" >"$check_log" 2>&1 || status=$?
   cat "$check_log"
   # Godot can report a script parse/runtime error yet return status zero.
-  if grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
-    echo "Godot reported an error; evidence: $check_log" >&2
-    return 1
+  if (( status == 0 )) && grep -Eq '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$check_log"; then
+    echo "Godot reported an error (see output above)" >&2
+    reported=1
   fi
+  # The log was already printed; don't leave one temp file per check behind.
+  rm -f "$check_log"
+  (( status == 0 && reported == 0 ))
 }
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
@@ -44,6 +49,8 @@ else
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_menu_ui.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
 # Visual fixtures cover layout and controls; native atlas rendering remains a
 # separate gate, and the opaque-background test reports its headless skip.
@@ -69,6 +76,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_controls.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_preferences.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_core.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_consumers.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_dialog.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_source_layout.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transport.gd
 # Issue #128 source new-game setup surface: hit geometry, ordered humans,
@@ -81,6 +94,19 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/bank_headroom_ui.gd
+# Issue #137 source dividend and interest statements. The catalog test reports
+# a headless skip when RICHMAN4_MAP_CATALOG is absent.
+run_checked "$GODOT_BIN" --headless --path . --script tests/monthly_statements.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_controller.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_lifecycle.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_focus.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_money.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_final.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_deferred.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_monthly_catalog.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/map_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
@@ -95,6 +121,12 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/market_entry_active_
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_popup_mode_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/audio_bootstrap.gd
+# Issue #141 source general-options presenter and isolated settings boundary.
+RICHMAN4_SETTINGS_TEST_ROOT="$PWD/.local/system-settings-$BASHPID" run_checked "$GODOT_BIN" --headless --path . --script tests/system_settings.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_audio_selection.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_rendering.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_options_main_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_runtime.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/inventory_effects.gd

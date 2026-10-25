@@ -90,22 +90,47 @@ func configure(path: String, persist := true) -> bool:
 	return true
 
 
+## Load and preview exactly one selected track without changing preferences.
+## Invalid or unavailable tracks leave the current playback untouched.
+func play_track(index: int) -> bool:
+	if not enabled or index < 0 or index >= tracks.size():
+		return false
+	var stream := _load_track(tracks[index])
+	if stream == null:
+		return false
+	current_track = index
+	player.stream = stream
+	_play_current()
+	playback_changed.emit(tracks[index].get_file())
+	return true
+
+
+## Narrow loading seam for isolated fixtures; production uses the original Ogg
+## decoder and still skips unreadable tracks in next_track().
+func _load_track(path: String) -> AudioStream:
+	return AudioStreamOggVorbis.load_from_file(path)
+
+
+func _play_current() -> void:
+	player.play()
+
+
 func next_track() -> void:
 	if tracks.is_empty() or not enabled:
 		return
 	for offset in range(1, tracks.size() + 1):
 		var index := (current_track + offset) % tracks.size()
-		var stream := AudioStreamOggVorbis.load_from_file(tracks[index])
+		var stream := _load_track(tracks[index])
 		if stream != null:
 			current_track = index
 			player.stream = stream
-			player.play()
+			_play_current()
 			playback_changed.emit(tracks[index].get_file())
 			return
 	stop()
 
 
-func set_enabled(value: bool) -> void:
+func set_enabled(value: bool, persist := true) -> void:
 	enabled = value
 	if enabled:
 		if player.stream != null:
@@ -114,13 +139,15 @@ func set_enabled(value: bool) -> void:
 			next_track()
 	else:
 		stop()
-	_save_settings()
+	if persist:
+		_save_settings()
 
 
-func set_volume(value: float) -> void:
+func set_volume(value: float, persist := true) -> void:
 	volume = clampf(value, 0.0, 1.0)
 	player.volume_linear = volume
-	_save_settings()
+	if persist:
+		_save_settings()
 
 
 func stop() -> void:

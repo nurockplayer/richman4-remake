@@ -116,6 +116,8 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transpor
 # deterministic AI fill, catalog capability preservation and restart defaults.
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_interaction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_title_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_title_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_setup_factory.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd

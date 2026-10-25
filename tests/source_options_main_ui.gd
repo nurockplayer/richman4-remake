@@ -245,6 +245,10 @@ func _run() -> void:
 	loaded = settings.read_settings(settings_file)
 	_expect_equal(int((loaded.get("settings", {}) as Dictionary).get("music_level", -1)), 0, "HUD music switch persists its disabled state")
 
+	# The options help child above switched the shell to the board, so return to
+	# the title before exercising its OPTION entry again.  A hidden source title
+	# refuses input by design.
+	shell.show_title()
 	shell.title_option_button.pressed.emit()
 	await _settle()
 	_expect(panel.call("is_open"), "title OPTION reopens the presenter")

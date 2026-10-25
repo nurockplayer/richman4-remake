@@ -72,9 +72,9 @@ func _test_title_and_layout(ui: Control, shell: Control) -> void:
 		for key in source_keys:
 			_expect(shell.toolbar_buttons[key].icon != null, "source toolbar icon is loaded for %s" % key)
 		shell.title_start_button.mouse_entered.emit()
-		_expect(shell.title_start_button.icon != null, "START hover uses the source hover frame")
+		_expect(shell.title_screen.hover_art.visible, "START hover uses the source hover frame")
 		shell.title_start_button.mouse_exited.emit()
-		_expect(shell.title_start_button.icon == null, "START hover frame clears on exit")
+		_expect(not shell.title_screen.hover_art.visible, "START hover frame clears on exit")
 
 
 func _test_title_ai_guard(ui: Control, game: Object, shell: Control) -> void:

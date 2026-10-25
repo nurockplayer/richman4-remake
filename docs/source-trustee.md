@@ -31,6 +31,12 @@ the source's effective 10–90% clamp even though the UI permits 0–100. Stock
 purchases respect the target ratio of holdings to cash+deposit+holdings; zero
 prevents investment. Corporate share acquisition is subject to the same budget.
 
+These trustee policies apply only after an original human is explicitly
+delegated. Native AI and every actor without a preference record keep the
+previous policy exactly: with no preferences the seeded 42/4 replay produces the
+same snapshot hash as before this component, and identical seeds plus identical
+preferences produce identical state and event logs.
+
 ## Bounded source decisions
 
 - Personality has a real conservative/normal/aggressive property-upgrade reserve
@@ -53,7 +59,11 @@ Each edition's actual Panel77 was independently decoded and matched to its
 archive hash. Both payloads are byte-identical and contain 18 chunks; the
 runtime still requests the current edition explicitly. No original pixels are
 part of this repository. Missing private assets remain an explicit text
-fallback: the panel, rows, labels and controls stay usable without art.
+fallback: the panel, rows, labels and controls stay usable without art. The
+selected row and chosen personality are highlighted, delegation and card/tool
+states are shown as text, and the ratio bars gain visible decrement/increment
+affordances. A focused test asserts these visible state changes without private
+assets.
 
 Focused public AI, save/continuation and MainUI tests are separate from source
 art captures and native injected lifecycle evidence. Physical OS input, current

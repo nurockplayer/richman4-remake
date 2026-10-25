@@ -62,6 +62,22 @@ func _initialize() -> void:
 			check(game.run_ai_turn().get("ok", false), "personality AI completes")
 			var should_upgrade: bool = reserve_cash >= [1000,500,0][personality]
 			check((int(tile.building_level) == 1) == should_upgrade, "three personalities consume distinct reserve policy")
+	var first: Object = Game.new_game(7331, 4, {"start_date":{"year":1998,"month":1,"day":1}})
+	var second: Object = Game.new_game(7331, 4, {"start_date":{"year":1998,"month":1,"day":1}})
+	first.state["trustee_preferences"] = {}
+	second.state["trustee_preferences"] = {}
+	for player_id in range(4):
+		var preference := {"use_cards":true,"use_tools":true,"personality":player_id % 3,
+			"cash_ratio":50 + 10 * (player_id % 3),"stock_ratio":30 + 10 * (player_id % 4)}
+		first.state["trustee_preferences"][str(player_id)] = preference.duplicate(true)
+		second.state["trustee_preferences"][str(player_id)] = preference.duplicate(true)
+	first._sync_state()
+	second._sync_state()
+	var first_match: Dictionary = first.run_ai_match(10000)
+	var second_match: Dictionary = second.run_ai_match(10000)
+	check(bool(first_match.get("ok", false)) and first_match == second_match, "same seed and trustee preferences finish with the same result")
+	check(first.state.event_log == second.state.event_log, "same seed and trustee preferences produce identical event logs")
+	check(first.to_json() == second.to_json(), "same seed and trustee preferences produce identical state")
 	print("Trustee consumer checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures else 0)
 func staged(inventory: bool) -> Object:

@@ -391,24 +391,53 @@ func _render_rows() -> void:
 		var row: Dictionary = _draft_rows[index]
 		var y := 8.0 + ROW_HEIGHT * float(index)
 		var row_name := "TrusteeRow%d" % int(row.player_id)
-		_add_source_chunk(row_name, 1 if int(row.player_id) == _selected_player_id else 2, Vector2(8,y))
+		var selected_row := int(row.player_id) == _selected_player_id
+		var selection_art := _add_source_chunk(row_name, 1 if selected_row else 2, Vector2(8,y))
+		if selected_row and not selection_art:
+			var highlight := ColorRect.new()
+			highlight.name = "TrusteeSelectionFallback%d" % int(row.player_id)
+			highlight.position = FRAME_ORIGIN + Vector2(8,y)
+			highlight.size = Vector2(116,ROW_HEIGHT)
+			highlight.color = Color(1.0,0.85,0.3,0.25)
+			highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_surface.add_child(highlight)
+			row_controls.append(highlight)
 		var character := int(_character_ids.get(int(row.player_id), -1))
 		var portrait := false
 		if character >= 0 and character < 12:
 			portrait = _add_source_chunk("TrusteePortrait%d" % int(row.player_id), character + 6, Vector2(80,y+40))
+		var delegated_art := false
+		if bool(row.trustee):
+			delegated_art = _add_source_chunk("TrusteeDelegated%d" % int(row.player_id), 3, Vector2(19,y+36))
 		if not portrait:
-			_add_label("TrusteeName%d" % row.player_id, str(row.name), FRAME_ORIGIN + Vector2(35,y+25), Vector2(82,30), 14, Color.WHITE)
-		if bool(row.trustee): _add_source_chunk("TrusteeDelegated%d" % int(row.player_id), 3, Vector2(19,y+36))
+			_add_label("TrusteeName%d" % row.player_id, str(row.name), FRAME_ORIGIN + Vector2(35,y+25), Vector2(60 if bool(row.trustee) and not delegated_art else 82,30), 14, Color.WHITE)
+		if bool(row.trustee) and not delegated_art:
+			_add_label("TrusteeDelegatedFallback%d" % int(row.player_id), "託管", FRAME_ORIGIN + Vector2(97,y+25), Vector2(27,30), 12, Color("#8fe08f"))
 	var selected: Dictionary = _draft_rows[_find_row(_selected_player_id)]
 	_add_label("TrusteeAIHeading", "託管AI", FRAME_ORIGIN + Vector2(136,15), Vector2(74,22), 18, Color.WHITE)
 	_add_label("TrusteeCardsLabel", "使用卡片", FRAME_ORIGIN + Vector2(209,42), Vector2(78,22), 16, Color.WHITE)
 	_add_label("TrusteeToolsLabel", "使用道具", FRAME_ORIGIN + Vector2(209,73), Vector2(78,22), 16, Color.WHITE)
-	if bool(selected.use_cards): _add_source_chunk("TrusteeCardsMarker", 3, Vector2(186,45))
-	if bool(selected.use_tools): _add_source_chunk("TrusteeToolsMarker", 3, Vector2(186,77))
+	var cards_art := source_art_available()
+	if bool(selected.use_cards): cards_art = _add_source_chunk("TrusteeCardsMarker", 3, Vector2(186,45))
+	if not cards_art:
+		_add_label("TrusteeCardsFallback", "開" if bool(selected.use_cards) else "關", FRAME_ORIGIN + Vector2(184,43), Vector2(20,22), 14, Color("#8fe08f") if bool(selected.use_cards) else Color("#d06a5a"))
+	var tools_art := source_art_available()
+	if bool(selected.use_tools): tools_art = _add_source_chunk("TrusteeToolsMarker", 3, Vector2(186,77))
+	if not tools_art:
+		_add_label("TrusteeToolsFallback", "開" if bool(selected.use_tools) else "關", FRAME_ORIGIN + Vector2(184,75), Vector2(20,22), 14, Color("#8fe08f") if bool(selected.use_tools) else Color("#d06a5a"))
 	_add_label("TrusteePersonalityLabel", "個  性", FRAME_ORIGIN + Vector2(136,103), Vector2(74,22), 18, Color.WHITE)
+	var personality_art := _add_source_chunk("TrusteePersonalityMarker", 3, Vector2(186,[133,165,197][int(selected.personality)]))
+	if not personality_art:
+		var persona_highlight := ColorRect.new()
+		persona_highlight.name = "TrusteePersonalityFallback"
+		persona_highlight.position = FRAME_ORIGIN + Vector2(207,[130,162,195][int(selected.personality)])
+		persona_highlight.size = Vector2(84,22)
+		persona_highlight.color = Color(1.0,0.85,0.3,0.25)
+		persona_highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_surface.add_child(persona_highlight)
+		row_controls.append(persona_highlight)
 	for index in range(3):
 		_add_label("TrusteePersonalityText%d" % index, PERSONALITIES[index], FRAME_ORIGIN + Vector2(209,[130,162,195][index]), Vector2(78,22), 16, Color.WHITE)
-	_add_source_chunk("TrusteePersonalityMarker", 3, Vector2(186,[133,165,197][int(selected.personality)]))
 	_add_label("TrusteeRatioHeading", "資金運用比例", FRAME_ORIGIN + Vector2(190,234), Vector2(120,23), 18, Color.WHITE)
 	_add_ratio("cash", selected, 266)
 	_add_ratio("stock", selected, 299)
@@ -428,6 +457,11 @@ func _add_ratio(kind: String, row: Dictionary, y: float) -> void:
 		marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_surface.add_child(marker)
 		row_controls.append(marker)
+	if not source_art_available():
+		var minus := _add_label("Trustee%sMinusFallback" % kind, "-", FRAME_ORIGIN + Vector2(195,y), Vector2(13,22), 15, Color.WHITE)
+		minus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var plus := _add_label("Trustee%sPlusFallback" % kind, "+", FRAME_ORIGIN + Vector2(289,y), Vector2(13,22), 15, Color.WHITE)
+		plus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 func _add_label(node_name: String, value: String, position: Vector2, box_size: Vector2, font_size: int, color: Color) -> Label:
 	var label := Label.new()

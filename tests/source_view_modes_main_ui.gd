@@ -120,7 +120,43 @@ func _run() -> void:
 		viewport.push_input(_key(KEY_F5), true)
 		await _settle()
 		_expect(shell.view_mode == expected, "the remapped slot7 cycles on F5")
+
+	# An unused word stays inert, even behind the CTRL prefix.
+	remapped[7] = 0x1100
+	ui.source_hotkeys_bindings = remapped
+	var controlled_delete := _key(KEY_DELETE)
+	controlled_delete.ctrl_pressed = true
+	viewport.push_input(controlled_delete, true)
+	await _settle()
+	_expect(shell.view_mode == 2, "CTRL over an unused key does not cycle")
+	remapped[7] = 0
+	ui.source_hotkeys_bindings = remapped
+	viewport.push_input(_key(KEY_TAB), true)
+	await _settle()
+	_expect(shell.view_mode == 2, "an unused slot7 word disables the view hotkey")
+
+	# A remapped printable key must not steal typing from a text field.
+	remapped[7] = 0x41
+	ui.source_hotkeys_bindings = remapped
+	var field := LineEdit.new()
+	viewport.add_child(field)
+	field.grab_focus()
+	await _settle()
+	viewport.push_input(_key(KEY_A), true)
+	await _settle()
+	_expect(shell.view_mode == 2, "a focused text field keeps printable remapped keys")
+	field.release_focus()
+	await _settle()
+	viewport.push_input(_key(KEY_A), true)
+	await _settle()
+	_expect(shell.view_mode == 0, "the remapped printable key cycles after the field releases focus")
+	field.queue_free()
+	await _settle()
 	ui.source_hotkeys_bindings = SystemHotkeys.new().defaults()
+	for expected in [1, 2]:
+		viewport.push_input(_key(KEY_TAB), true)
+		await _settle()
+		_expect(shell.view_mode == expected, "the default TAB binding works again")
 
 	ui._presentation_busy = true
 	viewport.push_input(_key(KEY_TAB), true)

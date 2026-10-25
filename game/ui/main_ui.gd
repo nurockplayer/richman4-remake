@@ -296,8 +296,13 @@ func _input(event: InputEvent) -> void:
 	# Shift/Alt/Meta keep their ordinary focus traversal and shortcuts.
 	if key.shift_pressed or key.alt_pressed or key.meta_pressed:
 		return
+	# A remapped printable key must not eat typing in a focused text field.
+	var focused := get_viewport().gui_get_focus_owner()
+	if focused is LineEdit or focused is TextEdit:
+		return
 	var word := _source_view_binding()
-	if word == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
+	# An unused word (0, or a CTRL prefix over an unused key) is disabled.
+	if (word & 0xff) == 0 or key.ctrl_pressed != ((word >> 8) == 0x11):
 		return
 	var pressed_word: int = system_hotkeys.event_key(key) if system_hotkeys != null else (0x09 if key.keycode == KEY_TAB else 0)
 	if pressed_word != (word & 0xff):

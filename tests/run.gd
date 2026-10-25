@@ -1,6 +1,7 @@
 extends SceneTree
 
 const GameState = preload("res://game/core/game_state.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -477,7 +478,7 @@ func _test_save_load_and_validation() -> void:
 	for seed in range(1, 21):
 		var seeded: GameState = GameState.new_game(seed, 4)
 		seeded.roll()
-		var save_path: String = "user://richman4-simulation-roundtrip.json"
+		var save_path: String = UserPaths.resolve("user://richman4-simulation-roundtrip.json")
 		_expect(seeded.save_to_path(save_path), "seed %d writes a save" % seed)
 		var disk_restored: GameState = GameState.load_from_path(save_path)
 		_expect(disk_restored != null, "seed %d reads a save" % seed)

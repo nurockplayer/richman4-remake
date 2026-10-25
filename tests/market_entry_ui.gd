@@ -4,6 +4,7 @@ const GameState = preload("res://game/core/game_state.gd")
 const MainScene = preload("res://game/main.tscn")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const Maps = preload("res://game/content/original_maps.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 const StockPanel = preload("res://game/ui/stock_panel.gd")
 
 var checks := 0
@@ -220,7 +221,7 @@ func _read_file_text(path: String) -> String:
 func _test_disk_cancellation(ui: Control) -> void:
 	# Use an isolated user:// fixture; the owner save path is left to the native
 	# wrapper and is never opened by this headless acceptance test.
-	var path := "user://issue100-legacy-cancel.json"
+	var path := UserPaths.resolve("user://issue100-legacy-cancel.json")
 	var had_original := FileAccess.file_exists(path)
 	var original_text := _read_file_text(path) if had_original else ""
 	var disk_payload := _legacy_snapshot(1)
@@ -243,7 +244,7 @@ func _test_disk_cancellation(ui: Control) -> void:
 
 func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	ui._set_development_path(false)
-	ui._load_map_catalog("user://issue100-catalog-missing.json")
+	ui._load_map_catalog(UserPaths.resolve("user://issue100-catalog-missing.json"))
 	_expect(not ui._map_catalog_ok and ui._map_catalog.is_empty(), "production path rejects a missing catalog without a demo map")
 	_expect(ui.new_game_confirm_button.disabled, "production path disables new game without original content")
 	var blocked_before: Dictionary = ui._read_snapshot().duplicate(true)
@@ -252,14 +253,14 @@ func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	_expect(str(ui.map_catalog_status_label.text).contains("無法開始正常對局"), "production block explains the missing content action")
 
 	ui._set_development_path(true)
-	ui._load_map_catalog("user://issue100-catalog-missing.json")
+	ui._load_map_catalog(UserPaths.resolve("user://issue100-catalog-missing.json"))
 	_expect(ui._map_catalog.size() == 1 and str(ui.map_catalog_status_label.text).contains("開發路徑"), "development fallback is explicitly labelled")
 	_expect(ui._new_game(61121, 2, ui._selected_map_definition), "development fallback remains usable for tests")
 
 	var incomplete_payload := _complete_catalog_payload()
 	var incomplete_map: Dictionary = incomplete_payload.maps[0] as Dictionary
 	incomplete_map["stock_rows"] = (incomplete_map["stock_rows"] as Array).slice(0, 11)
-	var incomplete_path := "user://issue100-incomplete-catalog.json"
+	var incomplete_path := UserPaths.resolve("user://issue100-incomplete-catalog.json")
 	_write_json(incomplete_path, incomplete_payload)
 	ui._set_development_path(false)
 	ui._load_map_catalog(incomplete_path)
@@ -275,7 +276,7 @@ func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	var partial_map: Dictionary = partial_payload.maps[0] as Dictionary
 	for index in range((partial_map["stock_rows"] as Array).size()):
 		(partial_map["stock_rows"] as Array)[index]["company_id"] = 0
-	var partial_path := "user://issue100-partial-catalog.json"
+	var partial_path := UserPaths.resolve("user://issue100-partial-catalog.json")
 	_write_json(partial_path, partial_payload)
 	ui._set_development_path(false)
 	ui._load_map_catalog(partial_path)
@@ -284,7 +285,7 @@ func _test_catalog_gate_and_complete_market(ui: Control) -> void:
 	_expect(not ui._new_game(61124, 2, ui._selected_map_definition), "production path blocks new game for a partial catalog")
 	DirAccess.remove_absolute(partial_path)
 
-	var path := "user://issue100-complete-catalog.json"
+	var path := UserPaths.resolve("user://issue100-complete-catalog.json")
 	_write_json(path, _complete_catalog_payload())
 	ui._set_development_path(false)
 	ui._load_map_catalog(path)

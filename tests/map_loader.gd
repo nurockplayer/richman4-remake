@@ -2,6 +2,7 @@ extends SceneTree
 const Maps = preload("res://game/content/original_maps.gd")
 const GameState = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/original_map_fixture.gd")
+const UserPaths = preload("res://game/platform/user_paths.gd")
 var checks := 0
 var failures := 0
 func expect(condition: bool, message: String) -> void:
@@ -87,7 +88,7 @@ func _initialize() -> void:
 	bad_explicit_prices.facilities[0].fee_by_level = [100]
 	expect(not Maps.normalize_map(bad_explicit_prices, true).ok, "Facility fee table must have six entries")
 	var catalog_facility := {"schema": "richman4.map-catalog/v1", "version": 1, "count": 1, "maps": [facility_raw]}
-	var facility_path := "user://facility-loader-test.json"
+	var facility_path := UserPaths.resolve("user://facility-loader-test.json")
 	var facility_file := FileAccess.open(facility_path, FileAccess.WRITE)
 	facility_file.store_string(JSON.stringify(catalog_facility))
 	facility_file.close()
@@ -171,7 +172,7 @@ func _initialize() -> void:
 	for invalid in bads:
 		expect(not Maps.normalize_map(invalid).ok, "Malformed source map is rejected")
 	var catalog := {"schema": "richman4.map-catalog/v1", "version": 1, "count": 1, "maps": [raw]}
-	var path := "user://loader-test.json"
+	var path := UserPaths.resolve("user://loader-test.json")
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(JSON.stringify(catalog))
 	file.close()

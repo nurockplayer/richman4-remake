@@ -12,6 +12,21 @@ var _slot_directory := ""
 var _default_path := ""
 
 
+class ClockIO extends SaveSlotsScript.FileSystemIO:
+	var clock_offset := 0.0
+	var fail_redo := false
+	var lock_calls := 0
+
+	func now() -> float:
+		return Time.get_unix_time_from_system() + clock_offset
+
+	func make_lock_directory(path: String) -> int:
+		lock_calls += 1
+		if fail_redo and lock_calls > 1:
+			return ERR_CANT_CREATE
+		return super.make_lock_directory(path)
+
+
 class FaultIO extends SaveSlotsScript.FileSystemIO:
 	var mode := ""
 
@@ -92,6 +107,7 @@ func _initialize() -> void:
 	_test_stale_fingerprint_protection()
 	_test_read_expected_fingerprint_protection()
 	_test_failure_preserves_existing_bytes()
+	_test_stale_lock_recovery()
 	_test_preview_and_read_do_not_mutate_game()
 	_cleanup()
 	print("Save-slot checks: %d, failures: %d" % [checks, failures])
@@ -408,6 +424,39 @@ func _test_failure_preserves_existing_bytes() -> void:
 	if slot_dir != null:
 		for file_name in slot_dir.get_files():
 			expect(not str(file_name).contains(".tmp."), "failed write cleans only owned temporary files")
+
+
+func _test_stale_lock_recovery() -> void:
+	_clear_slots()
+	var store := _store()
+	var lock_path: String = store.slot_path(1) + ".write-lock"
+	DirAccess.make_dir_recursive_absolute(store.slot_path(1).get_base_dir())
+
+	expect(DirAccess.make_dir_absolute(lock_path) == OK, "fixture creates a fresh lock")
+	var fresh: Dictionary = _store(ClockIO.new()).write(1, _game(12301).to_dict(), "")
+	expect(not bool(fresh.get("ok", true)), "fresh lock keeps the slot busy")
+	expect_equal(fresh.get("status"), SaveSlotsScript.STATUS_ERROR, "fresh lock reports error status")
+	expect_equal(fresh.get("error"), "slot_write_busy", "fresh lock reports slot_write_busy")
+	expect(DirAccess.dir_exists_absolute(lock_path), "fresh lock is not removed")
+
+	var aged_io := ClockIO.new()
+	aged_io.clock_offset = SaveSlotsScript.STALE_LOCK_SECONDS + 1.0
+	var aged_payload: Dictionary = _game(12302).to_dict()
+	var aged: Dictionary = _store(aged_io).write(1, aged_payload, "")
+	expect(bool(aged.get("ok", false)), "stale orphan lock is reclaimed")
+	expect_equal(aged.get("status"), SaveSlotsScript.STATUS_WRITTEN, "recovered write reports written status")
+	expect_equal(_store().read(1).get("snapshot", {}).get("seed"), aged_payload.get("seed"), "recovered write commits its payload")
+	expect(not DirAccess.dir_exists_absolute(lock_path), "recovered write releases its lock")
+
+	expect(DirAccess.make_dir_absolute(lock_path) == OK, "fixture recreates a stale lock")
+	var race_io := ClockIO.new()
+	race_io.clock_offset = SaveSlotsScript.STALE_LOCK_SECONDS + 1.0
+	race_io.fail_redo = true
+	var raced: Dictionary = _store(race_io).write(1, _game(12303).to_dict(), "")
+	expect(not bool(raced.get("ok", true)), "lost lock recovery race stays busy")
+	expect_equal(raced.get("error"), "slot_write_busy", "lost lock recovery race reports slot_write_busy")
+	expect_equal(_store().read(1).get("snapshot", {}).get("seed"), aged_payload.get("seed"), "lost lock recovery race preserves existing bytes")
+	DirAccess.remove_absolute(lock_path)
 
 
 func _test_preview_and_read_do_not_mutate_game() -> void:

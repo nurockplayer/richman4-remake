@@ -19,6 +19,9 @@ const FIRST_WRITABLE_SLOT := 1
 const LAST_WRITABLE_SLOT := 5
 const SLOT_FILE_PREFIX := "slot-"
 const SLOT_FILE_SUFFIX := ".json"
+## A lock older than this is treated as an orphan from a crashed writer.
+## Writes take well under a second, so a live writer never reaches this age.
+const STALE_LOCK_SECONDS := 30
 
 const STATUS_EMPTY := "empty"
 const STATUS_VALID := "valid"
@@ -36,11 +39,25 @@ class FileSystemIO extends RefCounted:
 	func make_directory(path: String) -> int:
 		return DirAccess.make_dir_recursive_absolute(path)
 
-	# mkdir is an atomic ownership operation shared by processes. Never
-	# remove a lock we did not create, including an orphan from a crashed app.
-	func acquire_write_lock(destination: String) -> Dictionary:
+	func now() -> float:
+		return Time.get_unix_time_from_system()
+
+	func make_lock_directory(path: String) -> int:
+		return DirAccess.make_dir_absolute(path)
+
+	# mkdir is an atomic ownership operation shared by processes. A lock left
+	# by a crashed writer is reclaimed only once it is older than
+	# STALE_LOCK_SECONDS; younger locks stay busy as before. The expected
+	# fingerprint remains the content guard for every write.
+	func acquire_write_lock(destination: String, now_seconds: Variant = null) -> Dictionary:
 		var lock_path := destination + ".write-lock"
-		var error := DirAccess.make_dir_absolute(lock_path)
+		var current_time := float(now_seconds) if typeof(now_seconds) in [TYPE_INT, TYPE_FLOAT] else now()
+		var error := make_lock_directory(lock_path)
+		if error == ERR_ALREADY_EXISTS:
+			var modified := FileAccess.get_modified_time(lock_path)
+			if modified > 0 and current_time - float(modified) >= STALE_LOCK_SECONDS:
+				DirAccess.remove_absolute(lock_path)
+				error = make_lock_directory(lock_path)
 		return {"ok": error == OK, "path": lock_path, "io_error": error}
 
 	func release_write_lock(lock_path: String) -> int:
@@ -229,7 +246,7 @@ func write(slot_id: Variant, payload: Variant, expected_fingerprint: Variant = n
 			"path": destination,
 		}
 
-	var lock := _io_call("acquire_write_lock", [destination])
+	var lock := _io_call("acquire_write_lock", [destination, _io_call_value("now", [], Time.get_unix_time_from_system())])
 	if not bool(lock.get("ok", false)):
 		return {
 			"ok": false, "status": STATUS_ERROR, "error": "slot_write_busy",

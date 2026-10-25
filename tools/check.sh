@@ -223,6 +223,9 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/company_json_index.g
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_construction.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/company_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_accounting.gd
+# Issue #164 source SALE rules: durable bulletin board, settlement and cost basis.
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_stock_cost.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_sale_rules.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/stock_presentation.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/legacy_stock_bounds.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd

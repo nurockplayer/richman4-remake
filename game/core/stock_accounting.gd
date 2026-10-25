@@ -15,7 +15,9 @@ const COMPANY_STOCK_VALUE_MAX: int = 1000000000000
 const COMPANY_FACE_PRICE_SCALE: int = 10000
 const MAX_COMPANY_FACE_PRICE: float = float(COMPANY_STOCK_VALUE_MAX / COMPANY_FACE_PRICE_SCALE)
 const MAX_KNOWN_COST: float = MAX_COMPANY_FACE_PRICE if MAX_COMPANY_FACE_PRICE > MARKET_PRICE_MAX else MARKET_PRICE_MAX
-const MIN_KNOWN_COST: float = 1.0
+# Canonical float32(1 / 1_000_000_000): minimum positive SALE total ask
+# divided by the maximum legal share quantity; partial sales retain this cost.
+const MIN_KNOWN_COST: float = 9.999999717180685e-10
 
 static func source_float(value: float) -> float:
 	return float(PackedFloat32Array([value])[0])
@@ -50,7 +52,7 @@ static func _valid_cost_number(value: Variant) -> bool:
 	var raw := float(value)
 	if raw == 0.0:
 		return true
-	if raw < MIN_KNOWN_COST or raw > MAX_KNOWN_COST:
+	if raw < 0.0 or raw > MAX_KNOWN_COST:
 		return false
 	var canonical := source_float(raw)
 	return is_finite(canonical) and canonical >= MIN_KNOWN_COST and canonical <= MAX_KNOWN_COST

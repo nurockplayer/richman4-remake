@@ -16,7 +16,7 @@ func _initialize() -> void:
 		return
 	_test_public_api(definition)
 	_test_public_ai_runner(definition)
-	_test_ai_shortcuts(definition)
+	_test_ai_and_trustee_shortcuts(definition)
 	_test_human_pending_gate(definition)
 	_test_finished_human_pending_gate(definition)
 	_test_public_new_game_roll_route(definition)
@@ -87,6 +87,13 @@ func _set_ai(game: Object, player_id: int = 0) -> void:
 	game.set_player_ai(player_id, true)
 
 
+func _set_trustee(game: Object, player_id: int = 0) -> void:
+	var rows: Array = game.trustee_rows()
+	for row in rows:
+		row.trustee = int(row.player_id) == player_id
+	_expect(game.apply_trustee_settings(rows), "public trustee settings commit")
+
+
 func _event_count(game: Object, event_kind: String) -> int:
 	var count := 0
 	for event in game.state.event_log:
@@ -128,10 +135,12 @@ func _test_public_api(definition: Dictionary) -> void:
 
 func _test_public_ai_runner(definition: Dictionary) -> void:
 	for event_code in [6, 7, 8]:
-		for mode in ["ai"]:
+		for mode in ["ai", "trustee"]:
 			var seed_value: int = 2100 + int(event_code)
 			var game := _new_game(definition, seed_value)
 			_set_ai(game)
+			if mode == "trustee":
+				_set_trustee(game)
 			var snapshot := _admit_event(game, event_code, 0, true)
 			var reward := int(snapshot.get("reward", -1))
 			var points := int(game.state.players[0].points)
@@ -141,6 +150,8 @@ func _test_public_ai_runner(definition: Dictionary) -> void:
 			# consumption. The public runner remains the behavior under test.
 			var expected := _new_game(definition, seed_value)
 			_set_ai(expected)
+			if mode == "trustee":
+				_set_trustee(expected)
 			var expected_snapshot := _admit_event(expected, event_code, 0, true)
 			expected.finish_minigame(int(expected_snapshot.get("encounter_id", -1)))
 			expected.run_ai_turn()
@@ -162,11 +173,13 @@ func _test_public_ai_runner(definition: Dictionary) -> void:
 			_expect(not bool(duplicate.get("ok", false)) and game.to_json() == after, "%s %d duplicate public completion is inert" % [mode, event_code])
 
 
-func _test_ai_shortcuts(definition: Dictionary) -> void:
+func _test_ai_and_trustee_shortcuts(definition: Dictionary) -> void:
 	for event_code in [6, 7, 8]:
-		for mode in ["ai"]:
+		for mode in ["ai", "trustee"]:
 			var game := _new_game(definition, 1800 + event_code)
 			_set_ai(game)
+			if mode == "trustee":
+				_set_trustee(game)
 			var snapshot := _admit_event(game, event_code, 0, true)
 			var turn_result: Dictionary = game.run_ai_turn()
 			_expect(bool(turn_result.get("ok", false)) and bool(turn_result.get("awaiting_response", false)), "%s %d run_ai_turn waits for shortcut result" % [mode, event_code])

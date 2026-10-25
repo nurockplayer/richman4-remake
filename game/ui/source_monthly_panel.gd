@@ -29,6 +29,8 @@ const INTEREST_ANCHORS := {
 }
 const VALID_EDITIONS := ["Game", "MultiverseJourney"]
 const MAX_PLAYERS := 4
+# Settlement without the setup path has no source character for a player.
+const NO_CHARACTER_ID := -1
 const MAX_COMPANIES := 12
 const MONEY_LIMIT := 1000000000000
 # Per-company earnings are signed money. The producer caps credited totals at
@@ -489,11 +491,16 @@ func _build_interest() -> void:
 		_make_right_label("InterestInterest%d" % ordinal, result_text, interest_rect, 18, result_color)
 
 		var character_id := int(player["character_id"])
-		var character_source := _resolve_source(25, 49 + character_id * 3)
-		var character_texture: Texture2D = character_source.get("texture") as Texture2D
-		var character_frame: Dictionary = character_source.get("frame", {})
-		_source_frames["Panel25.%d" % (49 + character_id * 3)] = character_frame.duplicate(true)
-		_source_art_status["character_%d" % ordinal] = character_texture != null
+		# A report from a setup-less game has no source pose; the chunk number
+		# for -1 would point at an unrelated asset, so go straight to the name.
+		var character_texture: Texture2D = null
+		var character_frame: Dictionary = {}
+		if character_id != NO_CHARACTER_ID:
+			var character_source := _resolve_source(25, 49 + character_id * 3)
+			character_texture = character_source.get("texture") as Texture2D
+			character_frame = character_source.get("frame", {})
+			_source_frames["Panel25.%d" % (49 + character_id * 3)] = character_frame.duplicate(true)
+			_source_art_status["character_%d" % ordinal] = character_texture != null
 		if character_texture != null:
 			var logical := _logical_for(character_frame, Vector2(66.0, 72.0))
 			var anchor := _anchor_for(character_frame)
@@ -788,10 +795,16 @@ func _valid_players(value: Variant, kind: String) -> bool:
 			return false
 		var player_id := int(player_value["id"])
 		var character_id := int(player_value["character_id"])
-		if player_id in ids or character_id in characters or character_id < 0 or character_id > 11:
+		if player_id in ids:
+			return false
+		# -1 means the settlement had no setup identity (see
+		# monthly_statements.gd); every such player falls back to a name slot,
+		# so the slot only has to be unique for real source characters.
+		if character_id != NO_CHARACTER_ID and (character_id in characters or character_id < 0 or character_id > 11):
 			return false
 		ids.append(player_id)
-		characters.append(character_id)
+		if character_id != NO_CHARACTER_ID:
+			characters.append(character_id)
 		if kind == "dividend":
 			if not _money(player_value.get("total", null), MIN_DIVIDEND_TOTAL):
 				return false

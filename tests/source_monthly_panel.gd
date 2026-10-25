@@ -102,6 +102,7 @@ func _run() -> void:
 		await _test_interest_model_and_geometry(panel)
 		await _test_invalid_models_and_fallback(panel)
 		await _test_missing_art_fallbacks(panel)
+		await _test_setup_less_identities(panel)
 		await _test_release_and_timer_race(panel, source_script)
 
 	panel.queue_free()
@@ -379,6 +380,33 @@ func _test_missing_art_fallbacks(panel: Node) -> void:
 	expect(deposit != null and deposit.text == "$59,233", "interest fallback still prints the deposit")
 	var loan := panel.find_child("InterestInterest1", true, false) as Label
 	expect(loan != null and loan.text == "貸款中", "interest fallback keeps the loan marker")
+
+
+func _test_setup_less_identities(panel: Node) -> void:
+	# A game created without the setup path reports -1 for every player. That
+	# must stay presentable: names identify the accounts, and no source
+	# character chunk may be requested for the missing identity.
+	var model := _interest_model()
+	for index in range(model.players.size()):
+		model.players[index]["character_id"] = -1
+		model.players[index]["name"] = "玩家 %d" % (index + 1)
+	var visuals := FakeVisuals.new()
+	panel.call("set_auto_advance_seconds", 0.0)
+	panel.call("set_visuals", visuals)
+	panel.call("set_view_model", model)
+	await _settle()
+	expect(bool(panel.call("is_model_valid")), "setup-less identities remain a valid interest report")
+	if bool(panel.call("is_model_valid")):
+		var names: Array = []
+		for ordinal in range(4):
+			var label := panel.find_child("InterestCharacterName%d" % ordinal, true, false) as Label
+			names.append(label.text if label != null else "")
+		expect(names == ["玩家 1", "玩家 2", "玩家 3", "玩家 4"], "setup-less report names each account instead of a source pose")
+		expect(panel.find_child("InterestCharacter0", true, false) == null, "setup-less report never resolves a bogus character chunk")
+		var chunks: Array = []
+		for call_value in visuals.calls:
+			if int(call_value[2]) == 25: chunks.append(int(call_value[3]))
+		expect(not chunks.has(46), "missing identity does not request the unrelated chunk 46")
 
 
 func _test_release_and_timer_race(panel: Node, source_script: Script) -> void:

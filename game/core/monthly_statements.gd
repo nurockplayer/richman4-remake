@@ -11,9 +11,22 @@ static func begin(state: Dictionary, kind: String) -> Dictionary:
 	for player in state.get("players", []):
 		if not bool(player.get("alive", false)):
 			continue
-		var entry := {"id": int(player.id), "name": str(player.name), "character_id": int(player.character_id)}
+		# A game created without the setup path (new_game_on_board with empty
+		# options, run_ai_match, or a pre-setup legacy save) has players from
+		# _build_players(): real ledger fields but no character identity. The
+		# report is presentation only, so it must not abort settlement; -1 marks
+		# "no source character" for the presenter.
+		var entry := {
+			"id": int(player.get("id", -1)),
+			"name": str(player.get("name", "")),
+			"character_id": int(player.get("character_id", -1)),
+		}
 		if kind == "interest":
-			entry.merge({"deposit_before": int(player.deposit), "interest": 0, "loan_active": int(player.loan) > 0})
+			entry.merge({
+				"deposit_before": int(player.get("deposit", 0)),
+				"interest": 0,
+				"loan_active": int(player.get("loan", 0)) > 0,
+			})
 		players.append(entry)
 	if players.is_empty():
 		return {}

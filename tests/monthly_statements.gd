@@ -3,6 +3,9 @@ extends SceneTree
 const Game = preload("res://game/core/game_state.gd")
 const Fixture = preload("res://tests/fixtures/company_fixture.gd")
 const Loans = preload("res://game/core/source_loans.gd")
+const Statements = preload("res://game/core/monthly_statements.gd")
+const Maps = preload("res://game/content/original_maps.gd")
+const MapFixture = preload("res://tests/fixtures/original_map_fixture.gd")
 var checks := 0
 var failures := 0
 var setup_failures := 0
@@ -155,8 +158,71 @@ func interest() -> void:
 	expect(game.to_json() == old, "repeat month boundary neither pays nor reports twice")
 	roundtrip(game, "interest report")
 
+func setup_less_game(day: int) -> Object:
+	# new_game_on_board with empty options takes the plain _initialize_graph
+	# path, so players come from _build_players() and carry no setup identity.
+	var normalized: Dictionary = Maps.normalize_map(MapFixture.make())
+	var definition: Dictionary = normalized.get("definition", {})
+	if definition.is_empty(): return null
+	var game: Object = Game.new_game_on_board(42, 4, definition)
+	if game == null: return null
+	game.state.day = day
+	game.state.current_player = 3
+	game.state.phase = "await_action"
+	game._sync_state()
+	game._set_action_options(3)
+	return game
+
+
+func setup_less_statements() -> void:
+	# The report builder is presentation only: a game without the setup path
+	# must settle exactly as before and still leave a report to show.
+	var raw := {
+		"map_source": {"edition": "Game"},
+		"date": {"year": 1998, "month": 1, "day": 15},
+		"players": [{"id": 0, "name": "玩家 1", "alive": true}, {"id": 1, "name": "玩家 2", "alive": true}],
+	}
+	var built: Dictionary = Statements.dividend(raw, [
+		{"company_id": 1, "name": "測試企業", "monthly_profit": 50, "stock_index": 0, "payouts": [25, 0]},
+	], {0: 25})
+	expect(built.get("players", []).size() == 2, "identity-less dividend payload still builds")
+	if built.get("players", []).size() == 2:
+		expect(built.players[0].get("character_id") == -1 and built.players[0].get("name") == "玩家 1", "absent source identity becomes an explicit marker")
+		expect(built.players[0].get("total") == 25, "identity-less report keeps the credited total")
+	expect(Statements.begin(raw, "interest").get("players", []).size() == 2, "identity-less interest payload builds without ledger fields")
+
+	var game := setup_less_game(14)
+	expect(game != null, "plain original-map game constructs")
+	if game == null: return
+	expect(str(game.state.map_source.get("edition", "")) == "Game", "plain original-map game keeps its source edition")
+	expect(not game.state.players[0].has("character_id"), "plain players really have no setup identity")
+	if not qualify(game, "setup-less day14"): return
+	expect(game.end_turn().get("ok", false), "setup-less game reaches day 15")
+	expect(reports(game).is_empty(), "a game without the company layer has no dividend report")
+
+	game = setup_less_game(29)
+	if game == null: return
+	# A migrated pre-setup save can carry a calendar date; month-end settlement
+	# then asks the report builder for identities the players never had.
+	game.state["date"] = {"year": 1998, "month": 1, "day": 30}
+	balances(game, [59333, 200, 0, 9])
+	if not qualify(game, "setup-less month end"): return
+	expect(game.end_turn().get("ok", false), "setup-less game crosses the month boundary")
+	var found := reports(game)
+	expect(found.size() == 1, "setup-less settlement records its interest report")
+	if found.size() == 1:
+		var players: Array = found[0].get("players", [])
+		expect(players.size() == 4, "setup-less report keeps every live player")
+		if players.size() == 4:
+			expect(players[0].get("name") == game.state.players[0].name and players[0].get("character_id") == -1, "setup-less identity is marked instead of aborting the report")
+			expect(players[0].get("deposit_before") == 59333 and players[0].get("interest") == 5933, "setup-less report keeps the exact credited amounts")
+	expect(game.state.players[0].deposit == 65266 and game.state.players[1].deposit == 220 and game.state.players[3].deposit == 9, "setup-less settlement amounts are unchanged")
+	roundtrip(game, "setup-less report")
+
+
 func _initialize() -> void:
 	dividends()
 	interest()
+	setup_less_statements()
 	print("Monthly statement checks: %d, failures: %d, setup_failures: %d" % [checks, failures, setup_failures])
 	quit(1 if failures else 0)

@@ -142,3 +142,14 @@ normal catalog 證據沿用上節，未在此 worktree 重跑。
 尚未顯示的月報（否則兩者互等）；沒有 Panel76 時分紅表改用淺色紙底與深色標題，
 沒有 Panel25 角色圖時利息卡補上玩家姓名；presenter 拒絕的畸形報表不再讓 controller
 卡成無法關閉的 modal。對應測試：銀行／報表共存、缺素材可讀性、畸形報表放行。
+
+Lead 審查另指出一項 P2：`MonthlyStatements.begin()` 以 dot access 讀
+`player.character_id`／`deposit`／`loan`。未經 setup 路徑建立的原作地圖（空 options 的
+`new_game_on_board()`、`run_ai_match` 或移植前的舊存檔）其玩家來自 `_build_players()`，
+沒有 `character_id`；月底結算會在 `begin()` 觸發
+`Invalid access to property or key 'character_id'`，讓報表（debug 版連結算）中斷。
+現在改用 `player.get("character_id", -1)` 等防禦性讀取，-1 表示「沒有原作角色」；
+presenter 接受 -1，只顯示玩家姓名的替身格，且不解析 `49 + character_id * 3` 這個
+對 -1 無意義的 chunk。Immutable 回歸測試在修正前重播 67／3（含上述 script error），
+修正後 72／0；其中一項以空 options 的原作地圖走完第 15 日與月底，確認金額不變、
+報表仍會記錄。Presenter 另加 -1 身分案例，149→153／0。

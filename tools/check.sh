@@ -162,6 +162,11 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/board_camera.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/scene_visuals.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/main_hud_ui.gd
+# Full-match MainUI soak: drives three fixture matches through the real entry
+# points, with save round-trips and stall detection. RICHMAN4_SOAK_LONG=1 adds
+# seeds and a higher turn cap; a real source map joins in when the catalog is
+# configured (headless skip otherwise).
+run_checked "$GODOT_BIN" --headless --path . --script tests/ui_full_match_soak.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_sunday.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_calendar_input.gd

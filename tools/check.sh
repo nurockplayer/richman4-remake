@@ -63,6 +63,9 @@ else
 fi
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_autosave.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_autosave_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_panel.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_save_menu_ui.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.

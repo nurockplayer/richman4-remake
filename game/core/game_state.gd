@@ -1,6 +1,9 @@
 class_name Richman4GameState
 extends RefCounted
 
+const TrusteePreferences = preload("res://game/core/trustee_preferences.gd")
+const TrusteeStrategy = preload("res://game/core/trustee_strategy.gd")
+
 ## Deterministic, serializable simulation for the Godot runtime.
 ##
 ## The original executable and data files are kept outside this repository. The
@@ -86,6 +89,7 @@ const SETUP_CHARACTER_NAMES = [
 ]
 const SETUP_CHARACTER_COUNT = 12
 const SetupControls = preload("res://game/core/setup_controls.gd")
+const LandTenure = preload("res://game/core/land_tenure_rules.gd")
 const SETUP_DEFAULT_START_DATE = {"year": 1998, "month": 1, "day": 1}
 const GameCalendar = preload("res://game/core/game_calendar.gd")
 const SourceLoans = preload("res://game/core/source_loans.gd")
@@ -280,7 +284,7 @@ static func new_game_on_board(seed_value: int, player_count: int, definition: Di
 
 
 static func _normalize_setup_options(options: Dictionary, player_count: int) -> Dictionary:
-	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
+	var allowed_keys: Array = ["initial_fund", "day_limit", "wealth_multiplier", "start_date", "character_ids", "human_flags", "initial_vehicle", "land_tenure_months", "original_inventory", "original_facilities", "original_gods", "original_companies", "original_statuses", "original_hazards", "original_property_cards", "original_remodel", "original_research", "original_building_cards"]
 	for key in options.keys():
 		# Dictionary dot assignment produces StringName keys in Godot. Treat
 		# those keys as their canonical string spelling so callers that adjust a
@@ -289,6 +293,8 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 			return {}
 	var control_choices: Dictionary = SetupControls.normalize(options, player_count)
 	if not bool(control_choices.get("ok", false)):
+		return {}
+	if options.has("land_tenure_months") and not LandTenure.valid_months(options.land_tenure_months):
 		return {}
 	if not options.has("start_date") or typeof(options.get("start_date")) != TYPE_DICTIONARY:
 		return {}
@@ -416,6 +422,8 @@ static func _normalize_setup_options(options: Dictionary, player_count: int) -> 
 		"original_building_cards": original_building_cards,
 	}
 	normalized.merge(control_choices.choices)
+	if options.has("land_tenure_months"):
+		normalized["land_tenure_months"] = int(options.land_tenure_months)
 	return normalized
 
 
@@ -518,6 +526,7 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 				continue
 			tile_value["research_tool"] = 0
 			tile_value["research_turns"] = 0
+	LandTenure.initialize(state, options)
 	_sync_state()
 	_set_action_options(0)
 
@@ -2342,7 +2351,7 @@ func _set_action_options(player_id: int) -> void:
 		if _is_inventory() and phase == "await_roll":
 			var pending_remote: Variant = state.get("pending_remote_dice", {})
 			if typeof(pending_remote) != TYPE_DICTIONARY or pending_remote.is_empty():
-				if player.get("cards", []).size() > 0:
+				if player.get("cards", []).size() > 0 and TrusteeStrategy.action_allowed(state, "use_card", {}):
 					options.push_front("use_card")
 				var tools: Dictionary = player.get("tools", {})
 				if not _inventory_movement_blocked(player):
@@ -3442,6 +3451,22 @@ func _upgrade_price(tile: Dictionary) -> int:
 func _player_owns_tile(player_id: int, tile_index: int) -> bool:
 	var tile: Dictionary = _tile_at(tile_index)
 	return int(tile.get("owner", -1)) == player_id
+
+
+func trustee_rows() -> Array:
+	return TrusteePreferences.rows(state)
+
+
+func apply_trustee_settings(rows: Array) -> bool:
+	if state.get("phase", "") not in ["await_roll", "await_action"] or _trap_pending() or not _pending_finance().is_empty() or not AuctionRules.response(self).is_empty() or BankVisit.has_pending(state) or int(state.get("company_service_pending", 0)) > 0:
+		return false
+	return TrusteePreferences.commit(state, rows)
+
+
+func request_trustee_recovery() -> bool:
+	if state.get("phase", "") == "game_over":
+		return false
+	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
@@ -5256,6 +5281,8 @@ func _auction_assets(debtor_id: int, creditor_id: int) -> Dictionary:
 
 func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	var normalized: String = action.to_lower().strip_edges()
+	if _trustee_ai_dispatch and not TrusteeStrategy.action_allowed(state, normalized, params):
+		return _error("託管設定停用此操作")
 	var bank_token := pending_bank_visit()
 	if BankVisit.has_pending(state) or state.get("phase", "") == "await_bank":
 		var allowed_bank_actions: Array = BankVisit.ATM_ACTIONS if not bank_token.is_empty() and bank_token.kind == "pass" else BankVisit.BANK_ACTIONS
@@ -5618,6 +5645,7 @@ func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 		if fortune_facility_buy and facility_level == 0:
 			facility_updates["facility_type"] = fortune_facility_type
 		_update_facility_records(source_object_id, facility_updates)
+		LandTenure.acquire(self, facility)
 		if fortune_facility_buy:
 			_apply_fortune_construction_bonus(player_id, _facility_record(int(player.get("position", -1))))
 		var properties: Array = player.get("properties", []).duplicate(true)
@@ -5643,6 +5671,7 @@ func _buy_property(player_id: int, params: Dictionary = {}) -> Dictionary:
 	player["cash"] = int(player.get("cash", 0)) - price
 	_bank_add_cash(price)
 	tile["owner"] = player_id
+	LandTenure.acquire(self, tile)
 	var properties: Array = player.get("properties", [])
 	properties.append(int(tile["index"]))
 	player["properties"] = properties
@@ -6034,6 +6063,7 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 		state["bank"] = facility_bank
 		var source_object_id: int = int(facility.get("source_object_id", -1))
 		_update_facility_records(source_object_id, {"owner": player_id})
+		LandTenure.acquire(self, facility)
 		var buyer_facility_properties: Array = player.get("properties", []).duplicate(true)
 		var buyer_facility_id: int = _facility_canonical_index(int(player.get("position", -1)))
 		if not buyer_facility_properties.has(buyer_facility_id):
@@ -6081,6 +6111,7 @@ func _inventory_purchase_card(player_id: int) -> Dictionary:
 	else:
 		_bank_add_cash(price)
 	tile["owner"] = player_id
+	LandTenure.acquire(self, tile)
 	var buyer_properties: Array = player.get("properties", []).duplicate(true)
 	if not buyer_properties.has(int(tile.get("index", -1))):
 		buyer_properties.append(int(tile.get("index", -1)))
@@ -6571,6 +6602,8 @@ func _advance_to_next_alive(previous_id: int) -> void:
 			_apply_month_boundary()
 			if state.get("phase", "") == "game_over":
 				return
+			# Source expiry follows deadline, market and month-end settlement.
+			LandTenure.expire_today(self)
 		else:
 			var market: Dictionary = state.get("market", {})
 			var trends: Dictionary = market.get("trends", {})
@@ -6593,6 +6626,7 @@ func _advance_to_next_alive(previous_id: int) -> void:
 	if not (_is_setup() and wraps):
 		state["turn"] = int(state.get("turn", 1)) + 1
 	state["current_player"] = next_id
+	TrusteePreferences.recover(state)
 	_admit_loan_block(_player(next_id))
 	_engineering_admit(next_id)
 	AllianceRules.admit_player(self, next_id)
@@ -6913,7 +6947,19 @@ func _check_game_over(reason: String = "") -> void:
 		_record_event("game_over", result_event)
 
 
+var _trustee_ai_dispatch := false
+var _trustee_bank_balanced := false
+
+
 func run_ai_turn() -> Dictionary:
+	_trustee_ai_dispatch = true
+	_trustee_bank_balanced = false
+	var result := _run_ai_turn_dispatch()
+	_trustee_ai_dispatch = false
+	return result
+
+
+func _run_ai_turn_dispatch() -> Dictionary:
 	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
 		return _result(false, "等待商店操作", {"awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "await_shop":
@@ -7104,7 +7150,7 @@ func _ai_action(player_id: int) -> void:
 			if bool(buy_result.get("ok", false)):
 				return
 		var property_cap: int = _property_level_cap(tile, _is_remodel())
-		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile) + 500:
+		if owner == player_id and not bool(state.get("property_action_used", false)) and int(tile.get("building_level", 0)) < property_cap and int(player.get("cash", 0)) >= _upgrade_price(tile) + TrusteeStrategy.upgrade_reserve(state, player_id):
 			var upgrade_result: Dictionary = choose_action("upgrade")
 			if bool(upgrade_result.get("ok", false)):
 				return
@@ -7148,16 +7194,21 @@ func _ai_action(player_id: int) -> void:
 			var face_price := int(company.stock_value) / 10000
 			if face_price > 0:
 				var quantity := mini(int(company.treasury), mini(int(state.company_purchase_remaining), maxi(0, int(player.cash)-5000) / face_price))
-				if quantity > 0 and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
-	if bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
+				if quantity > 0 and TrusteeStrategy.may_buy(state, player_id, OriginalStockMarket.symbol(int(company.stock_index)), quantity) and choose_action("buy_company", {"quantity":quantity}).get("ok", false): return
+	var trustee_preferences := TrusteePreferences.for_player(state, player_id)
+	if not trustee_preferences.is_empty() and not _trustee_bank_balanced and bool(state.get("bank_access", false)) and not _is_sunday():
+		_trustee_bank_balanced = true
+		if TrusteeStrategy.balance_bank(self, player_id, trustee_preferences):
+			return
+	if trustee_preferences.is_empty() and bool(state.get("bank_access", false)) and not _is_sunday() and int(player.get("cash", 0)) > 5000:
 		var deposit_amount := mini(int(player.get("cash", 0)) / 4, bank_transfer_limit("deposit", player_id))
 		if deposit_amount > 0 and bool(choose_action("deposit", {"amount": deposit_amount}).get("ok", false)):
 			return
-	if not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
+	if TrusteeStrategy.may_invest(state, player_id) and not _is_sunday() and int(player.get("deposit" if _is_companies() else "cash", 0)) >= 3000:
 		var prices: Dictionary = state.get("market", {}).get("prices", {})
 		var symbol: String = get_stock_symbols()[player_id % get_stock_symbols().size()]
 		var price: int = int(prices.get(symbol, 100))
-		if price > 0:
+		if price > 0 and TrusteeStrategy.may_buy(state, player_id, symbol, 1):
 			var stock_result: Dictionary = choose_action("buy_stock", {"symbol": symbol, "quantity": 1})
 			if not _is_companies() or bool(stock_result.get("ok", false)):
 				return
@@ -8261,7 +8312,7 @@ static func _validate_graph_source_classification(tile: Dictionary, index: int, 
 
 
 static func validate_save(data: Dictionary) -> Dictionary:
-	var errors: Array = []
+	var errors: Array = TrusteePreferences.validate(data)
 	var board_mode_marker: Variant = data.get("board_mode", "")
 	var version_marker: Variant = data.get("version", null)
 	var building_cards_save: bool = _valid_int(version_marker, BUILDING_CARD_SAVE_VERSION, BUILDING_CARD_SAVE_VERSION)
@@ -8513,6 +8564,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	var players: Variant = data.get("players", null)
 	var player_count: int = players.size() if typeof(players) == TYPE_ARRAY else 0
 	errors.append_array(SetupControls.validate_metadata(data, player_count, setup_save))
+	errors.append_array(LandTenure.validate_metadata(data, setup_save))
 	if typeof(players) != TYPE_ARRAY or player_count < MIN_PLAYERS or player_count > MAX_PLAYERS:
 		errors.append("invalid player count")
 	if data.has("news") and typeof(data.get("news", null)) == TYPE_DICTIONARY:
@@ -8804,7 +8856,7 @@ static func validate_save(data: Dictionary) -> Dictionary:
 			for money_key in ["cost", "upgrade_cost", "base_rent", "rent", "tax_amount"]:
 				if not _valid_int(tile.get(money_key, null), 0, 1000000000):
 					errors.append("invalid board %s %d" % [money_key, index])
-			if graph_save and not gods_save and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
+			if graph_save and not gods_save and not LandTenure.enabled(data) and owner_valid and int(owner_value) == -1 and _valid_int(tile.get("building_level", null), 1, MAX_PROPERTY_LEVEL):
 				errors.append("unowned graph property has improvements %d" % index)
 			if owner_valid and tile.get("kind", "") not in ["property", "facility"] and int(owner_value) != -1:
 				errors.append("non-property has owner %d" % index)
@@ -8865,6 +8917,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 						var facility_keys: Array = ["facility_type", "facility_node_index", "owner", "building_level", "facility_state", "cost", "land_price", "upgrade_cost", "fee_by_level"]
 						if research_save:
 							facility_keys.append_array(["research_tool", "research_turns"])
+						if LandTenure.enabled(data):
+							facility_keys.append("land_expiry")
 						for facility_key in facility_keys:
 							var tile_field: Variant = _canonicalize_json_numbers(tile.get(facility_key, null))
 							var first_field: Variant = _canonicalize_json_numbers(first_facility.get(facility_key, null))

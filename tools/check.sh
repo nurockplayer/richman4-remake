@@ -42,6 +42,8 @@ else
   echo "SKIP: source inventory and source shop catalog/core/UI/lifecycle gates require RICHMAN4_MAP_CATALOG"
   echo "SKIP: source bank catalog ingress requires RICHMAN4_MAP_CATALOG"
 fi
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/save_slots_concurrency.gd
 # Issue #135 source bank encounter, accounting, save schema, financing and UI.
 # Visual fixtures cover layout and controls; native atlas rendering remains a
 # separate gate, and the opaque-background test reports its headless skip.
@@ -67,6 +69,14 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/graph_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/calendar.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/setup_controls.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_preferences.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_core.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/trustee_consumers.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_dialog.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_source_layout.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/source_trustee_ui.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/land_tenure_transport.gd
 run_checked "$GODOT_BIN" --headless --path . --script tools/replay.gd -- 42 4
 run_checked "$GODOT_BIN" --headless --path . --script tests/ui_flow.gd
 # Issue #104 bank transfer headroom and UI cap acceptance.

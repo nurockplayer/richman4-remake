@@ -391,6 +391,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					command = "save"
 				elif event.keycode == KEY_L and source_hotkeys_bindings[23] == 0x4c:
 					command = "load"
+			elif not event.ctrl_pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+				# Manual p.7: ENTER is the source confirm command, so it confirms
+				# the pending advance command when nothing else owns the key.
+				command = "roll"
 			elif not event.ctrl_pressed and event.keycode == KEY_N:
 				if state.get("phase", "") == "game_over":
 					_restart_game()
@@ -3625,6 +3629,9 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 		source_help_controller.sync(game_state)
 	if source_shell.has_method("sync_snapshot"):
 		source_shell.call("sync_snapshot", state, _active_map_definition, get_player_wealth(current_index))
+	if source_shell.has_method("set_dev_mode"):
+		# The board keeps the raw hint/log text only on the development path.
+		source_shell.call("set_dev_mode", _is_development_path())
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	if source_shell.has_method("set_toolbar_enabled"):

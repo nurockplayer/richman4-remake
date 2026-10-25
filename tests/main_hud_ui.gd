@@ -5,6 +5,7 @@ const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 const CompanyFixture = preload("res://tests/fixtures/company_fixture.gd")
+const StatusFixture = preload("res://tests/fixtures/status_fixture.gd")
 const OriginalGods = preload("res://game/content/original_gods.gd")
 
 const SOURCE_HUD_DATA_LEFT := 46.0
@@ -345,6 +346,177 @@ func _test_source_turn_controls_normal_mode(ui: Control, shell: Control, game: O
 	ui._refresh_from_state()
 	_expect(shell.action_hint_label.visible, "dev mode keeps the raw turn hint line")
 	_expect(str(shell.action_hint_label.text).contains("擲骰"), "dev mode keeps the raw hint copy")
+
+
+## Release builds have no hint/log row, so a rejected action and a waiting turn
+## answer on the board status line instead of being silent.
+func _test_release_feedback_states(ui: Control, shell: Control) -> void:
+	ui._set_development_path(false)
+	ui._refresh_from_state()
+	var game: Object = ui.game_state
+	_expect(not shell.action_hint_label.visible, "the release lane keeps the dev hint row hidden")
+	ui._presentation_busy = true
+	var rejected: Dictionary = ui._invoke_game("roll")
+	ui._presentation_busy = false
+	_expect(str(rejected.get("message", "")) == "角色移動中。", "the movement gate rejects the action with its reason")
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text) == "角色移動中。", "a rejected action shows its reason on the board")
+	_expect(shell.status_toast.mouse_filter == Control.MOUSE_FILTER_IGNORE and _inside_reference(shell.status_toast), "the status toast is a passive overlay inside the 640x480 frame")
+	shell.advance_status_toast(2.5)
+	_expect(not shell.status_toast.visible, "the rejection toast hides after its short interval")
+
+	# An AI turn explains the pause.
+	game.state.current_player = 1
+	game.state.players[1].is_human = false
+	game.state.players[1].is_ai = true
+	game.state.phase = "await_roll"
+	game._set_action_options(1)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "an AI turn shows its waiting text in release builds")
+	# A finance key that exists but holds nothing is not an active response and
+	# must not mask the AI waiting text.
+	ui.state["pending_finance"] = {}
+	ui._sync_waiting_status()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "an empty pending finance entry does not mask the AI waiting text")
+	ui.state.erase("pending_finance")
+	ui._sync_waiting_status()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("思考中"), "clearing the finance entry restores the ordinary AI waiting text")
+
+	# A turn with nothing but 結束 explains the lone control.
+	game.state.current_player = 0
+	game.state.players[0].is_human = true
+	game.state.players[0].is_ai = false
+	game.state.players[0].position = 0
+	game.state.players[0].previous_position = -1
+	game.state.phase = "await_action"
+	game.state.action_options = ["end_turn"]
+	game.state.last_roll = []
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "結束", "the rest turn keeps its lone 結束 control")
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text) == "本回合休息，請結束回合", "the board explains what the lone 結束 control is for")
+
+	# A pending daily checkpoint is a short wait with its own text.
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	ui._source_autosave.capture_transition(game, {"day": 1}, {"day": 2, "phase": "await_roll"}, true)
+	_expect(ui._source_autosave.pending(), "the daily checkpoint fixture is pending")
+	ui._sync_waiting_status()
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text) == "每日自動存檔中…", "a pending daily checkpoint explains the wait")
+	ui._source_autosave.skip()
+	ui._sync_waiting_status()
+	_expect(not shell.status_toast.visible, "the checkpoint status clears with the pending checkpoint")
+
+	# A rejection returned by the simulation core (not a UI gate) answers too.
+	var core_rejection: Dictionary = ui._invoke_game("choose_route", [3])
+	_expect(not bool(core_rejection.get("ok", true)) and not str(core_rejection.get("message", "")).is_empty(), "the simulation core rejects a route outside its phase")
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text) == str(core_rejection.get("message", "")), "a simulation-level rejection shows the same board toast")
+	shell.advance_status_toast(2.5)
+
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not shell.status_toast.visible, "an ordinary human turn keeps the board free of status text")
+
+	# ENTER outside a route decision still confirms the GO advance command.
+	var go_enter := InputEventKey.new()
+	go_enter.keycode = KEY_ENTER
+	go_enter.pressed = true
+	var before_go: String = game.to_json()
+	ui._unhandled_input(go_enter)
+	_expect(game.to_json() != before_go, "ENTER keeps confirming GO when no route decision owns the turn")
+	var board: Node = ui.board_view
+	if board.has_method("_advance_movement"):
+		board._advance_movement(100.0)
+	_expect(ui.get("_presentation_busy") == false, "the ENTER advance finishes its movement presentation")
+	ui._set_development_path(true)
+
+
+## Keyboard route selection and the reaction gate around the source YES tiles.
+func _test_route_keyboard_and_reaction_gate(ui: Control, shell: Control) -> void:
+	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
+	var definition: Dictionary = normalized.get("definition", {})
+	_expect(ui._new_game(2302, 2, definition), "route keyboard fixture starts through the public new-game path")
+	var game: Object = ui.game_state
+	for player_id in range(2):
+		game.set_player_ai(player_id, false)
+		game.state.players[player_id].is_human = true
+		game.state.players[player_id].is_ai = false
+	game.state.current_player = 0
+	game.state.players[0].position = 1
+	game.state.players[0].previous_position = 0
+	game.state.phase = "await_route"
+	game.state.pending_movement = {"player_id": 0, "current_node": 1, "previous_node": 0}
+	game.state.route_options = [2, 3]
+	game.state.remaining_steps = 1
+	game.state.last_total = 1
+	game._sync_state()
+	ui._refresh_from_state()
+	await process_frame
+	await process_frame
+	_expect(shell.route_buttons.visible and shell.route_buttons.get_child_count() == 2, "the route decision exposes both destinations")
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	# The old ENTER→GO habit must never commit an unseen destination at a fork.
+	ui._input(enter)
+	_expect(int(game.state.players[0].position) == 1 and str(game.state.phase) == "await_route", "ENTER without a selected destination never commits a route")
+	# Route controls whose parent is hidden (a title or menu screen) stay inert.
+	shell.game_screen.hide()
+	var right := InputEventKey.new()
+	right.keycode = KEY_RIGHT
+	right.pressed = true
+	ui._input(right)
+	ui._input(enter)
+	_expect(int(game.state.players[0].position) == 1 and str(game.state.phase) == "await_route", "route controls under a hidden parent ignore keyboard input")
+	shell.game_screen.show()
+	_expect(shell.route_buttons.is_visible_in_tree(), "showing the board restores the route controls")
+	ui._input(right)
+	_expect(ui.get_viewport().gui_get_focus_owner() == shell.route_buttons.get_child(0), "RIGHT selects the first route destination")
+	ui._input(right)
+	_expect(ui.get_viewport().gui_get_focus_owner() == shell.route_buttons.get_child(1), "RIGHT moves the selection to the next destination")
+	var number := InputEventKey.new()
+	number.keycode = KEY_1
+	number.pressed = true
+	ui._input(number)
+	_expect(ui.get_viewport().gui_get_focus_owner() == shell.route_buttons.get_child(0), "a number key selects the matching destination")
+	ui._input(right)
+	ui._input(enter)
+	_expect(int(game.state.players[0].position) == 3, "ENTER confirms the keyboard-selected route")
+	var board: Node = ui.board_view
+	if board.has_method("_advance_movement"):
+		board._advance_movement(100.0)
+	_expect(ui.get("_presentation_busy") == false, "the keyboard route resolves through the ordinary presentation")
+
+	# A pending response card owns the turn: the visible YES tiles stay inert.
+	var status_definition: Dictionary = StatusFixture.definition()
+	_expect(ui._new_game(2303, 4, status_definition, ui._default_setup_options(4, status_definition)), "reaction fixture starts through the public new-game path")
+	game = ui.game_state
+	for player_id in range(4):
+		game.state.players[player_id].is_human = player_id == 0
+		game.state.players[player_id].is_ai = player_id != 0
+	game.state.current_player = 0
+	game.state.phase = "await_action"
+	game.state.action_options = ["buy", "end_turn"]
+	game.state.pending_trap = {"caster_id": 1, "target_id": 0}
+	game._sync_state()
+	ui._set_development_path(false)
+	ui._refresh_from_state()
+	_expect(ui._human_trap_response_pending(), "the reaction fixture targets the human player")
+	_expect(shell.status_toast.visible and str(shell.status_toast_text.text).contains("嫁禍卡"), "the release board shows the pending reaction text")
+	_expect(shell.buy_button.visible and shell.buy_button.disabled, "the purchase YES tile stays disabled while a reaction is pending")
+	_expect(shell.end_turn_button.visible, "the turn keeps another control reachable while the reaction is pending")
+
+	# Leave an ordinary turn for the remaining HUD checks.
+	game.state.pending_trap = {}
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not shell.status_toast.visible, "the landing status clears once the response is resolved")
 
 
 func _test_source_hud_detail_values(ui: Control, shell: Control, game: Object) -> void:
@@ -768,6 +940,8 @@ func _run() -> void:
 	_test_legacy_stock_source_route(ui, shell)
 	_test_stock_names(shell)
 	await _test_settlement_overlay_input(ui, shell)
+	_test_release_feedback_states(ui, shell)
+	await _test_route_keyboard_and_reaction_gate(ui, shell)
 	await _test_calendar_minimap_viewport_input(Vector2i(640, 480))
 	await _test_calendar_minimap_viewport_input(Vector2i(1280, 800))
 	ui.queue_free()

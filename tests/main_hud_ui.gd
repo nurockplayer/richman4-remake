@@ -435,6 +435,66 @@ func _test_release_feedback_states(ui: Control, shell: Control) -> void:
 	ui._set_development_path(true)
 
 
+## An empty or null pending_finance entry is a cleared key, not an active
+## response: it must not block roll, end turn or the modal gates.  A populated
+## dictionary still owns the turn.
+func _test_pending_finance_gate(ui: Control, shell: Control) -> void:
+	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
+	var definition: Dictionary = normalized.get("definition", {})
+	_expect(ui._new_game(2304, 2, definition), "finance gate fixture starts through the public new-game path")
+	var game: Object = ui.game_state
+	for player_id in range(2):
+		game.set_player_ai(player_id, false)
+		game.state.players[player_id].position = player_id
+		game.state.players[player_id].previous_position = -1
+	game.state.current_player = 0
+	game.state.phase = "await_roll"
+	game.state.pending_finance = {}
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not ui._finance_pending(), "an empty finance dictionary is not a pending response")
+	_expect(not shell.roll_button.disabled, "an empty finance dictionary does not block the roll")
+	_expect(str(shell.action_hint_label.text) != "請回應付款選擇", "an empty finance dictionary shows no payment hint")
+	_expect(str(ui._waiting_status_text()) != "請回應付款選擇", "an empty finance dictionary shows no payment status")
+	_expect(ui._source_view_operation_allowed(), "an empty finance dictionary does not block the view action")
+
+	# A key that holds null is just as inactive as an empty dictionary.
+	game.state.pending_finance = null
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not ui._finance_pending(), "a null finance entry is not a pending response")
+	_expect(not shell.roll_button.disabled, "a null finance entry does not block the roll")
+
+	# End turn also stays reachable with the empty entry present.
+	game.state.phase = "await_action"
+	game.state.action_options = ["end_turn"]
+	game.state.last_roll = []
+	game.state.pending_finance = {}
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(not shell.end_turn_button.disabled, "an empty finance dictionary does not block ending the turn")
+
+	# A genuine response is still a pending request and blocks the same gates.
+	game.state.phase = "await_roll"
+	game.state.pending_finance = {"kind": "tax", "stage": "free", "payer_id": 0, "creditor_id": 1, "amount": 300, "node_id": 0, "caster_id": 1}
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+	_expect(ui._finance_pending(), "a populated finance dictionary is a pending response")
+	_expect(shell.roll_button.disabled, "a populated finance dictionary blocks the roll")
+	_expect(str(shell.action_hint_label.text) == "請回應付款選擇", "a populated finance dictionary shows its payment hint")
+	_expect(str(ui._waiting_status_text()) == "請回應付款選擇", "a populated finance dictionary shows its payment status")
+	_expect(not ui._source_view_operation_allowed(), "a populated finance dictionary blocks the view action")
+
+	# Leave an ordinary turn for the remaining HUD checks.
+	game.state.pending_finance = {}
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	game._sync_state()
+	ui._refresh_from_state()
+
+
 ## Keyboard route selection and the reaction gate around the source YES tiles.
 func _test_route_keyboard_and_reaction_gate(ui: Control, shell: Control) -> void:
 	var normalized: Dictionary = Maps.normalize_map(BaseMap.make())
@@ -941,6 +1001,7 @@ func _run() -> void:
 	_test_stock_names(shell)
 	await _test_settlement_overlay_input(ui, shell)
 	_test_release_feedback_states(ui, shell)
+	_test_pending_finance_gate(ui, shell)
 	await _test_route_keyboard_and_reaction_gate(ui, shell)
 	await _test_calendar_minimap_viewport_input(Vector2i(640, 480))
 	await _test_calendar_minimap_viewport_input(Vector2i(1280, 800))

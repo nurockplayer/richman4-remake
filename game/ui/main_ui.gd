@@ -1298,7 +1298,7 @@ func _source_trustee_modal_open() -> bool:
 func _source_trustee_operation_allowed() -> bool:
 	if source_trustee_controller == null or game_state == null or not game_state.has_method("trustee_rows") or not game_state.has_method("apply_trustee_settings") or source_shell == null or _source_modal_open() or not _source_save_operation_allowed() or not _is_human_turn():
 		return false
-	return state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0 and not game_state.trustee_rows().is_empty()
+	return state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not _finance_pending() and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0 and not game_state.trustee_rows().is_empty()
 
 func _on_source_ai_requested() -> void:
 	if not _source_trustee_operation_allowed():
@@ -1380,7 +1380,7 @@ func _restore_trustee_window_policy() -> void:
 func _source_view_operation_allowed() -> bool:
 	if game_state == null or source_shell == null or _source_modal_open() or not _source_save_operation_allowed():
 		return false
-	return not _presentation_busy and not _ai_pending and not _trap_response_busy and not _finance_response_busy and not _auction_response_busy and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+	return not _presentation_busy and not _ai_pending and not _trap_response_busy and not _finance_response_busy and not _auction_response_busy and _pending_trap_for_ui().is_empty() and not _finance_pending() and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
 
 
 func _on_source_view_requested() -> void:
@@ -4054,7 +4054,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	var rest_status := _player_rest_status(player)
 	var detained := _has_original_statuses() and not rest_status.is_empty()
 	var auction_pending := _pending_auction_for_ui()
-	var reaction_pending := not _pending_trap_for_ui().is_empty() or state.has("pending_finance") or not auction_pending.is_empty()
+	var reaction_pending := not _pending_trap_for_ui().is_empty() or _finance_pending() or not auction_pending.is_empty()
 	_update_load_gate()
 	roll_button.text = "擲骰"
 	if not rest_status.is_empty():
@@ -4102,7 +4102,7 @@ func _update_actions(phase: String, current_index: int) -> void:
 	elif not auction_pending.is_empty():
 		var auction_bidder_id := int(auction_pending.get("bidder_id", -1))
 		action_hint_label.text = "請%s回應拍賣" % _player_name(auction_bidder_id) if _human_auction_response_pending() else "拍賣進行中"
-	elif state.has("pending_finance"):
+	elif _finance_pending():
 		action_hint_label.text = "請回應付款選擇"
 	elif reaction_pending:
 		action_hint_label.text = "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
@@ -4148,8 +4148,7 @@ func _waiting_status_text() -> String:
 	if not auction_pending.is_empty():
 		var bidder_id := int(auction_pending.get("bidder_id", -1))
 		return "請%s回應拍賣" % _player_name(bidder_id) if _human_auction_response_pending() else "拍賣進行中"
-	var pending_finance: Variant = state.get("pending_finance", {})
-	if pending_finance is Dictionary and not (pending_finance as Dictionary).is_empty():
+	if _finance_pending():
 		return "請回應付款選擇"
 	if not _pending_trap_for_ui().is_empty():
 		return "請決定是否使用嫁禍卡" if _human_trap_response_pending() else "等待嫁禍卡回應"
@@ -4298,6 +4297,13 @@ func _update_financial_popup() -> void:
 	financial_popup.sync(state, targets)
 
 
+## Only a populated response dictionary is an active finance prompt.  An empty
+## or null entry (a cleared key left behind) must not block the turn or modals.
+func _finance_pending() -> bool:
+	var pending: Variant = state.get("pending_finance", {})
+	return pending is Dictionary and not (pending as Dictionary).is_empty()
+
+
 func _pending_auction_for_ui() -> Dictionary:
 	var pending: Variant = state.get("pending_auction", {})
 	return pending if pending is Dictionary else {}
@@ -4377,7 +4383,7 @@ func _maybe_schedule_ai_turn() -> void:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
-	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
+	if _ai_pending or state.is_empty() or String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or _finance_pending():
 		return
 	var auction_pending := _pending_auction_for_ui()
 	if not auction_pending.is_empty():
@@ -4415,7 +4421,7 @@ func _on_ai_timer_timeout(generation := -1) -> void:
 		return
 	if (news_popup != null and news_popup.visible) or (fate_popup != null and fate_popup.visible):
 		return
-	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or state.has("pending_finance"):
+	if String(state.get("phase", "")) == "game_over" or not _pending_trap_for_ui().is_empty() or _finance_pending():
 		return
 	var auction_pending := _pending_auction_for_ui()
 	if not auction_pending.is_empty():
@@ -5942,7 +5948,7 @@ func _source_shop_modal_open() -> bool:
 	return game_state != null and game_state.has_method("shop_visit_snapshot") and not game_state.shop_visit_snapshot().is_empty()
 
 func _source_inventory_operation_allowed() -> bool:
-	return _has_original_inventory() and _is_human_turn() and not _source_modal_open() and not _presentation_busy and not _ai_pending and state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not state.has("pending_finance") and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
+	return _has_original_inventory() and _is_human_turn() and not _source_modal_open() and not _presentation_busy and not _ai_pending and state.get("phase", "") in ["await_roll", "await_action"] and _pending_trap_for_ui().is_empty() and not _finance_pending() and _pending_auction_for_ui().is_empty() and int(state.get("company_service_pending", 0)) == 0
 
 func _open_source_inventory(mode: String) -> void:
 	if not _source_inventory_operation_allowed(): return

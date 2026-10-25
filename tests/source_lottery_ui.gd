@@ -182,6 +182,13 @@ func _test_draw_report() -> void:
 	panel.continued.emit()
 	panel.continued.emit()
 	await settle()
+	# The month-end statement queued by the same action follows the draw report.
+	var monthly: Control = ui.source_monthly_controller
+	expect(monthly.is_open() and not controller.is_open(), "monthly statement waits for the draw report")
+	while monthly.is_open() and monthly.report_panel != null:
+		monthly.report_panel.continued.emit()
+		await settle()
+		await settle()
 	expect(not controller.is_open() and not ui._source_modal_open(), "one acknowledgement clears the draw report")
 	expect(game.to_json() == settled, "acknowledgement never repeats the award or consumes RNG")
 	expect(ui._source_save_operation_allowed(), "draw acknowledgement releases the save gate")

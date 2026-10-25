@@ -11,6 +11,8 @@ func _initialize() -> void:
 	test_boundaries()
 	test_save_validation()
 	test_ai_continuation()
+	test_snapshot_skips_unavailable_offers()
+	test_ai_listing_rejection_keeps_slot()
 	test_surrender_during_sale()
 	print("Source SALE rules checks: %d, failures: %d" % [checks,failures])
 	quit(1 if failures else 0)
@@ -266,6 +268,69 @@ func test_ai_continuation() -> void:
 	var result: Dictionary = game.run_ai_match(4)
 	expect(result.get("completed_turns",0) == 4,"public AI runner progresses with SALE integration")
 	valid_roundtrip(game,"AI progression")
+
+func test_snapshot_skips_unavailable_offers() -> void:
+	var game := sale_game()
+	expect(Inventory.grant_tool(game.state.inventory_supply,game.state.players[1].tools,"機車",1).ok,"live seller fixture holds the listed tool")
+	open_for(game,1)
+	expect(create(game,"tool",5,1,10).ok,"live seller lists the fixture tool")
+	open_for(game,0)
+	expect(game.sale_snapshot().players[1].offers.size() == 1,"live seller offer stays on the board")
+	game.state.players[1].alive = false
+	var before: String = game.to_json()
+	expect(game.sale_snapshot().players[1].offers.is_empty(),"dead seller offer is hidden from the snapshot")
+	expect(game.to_json() == before and game.state.sale_board.offers[1].size() == 1,"snapshot filtering leaves the durable board untouched")
+	Sale.cleanup(game)
+	expect(game.state.sale_board.offers[1].is_empty(),"cleanup drops the same dead-seller offer")
+
+	game = sale_game()
+	expect(Inventory.grant_tool(game.state.inventory_supply,game.state.players[1].tools,"機車",1).ok,"stale-holding seller fixture holds the tool")
+	open_for(game,1)
+	expect(create(game,"tool",5,1,10).ok,"stale-holding seller lists the tool")
+	open_for(game,0)
+	expect(Inventory.consume_tool(game.state.inventory_supply,game.state.players[1].tools,"機車",1).ok,"listed tool leaves the seller backpack")
+	before = game.to_json()
+	expect(game.sale_snapshot().players[1].offers.is_empty(),"spent holding is hidden from the snapshot")
+	expect(game.to_json() == before and game.state.sale_board.offers[1].size() == 1,"stale-holding filtering leaves the durable board untouched")
+	Sale.cleanup(game)
+	expect(game.state.sale_board.offers[1].is_empty(),"cleanup drops the same stale-holding offer")
+
+func test_ai_listing_rejection_keeps_slot() -> void:
+	var game := sale_game()
+	game.set_player_ai(0,true)
+	game.state.players[0].cards = []
+	game.state.players[0].tools = {}
+	var board: Dictionary = game.state.sale_board
+	board.offers[0] = []
+	var held := ["路障","地雷","定時炸彈","機車","汽車","飛彈","遙控骰子"]
+	for index in range(held.size()):
+		var item: Dictionary = Catalogue.tool(held[index])
+		game.state.players[0].tools[str(item.id)] = 1
+		board.offers[0].append({"offer_id": index + 1, "revision": 1, "seller_id": 0, "category": "tool", "source_id": int(item.source_id), "quantity": 1, "asking": 1, "days": 0})
+	game.state.players[0].tools["機器娃娃"] = 3
+	board.sequence = Sale.ID_LIMIT
+	game.state.phase = "await_roll"
+	game._set_action_options(0)
+	# The board is full and its sequence is exhausted, so the only AI listing
+	# candidate can only be rejected; the seventh offer must survive.
+	var probe := RandomNumberGenerator.new()
+	var probe_state := 0
+	for candidate_state in range(1,4096):
+		probe.state = candidate_state
+		if probe.randi_range(0,14) == 0:
+			probe_state = candidate_state
+			break
+	expect(probe_state > 0,"fixture finds a listing-decision RNG state")
+	game._rng.state = probe_state
+	var expected := RandomNumberGenerator.new()
+	expected.state = probe_state
+	expected.randi_range(0,14)
+	expected.randi_range(0,0)
+	expected.randi_range(0,2)
+	expected.randi_range(0,3)
+	Sale.ai_turn(game)
+	expect(board.offers[0].size() == 7,"rejected AI listing restores the dropped seventh offer")
+	expect(int(game._rng.state) == int(expected.state),"AI listing keeps the source draw order")
 
 func test_surrender_during_sale() -> void:
 	var game := sale_game()

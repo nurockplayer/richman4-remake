@@ -209,11 +209,12 @@ func _show_confirmation() -> void:
 	confirmation.configure(_visuals,str(_owner.sale_snapshot().edition),_bindings)
 	_render()
 
-func _request(method: String, args: Array) -> void:
-	if _owner == null or _blocked or _action_pending: return
+func _request(method: String, args: Array) -> bool:
+	if _owner == null or _blocked or _action_pending: return false
 	_action_pending = true
 	_last_method = method
 	action_requested.emit(method,args)
+	return true
 
 func apply_action_result(result: Dictionary) -> void:
 	_action_pending = false
@@ -234,8 +235,10 @@ func apply_action_result(result: Dictionary) -> void:
 
 func close_current() -> void:
 	if _owner == null: return
+	# A blocked or pending host drops the request; the open amount pad must
+	# survive that drop instead of being torn down before the close is accepted.
+	if not _request("close_sale",[_session_id]): return
 	_clear_children()
-	_request("close_sale",[_session_id])
 
 func _clear_children() -> void:
 	_child_generation += 1

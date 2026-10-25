@@ -89,6 +89,27 @@ func controller_checks() -> void:
 	expect(property_rows.size() == 4 and property_rows[0].offers.size() == 1,"property offer carries top-level building identity")
 	controller.close_current()
 	expect(not controller.is_open() and actor.state.phase == "await_action","property board still closes without soft-lock")
+	# A close request the host drops (blocked or pending) must leave the open
+	# amount pad intact; only an accepted request tears the child down.
+	actor = sale_game()
+	open_for(actor,0)
+	controller.sync(actor,false)
+	select_tool()
+	var pending_pad: Control = controller.amount_pad
+	expect(pending_pad != null,"amount pad pending before the dropped close")
+	calls.clear()
+	controller.set("_action_pending",true)
+	controller.close_current()
+	expect(controller.amount_pad == pending_pad and controller.is_open(),"pending close keeps the amount pad")
+	expect(calls.is_empty(),"pending close never reaches the core")
+	controller.set("_action_pending",false)
+	controller.sync(actor,true)
+	controller.close_current()
+	expect(controller.amount_pad == pending_pad,"blocked close keeps the amount pad")
+	expect(calls.is_empty(),"blocked close never reaches the core")
+	controller.sync(actor,false)
+	controller.close_current()
+	expect(controller.amount_pad == null and not controller.is_open(),"accepted close clears the pad and disposes the controller")
 	controller.queue_free()
 	await process_frame
 	print("Source SALE controller checks: %d, failures: %d" % [checks,failures])

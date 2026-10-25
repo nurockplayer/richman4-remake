@@ -168,6 +168,15 @@ func _move(viewport: SubViewport, point: Vector2, held := true) -> void:
 	await _settle()
 
 
+func _key(viewport: SubViewport, keycode: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.physical_keycode = keycode
+	event.pressed = true
+	viewport.push_input(event, true)
+	await _settle()
+
+
 func _empty_holdings() -> Dictionary:
 	return {"stock": [], "property": [], "tool": [], "card": []}
 
@@ -488,6 +497,13 @@ func _run() -> void:
 	await _release(viewport, Vector2(40, 40), MOUSE_BUTTON_RIGHT)
 	expect_equal(cancelled_count, 1, "board right release cancels")
 
+	# Esc is the same close gesture as the right release and the EXIT button.
+	panel.configure(_board_model())
+	cancelled_count = 0
+	await _key(viewport, KEY_ESCAPE)
+	expect_equal(cancelled_count, 1, "board Esc cancels through the same close request")
+	expect(not panel.is_open(), "board Esc hides the panel")
+
 	# Stock picker: compact positive rows only.
 	var zero_stock := _picker_model("stock", {"stock":[{"source_id":0,"name":"第一公司","quantity":3,"reference_value":30}],"property":[],"tool":[],"card":[]})
 	expect(panel.configure(zero_stock) and panel.find_child("SourceSaleStockName0",true,false) != null,"source stock id zero is a valid rendered holding")
@@ -504,6 +520,10 @@ func _run() -> void:
 	await _click(viewport, Vector2(473, 48))
 	expect_equal(_last_action(), ["back", {}], "stock close emits back")
 	expect(panel.is_open(), "stock close does not cancel the whole panel")
+	actions.clear()
+	await _key(viewport, KEY_ESCAPE)
+	expect_equal(_last_action(), ["back", {}], "picker Esc emits back like the right release")
+	expect(panel.is_open(), "picker Esc does not cancel the whole panel")
 
 	# Tool picker: compact positive rows and 74 icons.
 	var tool_model := _picker_model("tool", {"stock": [], "property": [], "tool": _tool_holdings(), "card": []})

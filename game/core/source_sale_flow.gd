@@ -147,7 +147,11 @@ static func snapshot(game: Object) -> Dictionary:
 	for player in game.state.players:
 		var character := clampi(int(player.get("character_id", 0)), 0, 11)
 		var row := {"player_id": int(player.id), "name": str(player.name), "character_id": character, "sex": CHARACTER_SEX[character], "alive": bool(player.alive), "offers": []}
-		for offer in board.offers[int(player.id)]: row.offers.append(_decorated(game, offer))
+		# cleanup drops listings whose seller died or whose holding vanished.
+		# The public board must not show what the next cleanup would remove;
+		# filter the copy so a snapshot never mutates the durable board.
+		for offer in board.offers[int(player.id)]:
+			if _holding_valid(game, offer): row.offers.append(_decorated(game, offer))
 		result.players.append(row)
 	result["holdings"] = holdings(game, int(session.player_id))
 	result["can_create"] = board.offers[int(session.player_id)].size() < 7 and int(board.sequence) < ID_LIMIT
@@ -349,8 +353,18 @@ static func ai_turn(game: Object) -> void:
 		var category := str(listing.category)
 		if not candidates.is_empty():
 			var source_id := int(candidates[game._rng.randi_range(0, candidates.size()-1)])
-			if board.offers[player_id].size() >= 7: board.offers[player_id].pop_front()
-			_create(game, player_id, {"category": category, "source_id": source_id, "quantity": 1, "asking": reference_value(game, category, source_id)})
+			var offers: Array = board.offers[player_id]
+			var replacing := false
+			for existing in offers:
+				if str(existing.get("category")) == category and int(existing.get("source_id")) == source_id:
+					replacing = true
+					break
+			# Free a slot only for a new listing; the core validates before it
+			# mutates, so a rejected listing must restore the dropped offer.
+			var dropped: Variant = null
+			if not replacing and offers.size() >= 7: dropped = offers.pop_front()
+			var listed: Dictionary = _create(game, player_id, {"category": category, "source_id": source_id, "quantity": 1, "asking": reference_value(game, category, source_id)})
+			if not listed.get("ok", false) and dropped != null: offers.push_front(dropped)
 	if game._rng.randi_range(0, 2) == 0:
 		for offer in board.offers[player_id]:
 			if offer.category in ["tool", "card"] and int(offer.revision) < ID_LIMIT:

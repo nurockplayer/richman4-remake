@@ -165,7 +165,7 @@ func read(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
 			"slot": int(resolved.slot),
 			"path": str(resolved.path),
 		}
-	return _inspect(int(resolved.slot), str(resolved.path), true, expected_fingerprint)
+	return _inspect(int(resolved.slot), str(resolved.path), true, _normalize_expected_fingerprint(expected_fingerprint))
 
 
 func read_slot(slot_id: Variant, expected_fingerprint: Variant = null) -> Dictionary:
@@ -236,7 +236,7 @@ func write(slot_id: Variant, payload: Variant, expected_fingerprint: Variant = n
 			"io_error": lock.get("io_error", ERR_CANT_CREATE),
 			"slot": slot, "path": destination,
 		}
-	var result := _write_locked(slot, destination, snapshot, expected_fingerprint)
+	var result := _write_locked(slot, destination, snapshot, _normalize_expected_fingerprint(expected_fingerprint))
 	var release_error := int(_io_call_value("release_write_lock", [str(lock.path)], ERR_CANT_CREATE))
 	if release_error != OK:
 		# A successful rename remains a successful save. Surface the cleanup
@@ -637,6 +637,14 @@ func _error_result(error: String, slot_id: Variant) -> Dictionary:
 		"error": error,
 		"slot": slot_id,
 	}
+
+
+## Fingerprints are produced as lowercase hex, but accept the same digest in
+## either case and compare canonically.
+func _normalize_expected_fingerprint(value: Variant) -> Variant:
+	if value == null:
+		return null
+	return str(value).to_lower()
 
 
 func _valid_expected_fingerprint(value: Variant) -> bool:

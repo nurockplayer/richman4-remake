@@ -339,6 +339,12 @@ func _test_read_expected_fingerprint_protection() -> void:
 	expect_equal(same_fingerprint.get("status"), SaveSlotsScript.STATUS_VALID, "matching read fingerprint remains valid")
 	expect_equal(same_fingerprint.get("snapshot", {}).get("seed"), payload_a.get("seed"), "matching read returns snapshot A")
 
+	var uppercase_read := _read_with_expected(store, 1, expected_a.to_upper())
+	expect(bool(uppercase_read.get("ok", false)), "uppercase read fingerprint matches the same bytes")
+	expect_equal(uppercase_read.get("snapshot", {}).get("seed"), payload_a.get("seed"), "uppercase read returns snapshot A")
+	var uppercase_write: Dictionary = store.write(1, payload_a, expected_a.to_upper())
+	expect(bool(uppercase_write.get("ok", false)), "uppercase write fingerprint matches the same bytes")
+
 	expect(bool(store.write(1, payload_b).get("ok", false)), "read fingerprint fixture replaces snapshot with valid B")
 	var stale_read := _read_with_expected(store, 1, expected_a)
 	expect(not bool(stale_read.get("ok", true)), "read rejects a replaced valid snapshot")

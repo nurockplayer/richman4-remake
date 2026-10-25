@@ -6665,6 +6665,10 @@ func surrender(player_id: int = -1) -> Dictionary:
 	var player: Dictionary = _player(target_id)
 	if player.is_empty() or not bool(player.get("alive", false)):
 		return _error("玩家不在對局中")
+	# Shop, minigame and SALE sessions own the turn until they close; conceding
+	# underneath them would leave a session naming a departed actor.
+	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale"]:
+		return _error("請先關閉目前視窗再投降")
 	_declare_bankruptcy(target_id, -1, 0, "surrender")
 	# Bankruptcy advances a moving current actor itself. An action-phase actor
 	# keeps the turn, so hand it over here exactly once.

@@ -20,6 +20,9 @@ static func path(relative: String) -> String:
 	var root := override_root()
 	if root.is_empty():
 		return USER_ROOT + relative
+	# Plain FileAccess writes (settings, hotkeys, audio, legacy save) do not
+	# create parents, so make sure the override root itself exists.
+	DirAccess.make_dir_recursive_absolute(root)
 	return root.path_join(relative)
 
 

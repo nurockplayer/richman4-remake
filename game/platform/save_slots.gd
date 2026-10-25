@@ -749,7 +749,8 @@ func _canonical_path(path: String) -> String:
 	if path.is_empty():
 		return ""
 	var normalized := UserPaths.resolve(path.simplify_path())
-	if normalized.begins_with("res://"):
+	# Keep the canonical form absolute whichever write root is active.
+	if normalized.begins_with("res://") or normalized.begins_with("user://"):
 		normalized = ProjectSettings.globalize_path(normalized)
 	return normalized.simplify_path()
 

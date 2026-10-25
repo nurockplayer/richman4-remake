@@ -224,6 +224,9 @@ func _test_save_and_end_order() -> void:
 	var missing: Dictionary = game.to_dict()
 	missing.board[2].erase("land_expiry")
 	_expect(not Game.validate_save(missing).ok, "enabled tenure requires complete board metadata")
+	var owned_no_term: Dictionary = game.to_dict()
+	owned_no_term.board[2].land_expiry = 0
+	_expect(not Game.validate_save(owned_no_term).ok and Game.from_dict(owned_no_term) == null, "owned land without a term would never expire and is rejected")
 	var grafted: Dictionary = game.to_dict()
 	grafted.erase("land_tenure_months")
 	_expect(not Game.validate_save(grafted).ok, "expiry cannot be grafted into an omitted-option old save")

@@ -124,6 +124,11 @@ static func validate_metadata(data: Dictionary, setup_save: bool) -> Array[Strin
 		if active and tile.get("kind", "") in ["property", "facility"]:
 			if not _valid_expiry(tile.get(EXPIRY_KEY, null)):
 				errors.append("invalid land expiry %d" % index)
+			elif int(tile.get("owner", -1)) >= 0 and int(tile.get(EXPIRY_KEY, 0)) == 0:
+				# Expiry only starts on acquisition, so an owned land without a
+				# term would never be reclaimed. Released land may keep a stale
+				# token: it is reset when the land is acquired again.
+				errors.append("owned land without tenure expiry %d" % index)
 		elif tile.has(EXPIRY_KEY):
 			errors.append("land expiry without enabled tenure or land %d" % index)
 	return errors

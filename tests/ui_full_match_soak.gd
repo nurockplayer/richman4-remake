@@ -2,16 +2,22 @@ extends SceneTree
 ## Full-match MainUI soak: drives the real MainUI (not only the simulation
 ## helper) through complete matches and fails on a soft-lock or an invalid save.
 ##
-## Every seed plays through the same entry points a player uses: the GO/YES/NO
-## controls, route buttons, payment/auction/trap responses, and the presenter
-## modals (bank, monthly statements, SALE, lottery, minigame). The match runs
-## until game_over or the turn cap; nothing here advances the core directly.
+## Every seed plays through the same entry points a player uses: the source
+## shell's GO/YES/NO buttons and route buttons (pressed through their real
+## signals and required to be visible and enabled), the payment/auction/trap
+## responses, and the presenter modals (bank, monthly statements, SALE, lottery,
+## minigame). Presentation is never skipped: movement has to deliver its own
+## movement_finished callback, or the stall detector fails the run. The only
+## direct model call is the minigame clock tick the presenter itself drives;
+## pointer input inside minigames is covered by the dedicated minigame tests.
+## Human matches are bounded soaks that stop at the turn cap; the all-AI seed
+## carries a day limit and must reach game_over with a winner.
 ##
 ## Checkpoints assert:
 ##   * the simulation makes visible progress within a bounded number of steps;
 ##   * GameState.validate_save accepts the live snapshot;
 ##   * a SaveSlots write/read round-trip restores an identical snapshot;
-##   * a written AUTO checkpoint is a valid save when autosave fired.
+##   * every match writes a fresh, valid AUTO checkpoint for its own seed.
 ##
 ## RICHMAN4_SOAK_LONG=1 runs more seeds and a larger turn cap. When
 ## RICHMAN4_MAP_CATALOG is set, one match also runs on the first playable real
@@ -44,6 +50,7 @@ var _ui: Control
 var _scratch_root := ""
 var _round_trip_dir := ""
 var _saw_autosave := false
+var _match_saw_autosave := false
 var _label := ""
 var _steps := 0
 var _last_progress := ""
@@ -77,9 +84,15 @@ func _run() -> void:
 	if _ui.audio_controller != null:
 		_ui.audio_controller.call("stop")
 	# The soak owns every advance: AI turns, modals and presentation are driven
-	# explicitly so a silent stall can never be hidden by a scheduled timer.
+	# explicitly so a silent stall can never be hidden by a scheduled timer. The
+	# 0.82 s AI timer is only created from MainUI._process, so disabling it also
+	# guarantees no asynchronous turn competes with the manual driver.
 	_ui.set_process(false)
 	_ui._set_development_path(true)
+	# Presentation is real, not skipped: movement must deliver its own
+	# movement_finished callback. Compress its clock so a full match stays fast.
+	_ui._source_settings["speed"] = 2
+	Engine.time_scale = 30.0
 
 	var long_run := OS.get_environment("RICHMAN4_SOAK_LONG") == "1"
 	var seeds: Array = LONG_SEEDS if long_run else CI_SEEDS
@@ -185,7 +198,10 @@ func _run_match(seed_value: int, player_count: int, definition: Dictionary, flag
 		if not bool(player.get("is_ai", false)):
 			human_players += 1
 	_check(human_players == expected_humans, "human/AI roster matches the requested setup")
+	_check(not _ui.is_processing(), "MainUI process is disabled so no scheduled timer competes with the soak")
+	_check(not _ui._ai_pending, "no asynchronous AI turn is pending at match start")
 	_ui._refresh_from_state()
+	_match_saw_autosave = false
 	_round_trip_dir = _scratch_root.path_join("soak-round-trip-%d-%d" % [seed_value, kind.hash()])
 	DirAccess.make_dir_recursive_absolute(_round_trip_dir)
 	_steps = 0
@@ -221,6 +237,7 @@ func _run_match(seed_value: int, player_count: int, definition: Dictionary, flag
 		await _settle_finished_match(game)
 	if not stall:
 		_checkpoint(game, "end")
+		_check(_match_saw_autosave, "the UI autosave wrote a fresh AUTO checkpoint for this match")
 		var validation: Dictionary = GameState.validate_save(game.to_dict())
 		_check(bool(validation.get("ok", false)), "final snapshot validates: " + str(validation.get("errors", [])))
 		if str(game.state.get("phase", "")) == "game_over":
@@ -250,10 +267,9 @@ func _settle_finished_match(game: Object) -> void:
 
 func _soak_step(game: Object) -> String:
 	if _ui._presentation_busy:
-		_ui._on_movement_finished()
-		if _ui.board_view != null:
-			_ui.board_view.cancel_movement()
-		return "finish movement"
+		# Movement must complete through board_view.movement_finished, exactly as
+		# it does for a player; a dead callback therefore trips the stall detector.
+		return "wait movement"
 	if _ui.news_popup != null and _ui.news_popup.visible:
 		_ui.news_popup.cancel_presentation()
 		return "close news"
@@ -366,28 +382,30 @@ func _human_turn(game: Object) -> String:
 				_sale_probe_done = true
 				_ui._on_source_sale_requested()
 				return "open sale"
-			_ui._on_roll_pressed()
-			return "roll"
+			if _press_source_control("roll_button", "GO"):
+				return "roll"
+			return "wait GO control"
 		"await_route":
 			var route_options: Array = _as_array(game.state.get("route_options", []))
 			if route_options.is_empty():
 				return "wait route"
-			_ui._on_source_route_requested(int(route_options[0]))
-			return "route"
+			if _press_source_route(route_options.size()):
+				return "route"
+			return "wait route control"
 		"await_action":
 			if int(game.state.get("turn", 0)) == _skip_action_turn:
-				if not _ui.end_turn_button.disabled:
-					_ui._on_end_turn_pressed()
+				if _press_source_control("end_turn_button", "NO"):
 					return "end turn after popup"
 				return "wait action"
-			if _has_option(options, "buy") and not _ui.buy_button.disabled:
-				_ui._on_buy_pressed()
-				return "buy"
-			if _has_option(options, "upgrade") and not _ui.upgrade_button.disabled:
-				_ui._on_upgrade_pressed()
-				return "upgrade"
-			if not _ui.end_turn_button.disabled:
-				_ui._on_end_turn_pressed()
+			if _has_option(options, "buy"):
+				if _press_source_control("buy_button", "YES (buy)"):
+					return "buy"
+				return "wait buy control"
+			if _has_option(options, "upgrade"):
+				if _press_source_control("upgrade_button", "YES (upgrade)"):
+					return "upgrade"
+				return "wait upgrade control"
+			if _press_source_control("end_turn_button", "NO"):
 				return "end turn"
 			return "wait action"
 		"await_sale":
@@ -396,6 +414,41 @@ func _human_turn(game: Object) -> String:
 		"await_shop", "await_lottery", "await_minigame":
 			return "wait modal %s" % phase
 	return "wait human %s" % phase
+
+
+func _press_source_control(control_name: String, description: String) -> bool:
+	# Press the control the player actually clicks, and require it to be on screen
+	# and enabled: a broken, hidden or disconnected button must fail the soak
+	# instead of being bypassed by calling the handler behind it.
+	var button: Button = null
+	if _ui.source_shell != null:
+		button = _ui.source_shell.get(control_name) as Button
+	if button == null or not is_instance_valid(button):
+		_check(false, "%s control exists in the source shell" % description)
+		return false
+	_check(button.is_visible_in_tree(), "%s control is visible to the player" % description)
+	_check(not button.disabled, "%s control is enabled for the player" % description)
+	if not button.is_visible_in_tree() or button.disabled:
+		return false
+	button.pressed.emit()
+	return true
+
+
+func _press_source_route(route_count: int) -> bool:
+	if _ui.source_shell == null:
+		return false
+	var route_buttons: Control = _ui.source_shell.get("route_buttons") as Control
+	if route_buttons == null or not is_instance_valid(route_buttons) or route_buttons.get_child_count() != route_count:
+		return false
+	var button := route_buttons.get_child(0) as Button
+	if button == null:
+		return false
+	_check(button.is_visible_in_tree(), "route control 0 is visible to the player")
+	_check(not button.disabled, "route control 0 is enabled for the player")
+	if not button.is_visible_in_tree() or button.disabled:
+		return false
+	button.pressed.emit()
+	return true
 
 
 func _close_lottery() -> String:
@@ -474,13 +527,21 @@ func _checkpoint(game: Object, tag: String) -> void:
 	var restored_normalized: Dictionary = restored.to_dict()
 	if restored_normalized != live_normalized:
 		_check(false, "save->load round-trip restores an identical snapshot at %s (differing keys: %s)" % [tag, str(_differing_keys(live_normalized, restored_normalized))])
-	# The ordinary UI autosave writes AUTO on a day boundary; whenever one is
-	# present it must be a valid save (and the soak must have exercised one).
+	# The ordinary UI autosave writes AUTO on a day boundary. The shared scratch
+	# user root can already hold an AUTO from an earlier check or seed, so only a
+	# checkpoint carrying this match's seed and an elapsed turn counts. Every
+	# match must produce a fresh one, otherwise the autosave path silently broke.
 	var auto_slots := SaveSlots.new(_ui.source_save_directory, _ui.source_legacy_save_path)
 	var auto: Dictionary = auto_slots.read(0)
+	var auto_snapshot: Dictionary = auto.get("snapshot", {}) if auto.get("snapshot", {}) is Dictionary else {}
+	var auto_seed := int(auto_snapshot.get("seed", -2))
+	var current_seed := int(game.state.get("seed", -1))
+	var same_match := auto_seed == current_seed and int(auto_snapshot.get("turn", 0)) <= int(game.state.get("turn", 0))
 	if str(auto.get("status", "")) == "valid":
 		_saw_autosave = true
-	elif str(auto.get("status", "empty")) != "empty":
+		if same_match:
+			_match_saw_autosave = true
+	elif same_match and str(auto.get("status", "empty")) != "empty":
 		_check(false, "AUTO checkpoint at %s is not a valid save: %s" % [tag, str(auto.get("status", ""))])
 
 

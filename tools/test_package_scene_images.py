@@ -53,6 +53,28 @@ def write_scene_manifest(root, records, filename="manifest.json"):
     return path
 
 
+def _flic(frame_payloads: list[bytes], width: int = 2, height: int = 1) -> bytes:
+    """Build a minimal FLIC fixture with the same header as the lottery slice."""
+
+    frames = []
+    for index, pixels in enumerate(frame_payloads):
+        if index == 0:
+            palette = struct.pack("<H", 1) + bytes([0, 2, 0, 0, 0, 63, 0, 0])
+            brun = bytes([1, 0xFE]) + pixels
+            subs = [struct.pack("<IH", len(palette) + 6, 4) + palette,
+                    struct.pack("<IH", len(brun) + 6, 15) + brun]
+        else:
+            ss2 = struct.pack("<H", 1) + bytes([1, 0, 0, 1]) + bytes([pixels[0], pixels[1]])
+            subs = [struct.pack("<IH", len(ss2) + 6, 7) + ss2]
+        body = b"".join(subs)
+        frames.append(struct.pack("<IHHHH", 16 + len(body), 0xF1FA, len(subs), 0, 0)
+                      + b"\0\0\0\0" + body)
+    header = bytearray(128)
+    struct.pack_into("<IHHHHH", header, 0, 128 + sum(map(len, frames)),
+                     0xAF12, len(frames), width, height, 8)
+    return bytes(header) + b"".join(frames)
+
+
 def png_record(path, relative):
     chunk = VisualChunk(0, 3, 1, 0, 0, bytes(12))
     write_png(path, chunk, VisualResource("SPR", 1, 0, bytes(512), (chunk,)), pixel_format="rgb555")
@@ -346,8 +368,20 @@ class PackageSceneTests(unittest.TestCase):
                     for vehicle_index in range(3):
                         index = base + character_id * 3 + vehicle_index
                         self.assertIn(index, ranges["character_previews"])
-            self.assertEqual(set(game_group["Data"]["resources"]), {"1", "2", "3", "479", "560"})
-            self.assertEqual(set(mj_group["Data"]["resources"]), {"1", "2", "3", "520", "601"})
+            self.assertEqual(
+                set(game_group["Data"]["resources"]),
+                {"1", "2", "3", "399", "479", "560"},
+            )
+            self.assertEqual(
+                set(mj_group["Data"]["resources"]),
+                {"1", "2", "3", "440", "520", "601"},
+            )
+            # SALE YES/NO confirmation is edition-specific: Game 399 (SMP) is
+            # the audited twin of source 440, and MJ 440 is the source index.
+            self.assertEqual(game_group["Data"]["resources"]["399"]["signature"], "SMP")
+            self.assertEqual(mj_group["Data"]["resources"]["440"]["signature"], "SMP")
+            self.assertNotIn("440", game_group["Data"]["resources"])
+            self.assertNotIn("399", mj_group["Data"]["resources"])
             self.assertEqual(set(game_group["Data"]["resources"]["479"]["chunks"]), {str(i) for i in range(7)})
             self.assertEqual(set(mj_group["Data"]["resources"]["520"]["chunks"]), {str(i) for i in range(11)})
             self.assertNotIn("520", game_group["Data"]["resources"])
@@ -409,7 +443,45 @@ class PackageSceneTests(unittest.TestCase):
 
             with patch("original_ui_assets.decode_entry", side_effect=traced_decode):
                 export_ui_resources("Game", source, root / "stage")
-            self.assertEqual(calls, [1, 2, 3, 479, 560])
+            self.assertEqual(calls, [1, 2, 3, 399, 479, 560])
+
+    def test_chunk_transparency_matches_documented_source_callers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Game"
+            source.mkdir()
+            smp = self._make_smp_chunks(20)
+            item = (smp, len(smp), 12 + 20 * 12, 40)
+            flic = _flic([bytes([1, 2])])
+            entries = [item] * 112
+            for index in (14, 16, 17, 78):
+                entries[index] = (flic, len(flic), 0, len(flic))
+            raw = self._make_raw_rgb555()
+            entries[92] = (raw, len(raw), 0, len(raw))
+            (source / "Panel.mkf").write_bytes(make_mkf(entries))
+            group = export_ui_resources("Game", source, root / "stage")
+            resources = group["Panel"]["resources"]
+            for resource, chunk, transparent in (
+                (10, 0, False), (10, 2, True), (10, 16, False),
+                (11, 0, False), (11, 15, False), (11, 2, True),
+                (12, 0, False), (12, 1, True),
+                (13, 0, True),
+                (79, 0, False), (79, 9, False), (79, 10, True),
+                (80, 0, False), (80, 1, True),
+                (91, 0, False),
+                (21, 0, True),
+            ):
+                record = resources[str(resource)]["chunks"][str(chunk)]
+                self.assertIs(
+                    record["transparent_word_zero"], transparent,
+                    f"Panel{resource} chunk{chunk}",
+                )
+            # Panel78 is the minigame intro FLIC the presenters query; it must
+            # be exported as an animation, not silently dropped.
+            intro = resources["78"]
+            self.assertEqual(intro["signature"], "FLIC")
+            self.assertEqual(intro["transparent_index_zero"], True)
+            self.assertEqual(set(intro["chunks"]), {"0"})
 
     def test_export_rejects_public_git_stage_and_accepts_ignored_stage(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -419,7 +491,13 @@ class PackageSceneTests(unittest.TestCase):
             source.mkdir(parents=True)
             payload = make_smp((0x03E0,))
             item = (payload, len(payload), 24, 2)
-            (source / "Panel.mkf").write_bytes(make_mkf([item] * 77))
+            flic = _flic([bytes([1, 2])])
+            entries = [item] * 112
+            for index in (14, 16, 17, 78):
+                entries[index] = (flic, len(flic), 0, len(flic))
+            raw = self._make_raw_rgb555()
+            entries[92] = (raw, len(raw), 0, len(raw))
+            (source / "Panel.mkf").write_bytes(make_mkf(entries))
 
             with self.assertRaisesRegex(InputError, "must be ignored"):
                 export_ui_resources("Game", source, repository / "public-stage")
@@ -429,6 +507,27 @@ class PackageSceneTests(unittest.TestCase):
                 "Game", source, repository / ".local" / "ui-stage"
             )
             self.assertEqual(set(group), {"Panel"})
+
+    def test_truncated_panel_archive_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Game"
+            source.mkdir()
+            payload = make_smp((0x03E0,))
+            item = (payload, len(payload), 24, 2)
+            flic = _flic([bytes([1, 2])])
+            raw = self._make_raw_rgb555()
+            # A real Panel.mkf has 113 entries; a truncated one must not
+            # export as if the missing minigame resources were optional.
+            entries = [item] * 93
+            for index in (14, 16, 17, 78):
+                entries[index] = (flic, len(flic), 0, len(flic))
+            entries[92] = (raw, len(raw), 0, len(raw))
+            (source / "Panel.mkf").write_bytes(make_mkf(entries))
+            with self.assertRaisesRegex(
+                FormatError, "beyond the archive's 93 entries"
+            ):
+                export_ui_resources("Game", source, root / "stage")
 
     def test_invalid_or_truncated_bound_resources_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -543,8 +642,12 @@ class PackageSceneTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             updated = update_ui_manifest(root / "source", manifest_path, editions={"Game"})
-            self.assertEqual(set(updated["ui"]["Game"]["Data"]["resources"]), {"1", "2", "3", "479", "560"})
+            self.assertEqual(
+                set(updated["ui"]["Game"]["Data"]["resources"]),
+                {"1", "2", "3", "399", "479", "560"},
+            )
             self.assertEqual(existing.read_bytes(), existing_bytes)
+            self.assertTrue((output / "images/Game/ui/Data/399/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/479/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/560/0.png").is_file())
             self.assertFalse((output / "images/Game/ui/jump/4/0.png").exists())
@@ -942,13 +1045,33 @@ class PackageSceneTests(unittest.TestCase):
             source.mkdir()
             payload = make_smp((0, 0x8000, 0x03E0))
             item = (payload, len(payload), 24, 6)
-            archive = make_mkf([item] * 77)
+            flic = _flic([bytes([1, 2])])
+            entries = [item] * 112
+            for index in (14, 16, 17, 78):
+                entries[index] = (flic, len(flic), 0, len(flic))
+            raw_ui = self._make_raw_rgb555()
+            entries[92] = (raw_ui, len(raw_ui), 0, len(raw_ui))
+            archive = make_mkf(entries)
             (source / "Panel.mkf").write_bytes(archive)
             stage = root / "stage"
             group = export_ui_resources("Game", source, stage)
             self.assertEqual(set(group), {"Panel"})
             self.assertEqual(group["Panel"]["archive_sha256"], hashlib.sha256(archive).hexdigest())
-            self.assertEqual(set(group["Panel"]["resources"]), {"0", "1", "2", "25", "75", "76"})
+            self.assertEqual(
+                set(group["Panel"]["resources"]),
+                {"0", "1", "2", "10", "11", "12", "13", "14", "15", "16",
+                 "17", "21", "23", "24", "25", "73", "74", "75", "76", "77",
+                 "78", "79", "80", *map(str, range(82, 112))},
+            )
+            self.assertEqual(
+                group["Panel"]["resources"]["14"]["signature"], "FLIC"
+            )
+            self.assertEqual(
+                group["Panel"]["resources"]["14"]["transparent_index_zero"], True
+            )
+            self.assertEqual(
+                group["Panel"]["resources"]["16"]["transparent_index_zero"], False
+            )
             record = group["Panel"]["resources"]["75"]["chunks"]["0"]
             self.assertEqual(record["logical"], {"width": 3, "height": 1, "anchor_x": -2, "anchor_y": 5})
             width, height, pixels = read_png_rgba((stage / record["path"]).read_bytes())
@@ -960,7 +1083,7 @@ class PackageSceneTests(unittest.TestCase):
             path = stage / "manifest.json"
             path.write_text(json.dumps(manifest))
             _, paths = validate(path)
-            self.assertEqual(len(paths), 6)
+            self.assertEqual(len(paths), 53)
             (stage / group["Panel"]["resources"]["1"]["chunks"]["0"]["path"]).write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 validate(path)

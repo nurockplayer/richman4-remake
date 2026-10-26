@@ -6,7 +6,41 @@ if [[ "$("$GODOT_BIN" --version)" != 4.7.2.stable.* ]]; then
   echo 'Packaging requires Godot 4.7.2 stable.' >&2
   exit 1
 fi
-bash tools/check.sh
+# Run the test gate without the packaging environment.  The installed-catalog
+# lane requires the owner's canonical catalog identity, and tests assert the
+# explicit art-free/catalog-free fallbacks: they must not see the private
+# exports being packaged, including the res://.local fallbacks the runtime
+# takes when an environment variable is unset.
+hidden=()
+restore_hidden() {
+  for dir in "${hidden[@]}"; do
+    if [[ -d "$dir.gate-hidden" && ! -e "$dir" ]]; then
+      mv "$dir.gate-hidden" "$dir"
+    fi
+  done
+  hidden=()
+}
+check_status=0
+# A killed run (SIGKILL, power loss) skips the EXIT trap and leaves a
+# *.gate-hidden directory; moving a fresh export onto it would nest the two.
+for dir in .local/original-scenes .local/original-help .local/imported-original; do
+  if [[ -e "$dir.gate-hidden" ]]; then
+    echo "Found $dir.gate-hidden from an interrupted run; move it back to $dir (or remove the stale copy) and retry." >&2
+    exit 1
+  fi
+done
+trap restore_hidden EXIT
+for dir in .local/original-scenes .local/original-help .local/imported-original; do
+  if [[ -d "$dir" ]]; then
+    mv "$dir" "$dir.gate-hidden"
+    hidden+=("$dir")
+  fi
+done
+env -u RICHMAN4_MAP_CATALOG -u RICHMAN4_SCENE_MANIFEST -u RICHMAN4_SCENE_BASE_MANIFEST \
+    -u RICHMAN4_HELP_MANIFEST -u RICHMAN4_AUDIO_ASSETS bash tools/check.sh \
+  || check_status=$?
+restore_hidden
+(( check_status == 0 )) || exit "$check_status"
 catalog_path="${RICHMAN4_MAP_CATALOG:-}"
 if [[ -n "$catalog_path" ]]; then
   "$GODOT_BIN" --headless --path . --script tools/validate_catalog.gd -- "$catalog_path" --original-facilities

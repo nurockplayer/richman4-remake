@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
+import os
 import subprocess
 import sys
 import tempfile
@@ -511,6 +512,102 @@ class SourceProvenanceValidateTests(HelpBundleTestCase):
 
     def test_source_root_accepts_the_unmodified_export(self) -> None:
         exporter.validate(self.index_path, source_root=self.root)
+
+
+class RefreshTests(HelpBundleTestCase):
+    def refresh(self, output: Path | None = None):
+        return exporter.refresh_help_bundle(
+            self.root, output or self.output, allowed_root=self.base
+        )
+
+    def tree(self) -> dict[str, bytes]:
+        return {
+            path.relative_to(self.output).as_posix(): path.read_bytes()
+            for path in sorted(self.output.rglob("*"))
+            if path.is_file()
+        }
+
+    def test_first_refresh_exports_and_a_current_bundle_is_kept(self) -> None:
+        manifest, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+        before = self.tree()
+        again, changed = self.refresh()
+        self.assertFalse(changed)
+        self.assertEqual(again, manifest)
+        self.assertEqual(self.tree(), before)
+
+    def test_stale_bundle_is_replaced_atomically(self) -> None:
+        self.refresh()
+        (self.output / "manifest.json").write_text("{}", encoding="utf-8")
+        (self.output / "content" / "Game.json").write_text("stale", encoding="utf-8")
+        _, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+        self.assertEqual(self.tree()["content/Game.json"], self.edition_bytes())
+
+    def test_changed_source_refreshes_the_bundle(self) -> None:
+        self.refresh()
+        (self.root / "Game" / "help.mkf").write_bytes(
+            build_mkf(edition_payloads(mj_payloads()))
+        )
+        _, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+
+    def test_refresh_refuses_a_destination_outside_the_allowed_root(self) -> None:
+        outside = self.base / "outside" / "bundle"
+        outside.mkdir(parents=True)
+        marker = outside / "keep.txt"
+        marker.write_text("untouched", encoding="utf-8")
+        with self.assertRaises(InputError):
+            exporter.refresh_help_bundle(
+                self.root, outside, allowed_root=self.base / "exports"
+            )
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+        self.assertEqual(
+            sorted(path.name for path in outside.iterdir()), ["keep.txt"]
+        )
+
+    def test_refresh_refuses_a_symlinked_destination(self) -> None:
+        target = self.output.parent / "elsewhere"
+        target.mkdir(parents=True)
+        marker = target / "manifest.json"
+        marker.write_text("{}", encoding="utf-8")
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        self.output.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(InputError):
+            self.refresh()
+        self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
+
+    def test_refresh_refuses_to_replace_its_source(self) -> None:
+        with self.assertRaises(InputError):
+            exporter.refresh_help_bundle(self.root, self.root, allowed_root=self.root.parent)
+        self.assertTrue((self.root / "Game" / "help.mkf").is_file())
+
+    def test_refresh_refuses_a_directory_that_is_not_an_export(self) -> None:
+        self.output.mkdir(parents=True)
+        marker = self.output / "keep.txt"
+        marker.write_text("untouched", encoding="utf-8")
+        with self.assertRaises(InputError):
+            self.refresh()
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+
+    def test_refresh_recovers_a_backup_left_by_a_killed_run(self) -> None:
+        self.refresh()
+        before = self.tree()
+        backup = self.output.parent / f".{self.output.name}.stale-deadbeef"
+        os.replace(self.output, backup)
+        _, changed = self.refresh()
+        self.assertFalse(changed)
+        self.assertEqual(self.tree(), before)
+        self.assertFalse(backup.exists())
+
+    def edition_bytes(self) -> bytes:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "fresh"
+            exporter.export_help_bundle(self.root, bundle)
+            return (bundle / "content" / "Game.json").read_bytes()
 
 
 class CommandLineTests(HelpBundleTestCase):

@@ -35,7 +35,9 @@ exactly.
 
 Output is written into a new, disjoint, private destination only.  A failed
 export removes the destination it created and never touches the source or a
-pre-existing destination.
+pre-existing destination.  ``--refresh`` keeps a destination that still
+reproduces the pinned source and otherwise stages a new bundle next to it and
+swaps it in atomically; it only replaces paths under the worktree ``.local``.
 """
 
 from __future__ import annotations
@@ -44,9 +46,12 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sys
+import tempfile
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -62,6 +67,8 @@ from decode_original_images import (
 SCHEMA_INDEX = "richman4.help/v1"
 SCHEMA_EDITION = "richman4.help-edition/v1"
 DEFAULT_OUTPUT = Path(".local/original-help")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_REFRESH_ROOT = REPO_ROOT / ".local"
 MAX_INDEX_BYTES = 64 * 1024
 MAX_EDITION_BYTES = 2 * 1024 * 1024
 MIN_PAGE_LINES = 1
@@ -457,6 +464,91 @@ def export_help_bundle(asset_root: str | Path, output: str | Path) -> dict[str, 
     return manifest
 
 
+def refresh_help_bundle(
+    asset_root: str | Path,
+    output: str | Path,
+    *,
+    allowed_root: str | Path | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Make ``output`` hold a bundle that reproduces the pinned source.
+
+    An existing bundle is kept untouched when it validates against the source;
+    otherwise a fresh export is staged next to it and swapped in with two
+    renames; a run killed between them is recovered by the next refresh.
+    ``allowed_root`` bounds every destination that may be replaced or removed,
+    and symlinked destinations, overlap with the source and directories that are
+    not help exports are refused.
+    """
+
+    # Work on the path as written: resolving would follow a symlinked export
+    # directory and replace whatever it points at.
+    destination = Path(output).expanduser().absolute()
+    if allowed_root is not None:
+        root = Path(allowed_root).expanduser().absolute()
+        if destination == root or root not in destination.parents:
+            raise InputError(
+                f"refusing to refresh a destination outside {root}: {destination}"
+            )
+        for path in [destination, *destination.parents]:
+            if path.is_symlink():
+                raise InputError(f"refusing to refresh through a symlink: {path}")
+            if path == root:
+                break
+    elif destination.is_symlink():
+        raise InputError(f"refusing to refresh through a symlink: {destination}")
+    source = Path(asset_root).expanduser().resolve()
+    assert_disjoint_paths(source, destination.resolve())
+
+    parent = destination.parent
+    # A refresh killed between its two renames leaves only the stale backup;
+    # put it back before deciding anything.
+    if not destination.exists():
+        backups = sorted(
+            parent.glob(f".{destination.name}.stale-*"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if backups:
+            os.replace(backups[-1], destination)
+    for leftover in parent.glob(f".{destination.name}.stage-*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    if destination.exists() and not (destination / "manifest.json").is_file():
+        raise InputError(
+            f"refusing to replace a directory that is not a help export: {destination}"
+        )
+    manifest_path = destination / "manifest.json"
+    if manifest_path.is_file() and not manifest_path.is_symlink():
+        try:
+            manifest, _ = validate(manifest_path, source_root=asset_root)
+            return manifest, False
+        except (InputError, FormatError):
+            # A stale or incomplete export is replaced below; it is the same
+            # private derived directory, never an unrelated path.
+            pass
+
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.stage-", dir=parent)
+    )
+    backup: Path | None = None
+    try:
+        manifest = export_help_bundle(asset_root, staging / "bundle")
+        if destination.exists() or destination.is_symlink():
+            backup = parent / f".{destination.name}.stale-{uuid.uuid4().hex}"
+            os.replace(destination, backup)
+        os.replace(staging / "bundle", destination)
+    except BaseException:
+        if backup is not None and not destination.exists():
+            os.replace(backup, destination)
+            backup = None
+        raise
+    else:
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return manifest, True
+
+
 def _validate_pages(value: Any, *, context: str) -> list[list[str]]:
     if not isinstance(value, list) or not value:
         raise FormatError(f"{context}: topic must have at least one page")
@@ -654,8 +746,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--validate", type=Path, metavar="MANIFEST", help="validate an exported bundle"
     )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="keep a current bundle or atomically replace a stale one",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.refresh:
+            if args.asset_root is None:
+                parser.error("--asset-root is required for refresh")
+            manifest, changed = refresh_help_bundle(
+                args.asset_root, args.output, allowed_root=DEFAULT_REFRESH_ROOT
+            )
+            print(
+                json.dumps(
+                    {"refreshed": changed, "editions": sorted(manifest["editions"])},
+                    ensure_ascii=False,
+                )
+            )
+            return 0
         if args.validate is not None:
             manifest, referenced = validate(args.validate, source_root=args.asset_root)
             print(

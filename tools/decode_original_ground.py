@@ -25,7 +25,7 @@ from decode_original_images import (
     write_png,
 )
 from import_original import ImportErrorBase, parse_map_payload
-from original_ui_assets import export_ui_resources
+from original_ui_assets import BOMB_FLIC_INDICES, export_ui_resources
 
 SCHEMA = "richman4.scene-images/v1"
 SIDE = 72
@@ -146,6 +146,24 @@ def scene_objects(graph: bytes, parsed: dict) -> list[dict]:
     return objects
 
 
+def _bind_catching_bomb(manifest: dict, edition: str) -> None:
+    """Let the minigame presenter find the bomb FLIC exported as Data art."""
+
+    index = BOMB_FLIC_INDICES[edition]
+    group = manifest["ui"][edition].get("Data", {})
+    record = group.get("resources", {}).get(str(index))
+    if record is None:
+        return
+    manifest.setdefault("minigame_source", {}).setdefault("effects", {}).setdefault(
+        "catching_bomb", {}
+    )[edition] = {
+        "archive": "Data",
+        "resource_index": index,
+        "payload_sha256": record["payload_sha256"],
+        "archive_sha256": group["archive_sha256"],
+    }
+
+
 def decode_source(source: Path, output: Path, *, include_ui: bool = False) -> dict:
     source, output = source.resolve(), output.resolve()
     assert_disjoint_paths(source, output)
@@ -167,6 +185,7 @@ def decode_source(source: Path, output: Path, *, include_ui: bool = False) -> di
         for edition, directory in editions:
             if include_ui:
                 manifest["ui"][edition] = export_ui_resources(edition, directory, stage)
+                _bind_catching_bomb(manifest, edition)
             data_path = _find_casefolded(directory, "Data.mkf")
             if data_path is not None:
                 data_archive = parse_mkf(data_path)

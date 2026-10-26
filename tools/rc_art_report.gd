@@ -51,6 +51,7 @@ const CHECKS := [
 	["minigame_catching", "Panel", 92, 0],
 	["minigame_throwers", "Panel", 93, 0],
 	["minigame_bomb", "Panel", 94, 0],
+	["minigame_catching_bomb", "Data", 485, 0],
 	["minigame_items", "Panel", 95, 0],
 	["save_load", "Data", 479, 0],
 	["loading", "Data", 560, 0],
@@ -59,6 +60,7 @@ const CHECKS := [
 const EDITION_RESOURCES := {
 	"setup_atlas": {"Game": 4, "MultiverseJourney": 8},
 	"sale_confirmation": {"Game": 399, "MultiverseJourney": 440},
+	"minigame_catching_bomb": {"Game": 485, "MultiverseJourney": 526},
 	"save_load": {"Game": 479, "MultiverseJourney": 520},
 	"loading": {"Game": 560, "MultiverseJourney": 601},
 }

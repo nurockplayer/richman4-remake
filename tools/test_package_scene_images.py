@@ -136,6 +136,12 @@ class PackageSceneTests(unittest.TestCase):
     ) -> bytes:
         small = make_smp((0x03E0,))
         entries = [(small, len(small), 24, 2)] * count
+        # Large Data fixtures also stand in for the edition's catching bomb
+        # FLIC, which the bounded UI export decodes as an animation.
+        bomb = _flic([bytes([1, 2])])
+        for index in (485, 526):
+            if index < count:
+                entries[index] = (bomb, len(bomb), 0, len(bomb))
         for index, entry in replacements.items():
             entries[index] = entry
         return make_mkf(entries)
@@ -370,11 +376,26 @@ class PackageSceneTests(unittest.TestCase):
                         self.assertIn(index, ranges["character_previews"])
             self.assertEqual(
                 set(game_group["Data"]["resources"]),
-                {"1", "2", "3", "399", "479", "560"},
+                {"1", "2", "3", "399", "479", "485", "560"},
             )
             self.assertEqual(
                 set(mj_group["Data"]["resources"]),
-                {"1", "2", "3", "440", "520", "601"},
+                {"1", "2", "3", "440", "520", "526", "601"},
+            )
+            self.assertEqual(
+                game_group["Data"]["resources"]["485"]["signature"], "FLIC"
+            )
+            self.assertEqual(
+                mj_group["Data"]["resources"]["526"]["signature"], "FLIC"
+            )
+            self.assertNotIn("526", game_group["Data"]["resources"])
+            self.assertNotIn("485", mj_group["Data"]["resources"])
+            self.assertEqual(
+                game_group["Data"]["resources"]["485"]["caller"]["delay_ms"], 114
+            )
+            self.assertEqual(
+                set(mj_group["Data"]["resources"]["526"]["chunks"]),
+                {"0"},
             )
             # SALE YES/NO confirmation is edition-specific: Game 399 (SMP) is
             # the audited twin of source 440, and MJ 440 is the source index.
@@ -443,7 +464,7 @@ class PackageSceneTests(unittest.TestCase):
 
             with patch("original_ui_assets.decode_entry", side_effect=traced_decode):
                 export_ui_resources("Game", source, root / "stage")
-            self.assertEqual(calls, [1, 2, 3, 399, 479, 560])
+            self.assertEqual(calls, [1, 2, 3, 399, 479, 485, 560])
 
     def test_chunk_transparency_matches_documented_source_callers(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -644,11 +665,12 @@ class PackageSceneTests(unittest.TestCase):
             updated = update_ui_manifest(root / "source", manifest_path, editions={"Game"})
             self.assertEqual(
                 set(updated["ui"]["Game"]["Data"]["resources"]),
-                {"1", "2", "3", "399", "479", "560"},
+                {"1", "2", "3", "399", "479", "485", "560"},
             )
             self.assertEqual(existing.read_bytes(), existing_bytes)
             self.assertTrue((output / "images/Game/ui/Data/399/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/479/0.png").is_file())
+            self.assertTrue((output / "images/Game/ui/Data/485/0.png").is_file())
             self.assertTrue((output / "images/Game/ui/Data/560/0.png").is_file())
             self.assertFalse((output / "images/Game/ui/jump/4/0.png").exists())
 

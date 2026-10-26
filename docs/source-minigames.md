@@ -84,7 +84,16 @@ Use RICHMAN4_SCENE_MANIFEST for the new scene-manifest.json and
 RICHMAN4_MINIGAME_MANIFEST for its manifest.json (or the scoped private
 .local/source-minigames-scene link). A pinned private coordinate JSON and
 source thrower lookup are explicit preparation inputs. Canonical private
-asset repository authority is unchanged; this batch does not package/export.
+asset repository authority is unchanged.
+
+A private package carries the input plane without the development tree:
+`tools/package_minigame.py` validates the manifest, the 640x480 penguin click
+mask and the 81-record grid, and copies them to
+`Contents/Resources/Original/minigame/`. `SourceMinigameAssets.manifest_path`
+resolves that packaged manifest before the `res://.local` fallback, so a
+shipped app never reads a development path. The bomb FLICs (`Data` 485 Game /
+526 MJ) are exported with the scene UI instead, and the scene manifest binds
+them through `minigame_source.effects.catching_bomb`.
 
 ## Evidence and explicit limits
 

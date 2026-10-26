@@ -11,9 +11,14 @@
 #   RICHMAN4_RC_SKIP_EXPORT=1 bash tools/package_rc.sh   # reuse .local exports
 #
 # Environment:
-#   RICHMAN4_CACHE_ROOT     shared cache (default /Volumes/KIOXIA/richman4-cache)
-#   RICHMAN4_RC_OUTPUT_DIR  published zip directory (default <cache>/rc)
-#   GODOT_BIN               Godot 4.7.2 binary (default godot)
+#   RICHMAN4_CACHE_ROOT         shared cache (default /Volumes/KIOXIA/richman4-cache)
+#   RICHMAN4_RC_OUTPUT_DIR      published zip directory (default <cache>/rc)
+#   RICHMAN4_MINIGAME_MANIFEST  prepared richman4.minigame-assets/v1 manifest
+#                               (default .local/source-minigames-scene/manifest.json)
+#   GODOT_BIN                   Godot 4.7.2 binary (default godot)
+#
+# Re-running in the same worktree is supported: a help bundle that still
+# reproduces the pinned source is kept, a stale one is replaced atomically.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -23,6 +28,7 @@ godot_bin="${GODOT_BIN:-godot}"
 catalog="$PWD/.local/imported-original/maps/catalog.json"
 scene_manifest="$PWD/.local/original-scenes/manifest.json"
 help_manifest="$PWD/.local/original-help/manifest.json"
+minigame_manifest="${RICHMAN4_MINIGAME_MANIFEST:-$PWD/.local/source-minigames-scene/manifest.json}"
 report="$PWD/.local/rc-art-report.txt"
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/richman4-rc.XXXXXX")"
@@ -57,7 +63,8 @@ if [[ "${RICHMAN4_RC_SKIP_EXPORT:-0}" != "1" ]]; then
     --output "$PWD/.local/original-scenes"
   python3 tools/export_original_help.py \
     --asset-root "$asset_source" \
-    --output "$PWD/.local/original-help"
+    --output "$PWD/.local/original-help" \
+    --refresh
 fi
 for required in "$catalog" "$scene_manifest" "$help_manifest"; do
   [[ -f "$required" ]] || {
@@ -65,13 +72,22 @@ for required in "$catalog" "$scene_manifest" "$help_manifest"; do
     exit 1
   }
 done
+minigame_env=()
+if [[ -f "$minigame_manifest" ]]; then
+  echo "Minigame input manifest: $minigame_manifest"
+  minigame_env=(RICHMAN4_MINIGAME_MANIFEST="$minigame_manifest")
+else
+  echo "Minigame input manifest not found ($minigame_manifest); the package keeps the explicit no-input fallback." >&2
+fi
 
 # 3. Build the app with the existing private packaging path.
-RICHMAN4_MAP_CATALOG="$catalog" \
-RICHMAN4_SCENE_MANIFEST="$scene_manifest" \
-RICHMAN4_HELP_MANIFEST="$help_manifest" \
-RICHMAN4_AUDIO_ASSETS="$asset_root" \
-GODOT_BIN="$godot_bin" \
+env \
+  RICHMAN4_MAP_CATALOG="$catalog" \
+  RICHMAN4_SCENE_MANIFEST="$scene_manifest" \
+  RICHMAN4_HELP_MANIFEST="$help_manifest" \
+  RICHMAN4_AUDIO_ASSETS="$asset_root" \
+  GODOT_BIN="$godot_bin" \
+  "${minigame_env[@]+"${minigame_env[@]}"}" \
   bash tools/package_macos.sh
 
 app_path="$(find "$PWD/build" -maxdepth 2 -name '*.app' -type d -print -quit)"

@@ -513,6 +513,68 @@ class SourceProvenanceValidateTests(HelpBundleTestCase):
         exporter.validate(self.index_path, source_root=self.root)
 
 
+class RefreshTests(HelpBundleTestCase):
+    def refresh(self, output: Path | None = None):
+        return exporter.refresh_help_bundle(
+            self.root, output or self.output, allowed_root=self.base
+        )
+
+    def tree(self) -> dict[str, bytes]:
+        return {
+            path.relative_to(self.output).as_posix(): path.read_bytes()
+            for path in sorted(self.output.rglob("*"))
+            if path.is_file()
+        }
+
+    def test_first_refresh_exports_and_a_current_bundle_is_kept(self) -> None:
+        manifest, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+        before = self.tree()
+        again, changed = self.refresh()
+        self.assertFalse(changed)
+        self.assertEqual(again, manifest)
+        self.assertEqual(self.tree(), before)
+
+    def test_stale_bundle_is_replaced_atomically(self) -> None:
+        self.refresh()
+        (self.output / "manifest.json").write_text("{}", encoding="utf-8")
+        (self.output / "content" / "Game.json").write_text("stale", encoding="utf-8")
+        _, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+        self.assertEqual(self.tree()["content/Game.json"], self.edition_bytes())
+
+    def test_changed_source_refreshes_the_bundle(self) -> None:
+        self.refresh()
+        (self.root / "Game" / "help.mkf").write_bytes(
+            build_mkf(edition_payloads(mj_payloads()))
+        )
+        _, changed = self.refresh()
+        self.assertTrue(changed)
+        exporter.validate(self.output / "manifest.json", source_root=self.root)
+
+    def test_refresh_refuses_a_destination_outside_the_allowed_root(self) -> None:
+        outside = self.base / "outside" / "bundle"
+        outside.mkdir(parents=True)
+        marker = outside / "keep.txt"
+        marker.write_text("untouched", encoding="utf-8")
+        with self.assertRaises(InputError):
+            exporter.refresh_help_bundle(
+                self.root, outside, allowed_root=self.base / "exports"
+            )
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+        self.assertEqual(
+            sorted(path.name for path in outside.iterdir()), ["keep.txt"]
+        )
+
+    def edition_bytes(self) -> bytes:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "fresh"
+            exporter.export_help_bundle(self.root, bundle)
+            return (bundle / "content" / "Game.json").read_bytes()
+
+
 class CommandLineTests(HelpBundleTestCase):
     def test_cli_export_then_validate(self) -> None:
         script = Path(exporter.__file__)

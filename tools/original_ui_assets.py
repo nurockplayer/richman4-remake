@@ -67,11 +67,27 @@ FLIC_UI_SETTINGS = {
          "caller": {"flags": 1, "delay_ms": 114, "loop": False,
                     "skip_on_release": False}},
 }
+# The catching bomb ending is a Data FLIC with a different index per edition.
+# Game485 and MJ526 hold byte-identical payloads; Game526 is a different
+# parachutist animation and is never substituted or relabelled.
+BOMB_FLIC_INDICES = {"Game": 485, "MultiverseJourney": 526}
+BOMB_FLIC_SETTINGS = {
+    "max_frames": 8,
+    "transparent_index_zero": True,
+    "caller": {"flags": 1, "loop": False, "x_offset": -55, "y": 295,
+               "delay_ms": 114},
+}
 FLIC_UI_RESOURCES = {
     (edition, "Panel", index): settings
     for edition in ("Game", "MultiverseJourney")
     for index, settings in FLIC_UI_SETTINGS.items()
 }
+FLIC_UI_RESOURCES.update(
+    {
+        (edition, "Data", index): BOMB_FLIC_SETTINGS
+        for edition, index in BOMB_FLIC_INDICES.items()
+    }
+)
 
 # SMP/SPR chunks whose source word zero stays opaque because the caller blits
 # them as a rectangle.  Every other chunk keeps WORD0 transparent.  These
@@ -121,14 +137,15 @@ EDITION_UI_RESOURCES = {
     "Game": {
         "jump": {index: None for index in _jump_resource_indices("Game")},
         # SALE YES/NO confirmation; Game 399 is the audited twin of source 440.
-        "Data": {399: None, 479: None, 560: (0,)},
+        # 485 is the catching bomb FLIC (MJ twin 526).
+        "Data": {399: None, 479: None, 485: None, 560: (0,)},
         "help": {0: None},
     },
     "MultiverseJourney": {
         "jump": {
             index: None for index in _jump_resource_indices("MultiverseJourney")
         },
-        "Data": {440: None, 520: None, 601: (0,)},
+        "Data": {440: None, 520: None, 526: None, 601: (0,)},
         "help": {0: None},
     },
 }
@@ -297,6 +314,7 @@ def _export_flic_resource(
                 "anchor_y": 0,
             },
             "frame_index": number,
+            "transparent_index_zero": transparent,
         }
     return {
         "resource_index": index,

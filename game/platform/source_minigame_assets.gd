@@ -5,10 +5,20 @@ extends RefCounted
 static var _loaded_path := ""
 static var _data: Dictionary = {}
 
-static func input_data() -> Dictionary:
+## Resolve the input manifest next to the executable first, so a packaged app
+## never falls back to the development-only res:// path. `executable_dir` is a
+## parameter so the packaged lookup is testable without building an app.
+static func manifest_path(executable_dir: String) -> String:
 	var path := OS.get_environment("RICHMAN4_MINIGAME_MANIFEST")
-	if path.is_empty():
-		path = ProjectSettings.globalize_path("res://.local/source-minigames-scene/manifest.json")
+	if not path.is_empty(): return path
+	var packaged := executable_dir.path_join("../Resources/Original/minigame/manifest.json").simplify_path()
+	if FileAccess.file_exists(packaged): return packaged
+	return ProjectSettings.globalize_path("res://.local/source-minigames-scene/manifest.json")
+
+static func input_data() -> Dictionary:
+	return input_data_from(manifest_path(OS.get_executable_path().get_base_dir()))
+
+static func input_data_from(path: String) -> Dictionary:
 	if path == _loaded_path: return _data
 	_loaded_path = path
 	_data = {}

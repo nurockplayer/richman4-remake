@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
+import os
 import subprocess
 import sys
 import tempfile
@@ -567,6 +568,40 @@ class RefreshTests(HelpBundleTestCase):
         self.assertEqual(
             sorted(path.name for path in outside.iterdir()), ["keep.txt"]
         )
+
+    def test_refresh_refuses_a_symlinked_destination(self) -> None:
+        target = self.output.parent / "elsewhere"
+        target.mkdir(parents=True)
+        marker = target / "manifest.json"
+        marker.write_text("{}", encoding="utf-8")
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        self.output.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(InputError):
+            self.refresh()
+        self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
+
+    def test_refresh_refuses_to_replace_its_source(self) -> None:
+        with self.assertRaises(InputError):
+            exporter.refresh_help_bundle(self.root, self.root, allowed_root=self.root.parent)
+        self.assertTrue((self.root / "Game" / "help.mkf").is_file())
+
+    def test_refresh_refuses_a_directory_that_is_not_an_export(self) -> None:
+        self.output.mkdir(parents=True)
+        marker = self.output / "keep.txt"
+        marker.write_text("untouched", encoding="utf-8")
+        with self.assertRaises(InputError):
+            self.refresh()
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+
+    def test_refresh_recovers_a_backup_left_by_a_killed_run(self) -> None:
+        self.refresh()
+        before = self.tree()
+        backup = self.output.parent / f".{self.output.name}.stale-deadbeef"
+        os.replace(self.output, backup)
+        _, changed = self.refresh()
+        self.assertFalse(changed)
+        self.assertEqual(self.tree(), before)
+        self.assertFalse(backup.exists())
 
     def edition_bytes(self) -> bytes:
         with tempfile.TemporaryDirectory() as temporary:

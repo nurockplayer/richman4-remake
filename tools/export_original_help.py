@@ -473,18 +473,48 @@ def refresh_help_bundle(
     """Make ``output`` hold a bundle that reproduces the pinned source.
 
     An existing bundle is kept untouched when it validates against the source;
-    otherwise a fresh export is staged next to it and swapped in atomically, so
-    an interrupted refresh never leaves a half-written bundle.  ``allowed_root``
-    bounds every destination that may be replaced or removed.
+    otherwise a fresh export is staged next to it and swapped in with two
+    renames; a run killed between them is recovered by the next refresh.
+    ``allowed_root`` bounds every destination that may be replaced or removed,
+    and symlinked destinations, overlap with the source and directories that are
+    not help exports are refused.
     """
 
-    destination = Path(output).expanduser().resolve()
+    # Work on the path as written: resolving would follow a symlinked export
+    # directory and replace whatever it points at.
+    destination = Path(output).expanduser().absolute()
     if allowed_root is not None:
-        root = Path(allowed_root).expanduser().resolve()
+        root = Path(allowed_root).expanduser().absolute()
         if destination == root or root not in destination.parents:
             raise InputError(
                 f"refusing to refresh a destination outside {root}: {destination}"
             )
+        for path in [destination, *destination.parents]:
+            if path.is_symlink():
+                raise InputError(f"refusing to refresh through a symlink: {path}")
+            if path == root:
+                break
+    elif destination.is_symlink():
+        raise InputError(f"refusing to refresh through a symlink: {destination}")
+    source = Path(asset_root).expanduser().resolve()
+    assert_disjoint_paths(source, destination.resolve())
+
+    parent = destination.parent
+    # A refresh killed between its two renames leaves only the stale backup;
+    # put it back before deciding anything.
+    if not destination.exists():
+        backups = sorted(
+            parent.glob(f".{destination.name}.stale-*"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if backups:
+            os.replace(backups[-1], destination)
+    for leftover in parent.glob(f".{destination.name}.stage-*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    if destination.exists() and not (destination / "manifest.json").is_file():
+        raise InputError(
+            f"refusing to replace a directory that is not a help export: {destination}"
+        )
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and not manifest_path.is_symlink():
         try:
@@ -495,7 +525,6 @@ def refresh_help_bundle(
             # private derived directory, never an unrelated path.
             pass
 
-    parent = destination.parent
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.stage-", dir=parent)

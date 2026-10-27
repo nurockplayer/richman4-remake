@@ -216,10 +216,18 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	any_key.pressed = true
 	shell.get_viewport().push_input(any_key)
 	_expect(shell.buy_button.has_focus(), "a key press re-seats orphaned focus on the waiting picker")
-	var stocks_button: Button = shell.toolbar_buttons.get("stocks") as Button
-	stocks_button.grab_focus()
+	var help_button: Button = shell.toolbar_buttons.get("help") as Button
+	help_button.grab_focus()
 	shell.get_viewport().push_input(any_key)
-	_expect(shell.buy_button.has_focus(), "a key press moves focus left on a toolbar button back to the picker")
+	_expect(help_button.has_focus(), "keyboard focus the player moved to the toolbar is kept")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	help_button.gui_input.emit(release)
+	await process_frame
+	_expect(not help_button.has_focus(), "a mouse click on board chrome leaves no keyboard focus behind")
+	shell.get_viewport().push_input(any_key)
+	_expect(shell.buy_button.has_focus(), "the next key re-seats focus on the waiting picker")
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
 	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
 	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")

@@ -814,27 +814,32 @@ func _render_turn_controls() -> void:
 		_focus_turn_choice.call_deferred()
 
 
-# Overlays (stocks, inspector, help, ...) drop focus when they hide, or leave
-# it on the toolbar button that opened them.  Before a key reaches the GUI,
-# re-seat such focus on the waiting picker so every close path hands Enter back
-# to it; _focus_turn_choice keeps focus a modal or the picker itself owns.
+# Overlays (stocks, inspector, help, ...) drop focus when they hide.  Before a
+# key reaches the GUI, re-seat an orphaned focus on the waiting picker so every
+# close path hands Enter back to it.  Focus the player moved deliberately is
+# kept; mouse clicks on board chrome do not keep focus (see _drop_click_focus).
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
+	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
 		_focus_turn_choice()
 
 
+## A mouse click on board chrome must not leave keyboard focus behind, or the
+## next Enter would re-run that command instead of answering the picker.
+func _drop_click_focus(button: Button) -> void:
+	button.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and not event.pressed:
+			button.release_focus.call_deferred())
+
+
 ## Keyboard players answer the YES/NO picker with Enter: focus its first live
-## choice unless a visible control outside the board chrome already owns focus.
+## choice unless a visible control already owns focus.
 func _focus_turn_choice() -> void:
 	if choice_selector == null or not choice_selector.is_visible_in_tree():
 		return
 	if focus_blocked.is_valid() and bool(focus_blocked.call()):
 		return
 	var owner := get_viewport().gui_get_focus_owner()
-	var chrome: Array = [roll_button]
-	chrome.append_array(toolbar_buttons.values())
-	chrome.append_array(tab_buttons.values())
-	if owner != null and owner.is_visible_in_tree() and not owner in chrome:
+	if owner != null and owner.is_visible_in_tree():
 		return
 	for button: Button in [buy_button, upgrade_button, end_turn_button]:
 		if button.visible and not button.disabled:
@@ -1373,6 +1378,7 @@ func _toolbar_button(text: String, key: String) -> Button:
 	result.add_theme_color_override("font_hover_color", Color("#ffffff"))
 	result.add_theme_color_override("font_disabled_color", Color("#76827c"))
 	result.add_theme_stylebox_override("hover", _style(Color(0.95, 0.84, 0.45, 0.45), Color("#fff0a5"), 3, 1))
+	_drop_click_focus(result)
 	return result
 
 

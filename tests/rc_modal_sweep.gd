@@ -6,6 +6,10 @@ const MainScene = preload("res://game/main.tscn")
 const Maps = preload("res://game/content/original_maps.gd")
 const BaseMap = preload("res://tests/fixtures/original_map_fixture.gd")
 
+# Commands that must open a source modal on the fixture map at await_roll;
+# the rest may be disabled or fall back to a legacy popup there.
+const REQUIRED_KEYS := ["help", "options", "save", "load", "inspect"]
+
 # keys whose toolbar command opens a modal (main_ui.gd ~479-489 dispatch)
 const MODAL_KEYS := ["help", "options", "save", "load", "stocks", "inspect", "cards", "tools", "sale"]
 
@@ -115,6 +119,7 @@ func _run() -> void:
 		for close_input in ["esc", "right_click"]:
 			var button: Button = shell.toolbar_buttons.get(key)
 			if button == null or button.disabled:
+				_expect(not REQUIRED_KEYS.has(key), "%s toolbar button is enabled at await_roll" % key)
 				print("RC sweep: skip %s (no button or disabled at await_roll)" % key)
 				break
 			var before: String = game.to_json()
@@ -126,6 +131,7 @@ func _run() -> void:
 				if ui._source_modal_open():
 					break
 			if not ui._source_modal_open():
+				_expect(not REQUIRED_KEYS.has(key), "%s toolbar button opens its modal" % key)
 				# The fixture map has no original companies, so stocks falls back
 				# to the legacy popup (never reached on a real catalog map); close
 				# it so it cannot eat the next key's ESC.

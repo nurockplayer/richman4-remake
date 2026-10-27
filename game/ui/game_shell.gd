@@ -517,6 +517,13 @@ func _build_player_inspector() -> void:
 	player_inspect_panel.name = "SourcePlayerInspect"
 	player_inspect_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	player_inspect_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	# The panel stops mouse events, so MainUI's unhandled cancel never sees a
+	# right-click over it; close on the right release here.
+	player_inspect_panel.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+			player_inspect_panel.accept_event()
+			if not event.pressed:
+				close_player_inspector())
 	player_inspect_panel.z_index = 40
 	player_inspect_panel.hide()
 	reference_canvas.add_child(player_inspect_panel)

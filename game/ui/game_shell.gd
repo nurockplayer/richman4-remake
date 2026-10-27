@@ -814,11 +814,12 @@ func _render_turn_controls() -> void:
 		_focus_turn_choice.call_deferred()
 
 
-# Overlays (stocks, inspector, help, ...) drop focus when they hide.  Before a
-# key reaches the GUI, re-seat an orphaned focus on the waiting picker so every
-# close path hands Enter back to it.
+# Overlays (stocks, inspector, help, ...) drop focus when they hide, or leave
+# it on the toolbar button that opened them.  Before a key reaches the GUI,
+# re-seat such focus on the waiting picker so every close path hands Enter back
+# to it; _focus_turn_choice keeps focus a modal or the picker itself owns.
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
+	if event is InputEventKey and event.pressed and not event.echo:
 		_focus_turn_choice()
 
 

@@ -216,6 +216,10 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	any_key.pressed = true
 	shell.get_viewport().push_input(any_key)
 	_expect(shell.buy_button.has_focus(), "a key press re-seats orphaned focus on the waiting picker")
+	var stocks_button: Button = shell.toolbar_buttons.get("stocks") as Button
+	stocks_button.grab_focus()
+	shell.get_viewport().push_input(any_key)
+	_expect(shell.buy_button.has_focus(), "a key press moves focus left on a toolbar button back to the picker")
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
 	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
 	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")

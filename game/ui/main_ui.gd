@@ -2974,6 +2974,38 @@ func _new_game(seed_value: Variant = null, player_count: int = PLAYER_COUNT, map
 	_ai_pending = false
 	return true
 
+## Source scene cues (4549cf call sites): magic house 433b1e push 7, prison
+## entrance 43d38e push 15, hospital entrance 43ea3a push 16, month-end
+## statement 439e99 push 9.
+const SCENE_CUES := {"magic_house_entered": 7, "month_end_settlement": 9}
+const STATUS_SERVICE_CUES := {"prison": 15, "hospital": 16}
+var _cue_state: Object = null
+var _cue_last_event: Variant = null
+
+## Play the cue of the newest unseen cue event. A newly loaded or started game
+## only sets the baseline, so loading never replays an old cue.
+func _play_scene_cues() -> void:
+	# The live log, not the refresh snapshot: entries keep their identity.
+	if game_state == null or not (game_state.get("state") is Dictionary): return
+	var entries: Array = _as_array(game_state.state.get("event_log", []))
+	var newest: Variant = entries.back() if not entries.is_empty() else null
+	if _cue_state != game_state:
+		_cue_state = game_state
+		_cue_last_event = newest
+		return
+	var cue := -1
+	for index in range(entries.size() - 1, -1, -1):
+		var event: Variant = entries[index]
+		if _cue_last_event != null and is_same(event, _cue_last_event): break
+		if not event is Dictionary: continue
+		var kind := str(event.get("type", ""))
+		if SCENE_CUES.has(kind): cue = int(SCENE_CUES[kind])
+		elif kind == "status_service_entered": cue = int(STATUS_SERVICE_CUES.get(str(event.get("status_kind", "")), -1))
+		if cue >= 0: break
+	_cue_last_event = newest
+	if cue >= 0 and audio_controller != null and audio_controller.has_method("play_cue"):
+		audio_controller.call("play_cue", cue)
+
 func _setup_audio() -> void:
 	var audio_script: Variant = load("res://game/platform/original_audio.gd")
 	if audio_script == null:
@@ -3912,6 +3944,7 @@ func _update_all() -> void:
 	if company_popup.visible:
 		_update_company_popup()
 	_update_event_log()
+	_play_scene_cues()
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
 	_update_magic_house_popup()

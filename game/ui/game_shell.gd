@@ -811,6 +811,14 @@ func _render_turn_controls() -> void:
 		_focus_turn_choice.call_deferred()
 
 
+# Overlays (stocks, inspector, help, ...) drop focus when they hide.  Before a
+# key reaches the GUI, re-seat an orphaned focus on the waiting picker so every
+# close path hands Enter back to it.
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
+		_focus_turn_choice()
+
+
 ## Keyboard players answer the YES/NO picker with Enter: focus its first live
 ## choice unless a visible control outside the board chrome already owns focus.
 func _focus_turn_choice() -> void:

@@ -81,6 +81,12 @@ func run() -> void:
 		audio.next_track()
 		order.append(audio.current_track)
 	expect(order == [0, 1, 2, 3, 4, 0] and not audio.play_cue(0), "other libraries cycle every track and have no cues")
+	var renamed := source_library(25)
+	renamed[3] = "synthetic://song.ogg"
+	audio.tracks = renamed
+	audio.current_track = 7
+	audio.next_track()
+	expect(audio.current_track == 8 and not audio.play_cue(0), "25 files that are not track02..track26 are not the source layout")
 	audio.free()
 
 	var ui = MainScene.instantiate()

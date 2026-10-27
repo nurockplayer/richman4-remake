@@ -118,15 +118,25 @@ func play_track(index: int) -> bool:
 	return true
 
 
+## A source-layout library is exactly track02.ogg..track26.ogg.
+func _source_layout() -> bool:
+	if tracks.size() != SOURCE_TRACK_COUNT:
+		return false
+	for index in range(SOURCE_TRACK_COUNT):
+		if tracks[index].get_file().to_lower() != "track%02d.ogg" % (index + 2):
+			return false
+	return true
+
+
 ## Board tracks in a source-layout library; any other library cycles all.
 func _board_count() -> int:
-	return BOARD_TRACKS if tracks.size() == SOURCE_TRACK_COUNT else tracks.size()
+	return BOARD_TRACKS if _source_layout() else tracks.size()
 
 
 ## Play source scene cue `cue` (0 = MIDI01) once, then resume the board track.
 ## Libraries without the source layout have no cues and keep playing.
 func play_cue(cue: int) -> bool:
-	if not enabled or tracks.size() != SOURCE_TRACK_COUNT or cue < 0 or BOARD_TRACKS + cue >= tracks.size():
+	if not enabled or not _source_layout() or cue < 0 or BOARD_TRACKS + cue >= tracks.size():
 		return false
 	var stream := _load_track(tracks[BOARD_TRACKS + cue])
 	if stream == null:

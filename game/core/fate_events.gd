@@ -143,10 +143,12 @@ static func _validate_last(last: Dictionary) -> Array:
 	return errors
 
 
-static func has_eligible_target(game: Object, event_id: int) -> bool:
+## player_id defaults to the mover; the magic house draws fates for other players.
+static func has_eligible_target(game: Object, event_id: int, player_id: int = -1) -> bool:
 	if game == null or not is_supported(event_id):
 		return false
-	var player_id: int = int(game.state.get("current_player", -1))
+	if player_id < 0:
+		player_id = int(game.state.get("current_player", -1))
 	if not _valid_player(game, player_id):
 		return false
 	var player: Dictionary = game.state.players[player_id]
@@ -209,7 +211,7 @@ static func apply_landing(game: Object, player_id: int) -> void:
 		var skip_reason := ""
 		if not is_supported(candidate_id):
 			skip_reason = "unsupported"
-		elif not has_eligible_target(game, candidate_id):
+		elif not has_eligible_target(game, candidate_id, player_id):
 			skip_reason = "no_compatible_target"
 		if not skip_reason.is_empty():
 			preview["reason"] = skip_reason
@@ -268,7 +270,7 @@ static func resolve(game: Object, player_id: int, candidate_id: int) -> Dictiona
 	if game == null or not _valid_player(game, player_id) or not is_supported(candidate_id):
 		return {"ok": false, "reason": "unsupported"}
 	var resolved_id: int = _remap_traffic(game, candidate_id, player_id)
-	var map_slot: int = _map_slot(game, candidate_id)
+	var map_slot: int = _map_slot(game, candidate_id, player_id)
 	var result: Dictionary = {"ok": true, "id": resolved_id, "map_slot": map_slot, "targets": [], "changes": [], "summary": "", "outcome": "applied", "raw_amount": 0, "raw_days": 0, "gate_result": 0}
 	match candidate_id:
 		0:
@@ -554,9 +556,9 @@ static func _remap_traffic(game: Object, candidate_id: int, player_id: int) -> i
 	return candidate_id
 
 
-static func _map_slot(game: Object, candidate_id: int) -> int:
+static func _map_slot(game: Object, candidate_id: int, player_id: int) -> int:
 	if candidate_id < COMMON_COUNT:
-		return _remap_traffic(game, candidate_id, int(game.state.get("current_player", -1))) if candidate_id in [10, 11, 12, 13, 14, 15, 16] else candidate_id
+		return _remap_traffic(game, candidate_id, player_id) if candidate_id in [10, 11, 12, 13, 14, 15, 16] else candidate_id
 	var source: Variant = game.state.get("map_source", {})
 	var map_number: int = int(source.get("map_number", 1)) if typeof(source) == TYPE_DICTIONARY else 1
 	return 33 + (candidate_id - COMMON_COUNT) + clampi(map_number - 1, 0, 99) * 4

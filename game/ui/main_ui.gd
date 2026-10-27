@@ -198,6 +198,10 @@ var stocks_popup: PopupPanel
 var stocks_description_label: Label
 var company_popup: PopupPanel
 var trap_popup: PopupPanel
+var magic_house_popup: PopupPanel
+var magic_house_prompt_label: Label
+var magic_house_buttons: Array = []
+var _magic_house_busy := false
 var trap_prompt_label: Label
 var trap_target_option: OptionButton
 var trap_redirect_button: Button
@@ -2073,6 +2077,31 @@ func _build_popups() -> void:
 			call_deferred("_respond_to_trap", true)
 	)
 
+	# Source event 16: the lander picks one of twelve spells for the drawn group.
+	# There is no decline path in the source, so hiding re-opens the choice.
+	magic_house_popup = _make_popup(Vector2i(600, 360))
+	magic_house_popup.name = "MagicHousePopup"
+	magic_house_popup.exclusive = true
+	magic_house_popup.popup_window = false
+	var magic_box := _popup_box(magic_house_popup)
+	magic_box.add_child(_make_label("魔法屋", 19, TEXT_MAIN))
+	magic_house_prompt_label = _make_label("", 13, TEXT_MAIN)
+	magic_house_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	magic_house_prompt_label.custom_minimum_size.x = 540
+	magic_box.add_child(magic_house_prompt_label)
+	var magic_grid := GridContainer.new()
+	magic_grid.columns = 3
+	magic_box.add_child(magic_grid)
+	for effect_id in range(12):
+		var spell := _make_button("", func() -> void: _choose_magic_house_effect(effect_id))
+		spell.name = "MagicHouseEffect%d" % effect_id
+		spell.custom_minimum_size = Vector2(176, 36)
+		magic_grid.add_child(spell)
+		magic_house_buttons.append(spell)
+	magic_house_popup.popup_hide.connect(func() -> void:
+		if not _magic_house_busy: call_deferred("_update_magic_house_popup")
+	)
+
 	audio_folder_dialog = FileDialog.new()
 	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	audio_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -3841,6 +3870,7 @@ func _update_all() -> void:
 	_update_event_log()
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
+	_update_magic_house_popup()
 	_update_financial_popup()
 	_update_auction_popup()
 	news_popup.sync_snapshot(state)
@@ -4417,6 +4447,42 @@ func _update_trap_response_popup() -> void:
 		if int(target) == prior_target: trap_target_option.select(trap_target_option.item_count-1)
 	trap_redirect_button.disabled = trap_target_option.item_count == 0
 	if not trap_popup.visible: trap_popup.popup_centered()
+
+func _magic_house_visit() -> Dictionary:
+	if game_state == null or not game_state.has_method("magic_house_snapshot"): return {}
+	var visit: Dictionary = game_state.magic_house_snapshot()
+	var caster := _current_player()
+	if visit.is_empty() or not bool(caster.get("is_human", false)) or bool(caster.get("is_ai", false)): return {}
+	return visit
+
+func _update_magic_house_popup() -> void:
+	if magic_house_popup == null: return
+	var visit := _magic_house_visit()
+	if visit.is_empty():
+		magic_house_popup.hide()
+		return
+	var names: Array = []
+	for target_id in _as_array(visit.get("targets", [])):
+		names.append(_player_name(int(target_id)))
+	magic_house_prompt_label.text = "抽中「%s」：%s。\n選一個魔法施展在他們身上。" % [str(visit.get("group", "")), "、".join(names)]
+	var effects: Array = _as_array(visit.get("effects", []))
+	var unrestored: Array = _as_array(visit.get("unrestored_effects", []))
+	for effect_id in range(magic_house_buttons.size()):
+		var spell: Button = magic_house_buttons[effect_id]
+		spell.text = str(effects[effect_id]) + ("（待還原）" if unrestored.has(effect_id) else "") if effect_id < effects.size() else ""
+		spell.disabled = unrestored.has(effect_id) or effect_id >= effects.size()
+	if not magic_house_popup.visible: magic_house_popup.popup_centered()
+
+func _choose_magic_house_effect(effect_id: int) -> void:
+	var visit := _magic_house_visit()
+	if _magic_house_busy or visit.is_empty(): return
+	_magic_house_busy = true
+	magic_house_popup.hide()
+	var result := _invoke_game("choose_magic_house_effect", [int(visit.get("visit_id", -1)), effect_id])
+	_append_local_log(_result_text(result, "已施展魔法。"))
+	_handle_result(result)
+	_magic_house_busy = false
+	_update_magic_house_popup()
 
 func _respond_to_trap(decline: bool) -> void:
 	if _trap_response_busy or not _human_trap_response_pending(): return
@@ -5227,6 +5293,18 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "已從%s醒來" % ("冬眠" if event.get("sleep_kind", "") == "winter" else "夢遊")
 		"status_admitted":
 			return "%s · %s" % ["送往醫院" if event.get("status_kind", "") == "hospital" else "送往監獄", _tile_name(int(event.get("node", -1)))]
+		"magic_house_entered":
+			return "魔法屋抽中「%s」" % str(event.get("group", ""))
+		"magic_house_cast":
+			return "施展魔法：%s" % str(event.get("effect", ""))
+		"magic_house_effect":
+			if bool(event.get("blocked", false)):
+				return "%s 用免罪卡擋下魔法" % _player_name(int(event.get("target_id", -1)))
+			if str(event.get("skipped", "")) == "unrestored":
+				return "此魔法尚未還原，沒有效果"
+			if event.has("points"):
+				return "%s 變賣得 %d 點券" % [_player_name(int(event.get("target_id", -1))), int(event.get("points", 0))]
+			return "魔法作用在 %s" % _player_name(int(event.get("target_id", -1)))
 		"status_skipped":
 			return _rest_status_label({"kind":event.get("status_kind", "hospital"),"count":int(event.get("remaining",0))})
 		"status_released":

@@ -27,6 +27,7 @@ const BUILDING_CARD_SAVE_VERSION = 13
 const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
+const SourceMagicHouse = preload("res://game/core/source_magic_house.gd")
 const SourceSale = preload("res://game/core/source_sale_flow.gd")
 const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const SourceMinigameFlow = preload("res://game/core/source_minigame_flow.gd")
@@ -448,6 +449,11 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 		SourceShop.initialize(state)
 	if SourceSale.enabled(self):
 		SourceSale.initialize(state)
+	if SourceMagicHouse.enabled(self):
+		SourceMagicHouse.initialize(state)
+		for tile in state.get("board", []):
+			if tile is Dictionary and int(tile.get("event_code", -1)) == SourceMagicHouse.EVENT_CODE:
+				tile["name"] = str(tile.get("name", "")).replace("（待還原）", "")
 
 
 func _configure_setup(options: Dictionary, player_count: int) -> void:
@@ -2329,7 +2335,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame"]:
+	if phase in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -3485,14 +3491,14 @@ func apply_trustee_settings(rows: Array) -> bool:
 
 
 func request_trustee_recovery() -> bool:
-	if state.get("phase", "") in ["await_shop", "await_sale"]: return false
+	if state.get("phase", "") in ["await_shop", "await_sale", "await_magic_house"]: return false
 	if state.get("phase", "") == "game_over":
 		return false
 	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
-	if state.get("phase", "") in ["await_shop", "await_sale", "await_lottery"]: return false
+	if state.get("phase", "") in ["await_shop", "await_sale", "await_lottery", "await_magic_house"]: return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -4601,6 +4607,8 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 		return
 	if final_landing and int(tile.get("event_code", -1)) == 15 and SourceShop.admit(self, player_id):
 		return
+	if final_landing and int(tile.get("event_code", -1)) == SourceMagicHouse.EVENT_CODE and SourceMagicHouse.admit(self, player_id):
+		return
 	if _is_companies() and not get_company_at(tile_index).is_empty():
 		if final_landing:
 			_resolve_company_visit(player_id, tile)
@@ -4872,7 +4880,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5394,6 +5402,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 	if SourceShop.enabled(self) and normalized in ["buy_item", "sell_item"]:
 		return SourceShop.trade(self, normalized, params)
 	if state.get("phase", "") == "await_shop": return _error("請先完成商店操作")
+	if state.get("phase", "") == "await_magic_house": return _error("請先完成魔法屋選擇")
 	if state.get("phase", "") == "await_sale": return _error("請先完成販賣操作")
 
 	if normalized == "respond_auction":
@@ -6517,25 +6526,8 @@ func _use_card(player_id: int, card_id: String, target_id: Variant = -1, symbol:
 		turtle_target["turtle_days"] = max(3, int(turtle_target.get("turtle_days", 0)))
 		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "turtle"})
 	elif card_id == "轉向":
-		var turn_target: Dictionary = _player(target_id)
-		var current_node: int = int(turn_target.get("position", -1))
-		var old_previous_node: int = int(turn_target.get("previous_position", -1))
-		var turn_candidates: Array = []
-		var turn_tile: Dictionary = _tile_at(current_node)
-		var adjacent: Variant = turn_tile.get("adjacent", [])
-		if typeof(adjacent) == TYPE_ARRAY:
-			for neighbor in adjacent:
-				if not _valid_int(neighbor, 0, state.get("board", []).size() - 1):
-					continue
-				var neighbor_id: int = int(neighbor)
-				if neighbor_id != old_previous_node and not turn_candidates.has(neighbor_id):
-					turn_candidates.append(neighbor_id)
-		turn_candidates.sort()
-		var selected_previous: int = -1
-		if not turn_candidates.is_empty():
-			selected_previous = int(turn_candidates[_rng.randi_range(0, turn_candidates.size() - 1)])
-		turn_target["previous_position"] = selected_previous
-		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "reverse_direction", "from_previous_position": old_previous_node, "to_previous_position": selected_previous, "candidates": turn_candidates})
+		var reversed: Dictionary = _reverse_player_direction(target_id)
+		_record_event("card_used", {"player_id": player_id, "card_id": card_id, "target_id": target_id, "effect": "reverse_direction", "from_previous_position": reversed.from_previous_position, "to_previous_position": reversed.to_previous_position, "candidates": reversed.candidates})
 	elif card_id == "紅" or card_id == "黑":
 		var market: Dictionary = state.get("market", {})
 		if _is_companies():
@@ -6672,7 +6664,7 @@ func surrender(player_id: int = -1) -> Dictionary:
 		return _error("玩家不在對局中")
 	# Shop, minigame and SALE sessions own the turn until they close; conceding
 	# underneath them would leave a session naming a departed actor.
-	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale"]:
+	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale", "await_magic_house"]:
 		return _error("請先關閉目前視窗再投降")
 	_declare_bankruptcy(target_id, -1, 0, "surrender")
 	# Bankruptcy advances a moving current actor itself. An action-phase actor
@@ -7097,6 +7089,8 @@ func _run_ai_turn_dispatch() -> Dictionary:
 	if state.get("phase", "") == "await_shop":
 		SourceShop.ai_turn(self)
 		return _result(true, "AI 商店操作完成", {"completed": true})
+	if state.get("phase", "") == "await_magic_house":
+		return _result(false, "等待魔法屋選擇", {"awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if not AuctionRules.response(self).is_empty():
@@ -7976,6 +7970,8 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 		return _result(false, "等待販賣操作", {"completed_turns": 0, "awaiting_response": true})
 	if state.get("phase", "") == "await_shop" and bool(SourceShop.current(self).get("human", true)):
 		return _result(false, "等待商店操作", {"completed_turns": 0, "awaiting_response": true})
+	if state.get("phase", "") == "await_magic_house":
+		return _result(false, "等待魔法屋選擇", {"completed_turns": 0, "awaiting_response": true})
 	if _trap_pending():
 		return _error("請先回應陷害卡")
 	if max_turns < 1:
@@ -8645,6 +8641,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		allowed_phases.append_array(["await_bank", "await_lottery", "await_sale"])
 	if source_shop_save:
 		allowed_phases.append("await_shop")
+	if SourceMagicHouse.supports_save(data):
+		allowed_phases.append("await_magic_house")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
@@ -9936,6 +9934,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 				errors.append("invalid bankruptcy auction entry")
 	var shop_errors: Array = SourceShop.validate(data, source_shop_save)
 	if not shop_errors.is_empty(): errors.append_array(shop_errors)
+	var magic_house_errors: Array = SourceMagicHouse.validate(data, SourceMagicHouse.supports_save(data))
+	if not magic_house_errors.is_empty(): errors.append_array(magic_house_errors)
 	return {"ok": errors.is_empty(), "errors": errors}
 
 
@@ -9976,6 +9976,8 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		SourceShop.initialize(candidate)
 	if bool(candidate.get("original_companies", false)) and not candidate.has("sale_board"):
 		SourceSale.initialize(candidate)
+	if SourceMagicHouse.supports_save(candidate) and not candidate.has("magic_house") and not candidate.has("magic_house_sequence"):
+		SourceMagicHouse.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -10104,3 +10106,59 @@ func minigame_pointer(encounter_id: int, position: Vector2, pressed: bool) -> bo
 func finish_minigame(encounter_id: int) -> Dictionary:
 	if _minigame_session == null: return _error("目前沒有小遊戲")
 	return _minigame_session.finish(self,encounter_id)
+
+
+## 轉向卡 and the magic house share source 40c78c: pick a new previous node
+## among the neighbours other than the old one (one draw when any exist).
+func _reverse_player_direction(target_id: int) -> Dictionary:
+	var turn_target: Dictionary = _player(target_id)
+	var current_node: int = int(turn_target.get("position", -1))
+	var old_previous_node: int = int(turn_target.get("previous_position", -1))
+	var turn_candidates: Array = []
+	var turn_tile: Dictionary = _tile_at(current_node)
+	var adjacent: Variant = turn_tile.get("adjacent", [])
+	if typeof(adjacent) == TYPE_ARRAY:
+		for neighbor in adjacent:
+			if not _valid_int(neighbor, 0, state.get("board", []).size() - 1):
+				continue
+			var neighbor_id: int = int(neighbor)
+			if neighbor_id != old_previous_node and not turn_candidates.has(neighbor_id):
+				turn_candidates.append(neighbor_id)
+	turn_candidates.sort()
+	var selected_previous: int = -1
+	if not turn_candidates.is_empty():
+		selected_previous = int(turn_candidates[_rng.randi_range(0, turn_candidates.size() - 1)])
+	turn_target["previous_position"] = selected_previous
+	return {"from_previous_position": old_previous_node, "to_previous_position": selected_previous, "candidates": turn_candidates}
+
+
+## Magic-house effect 8 (source 445b3f): the active vehicle goes back to the
+## backpack, then every tool sells at its listed point price.
+func _sell_all_tools_for_points(player_id: int) -> int:
+	var player: Dictionary = _player(player_id)
+	var total: int = 0
+	var vehicle: String = _hazard_return_active_vehicle(player)
+	var vehicle_tool: String = "工程車" if vehicle == EngineeringVehicle.VEHICLE_ID else _inventory_vehicle_tool_id(vehicle)
+	if not vehicle_tool.is_empty():
+		total += int(OriginalInventoryCatalogue.tool(vehicle_tool).get("price", 0))
+	for tool_id in player.get("tools", {}).keys():
+		var quantity: int = int(player["tools"].get(tool_id, 0))
+		if quantity > 0 and bool(OriginalInventory.consume_tool(state["inventory_supply"], player["tools"], tool_id, quantity).get("ok", false)):
+			total += quantity * int(OriginalInventoryCatalogue.tool(str(tool_id)).get("price", 0))
+	player["points"] = int(player.get("points", 0)) + total
+	return total
+
+
+func magic_house_snapshot() -> Dictionary:
+	var visit := SourceMagicHouse.current(self)
+	if visit.is_empty():
+		return {}
+	var snapshot: Dictionary = visit.duplicate(true)
+	snapshot["group"] = SourceMagicHouse.GROUP_NAMES[int(visit.group_id)]
+	snapshot["effects"] = SourceMagicHouse.EFFECT_NAMES.duplicate()
+	snapshot["unrestored_effects"] = SourceMagicHouse.UNRESTORED_EFFECTS.duplicate()
+	return snapshot
+
+
+func choose_magic_house_effect(visit_id: int, effect_id: int) -> Dictionary:
+	return SourceMagicHouse.choose(self, visit_id, effect_id)

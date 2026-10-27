@@ -92,7 +92,9 @@ static func _resolve(game: Object, effect_id: int) -> void:
 		if target.is_empty() or not bool(target.get("alive", false)): continue
 		_apply(game, effect_id, int(target_id), caster_id)
 	game.state.magic_house = {}
-	if str(game.state.get("phase", "")) != "game_over":
+	# A fate can bankrupt the caster and hand the turn on; the next player's
+	# options are already set then.
+	if str(game.state.get("phase", "")) != "game_over" and int(game.state.current_player) == caster_id and bool(game._player(caster_id).get("alive", false)):
 		game._set_action_options(caster_id)
 
 static func _apply(game: Object, effect_id: int, target_id: int, caster_id: int) -> void:

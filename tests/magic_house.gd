@@ -171,6 +171,15 @@ func run() -> void:
 	expect(Game.FateEvents.has_eligible_target(fate_game, 10, 0) and not Game.FateEvents.has_eligible_target(fate_game, 10, 1), "fate eligibility uses the named player")
 	expect(Game.FateEvents.has_eligible_target(fate_game, 10), "fate eligibility still defaults to the mover")
 
+	# When the turn has moved on (caster bankrupted by a fate), the next
+	# player's options are left alone.
+	var handoff: Object = make_game()
+	var handoff_visit := open_visit(handoff, [1])
+	handoff.state.current_player = 1
+	handoff.state.action_options = ["marker"]
+	handoff.choose_magic_house_effect(handoff_visit, 4)
+	expect(handoff.state.action_options == ["marker"], "resolution does not overwrite another player's actions")
+
 	# Control cannot switch to AI while a human choice is pending.
 	var pending_game: Object = make_game()
 	open_visit(pending_game, [1])

@@ -28,6 +28,7 @@ const OriginalStockMarket = preload("res://game/core/original_stock_market.gd")
 const StockAccounting = preload("res://game/core/stock_accounting.gd")
 const SourceShop = preload("res://game/core/source_shop_flow.gd")
 const SourceMagicHouse = preload("res://game/core/source_magic_house.gd")
+const SourceStatusService = preload("res://game/core/source_status_service.gd")
 const SourceSale = preload("res://game/core/source_sale_flow.gd")
 const LotteryFlow = preload("res://game/core/lottery_flow.gd")
 const SourceMinigameFlow = preload("res://game/core/source_minigame_flow.gd")
@@ -453,6 +454,11 @@ func _initialize_graph_setup(seed_value: int, player_count: int, definition: Dic
 		SourceMagicHouse.initialize(state)
 		for tile in state.get("board", []):
 			if tile is Dictionary and int(tile.get("event_code", -1)) == SourceMagicHouse.EVENT_CODE:
+				tile["name"] = str(tile.get("name", "")).replace("（待還原）", "")
+	if SourceStatusService.enabled(self):
+		SourceStatusService.initialize(state)
+		for tile in state.get("board", []):
+			if tile is Dictionary and SourceStatusService.KIND_BY_EVENT.has(int(tile.get("event_code", -1))):
 				tile["name"] = str(tile.get("name", "")).replace("（待還原）", "")
 
 
@@ -2335,7 +2341,7 @@ func _set_action_options(player_id: int) -> void:
 	if _is_facilities() and _valid_int(state.get("last_roll_total", null), 0, MAX_GRAPH_STEPS):
 		state["last_total"] = int(state.get("last_roll_total", 0))
 	var phase: String = str(state.get("phase", ""))
-	if phase in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house"]:
+	if phase in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house", "await_status_service"]:
 		state["action_options"] = []
 		return
 	var options: Array = []
@@ -3491,14 +3497,14 @@ func apply_trustee_settings(rows: Array) -> bool:
 
 
 func request_trustee_recovery() -> bool:
-	if state.get("phase", "") in ["await_shop", "await_sale", "await_magic_house"]: return false
+	if state.get("phase", "") in ["await_shop", "await_sale", "await_magic_house", "await_status_service"]: return false
 	if state.get("phase", "") == "game_over":
 		return false
 	return TrusteePreferences.request_recovery(state)
 
 
 func set_player_ai(player_id: int, enabled: bool) -> bool:
-	if state.get("phase", "") in ["await_shop", "await_sale", "await_lottery", "await_magic_house"]: return false
+	if state.get("phase", "") in ["await_shop", "await_sale", "await_lottery", "await_magic_house", "await_status_service"]: return false
 	if _trap_pending():
 		return false
 	if not _valid_player(player_id):
@@ -4609,6 +4615,8 @@ func _graph_visit_tile(player_id: int, tile: Dictionary, final_landing: bool, ba
 		return
 	if final_landing and int(tile.get("event_code", -1)) == SourceMagicHouse.EVENT_CODE and SourceMagicHouse.admit(self, player_id):
 		return
+	if final_landing and SourceStatusService.KIND_BY_EVENT.has(int(tile.get("event_code", -1))) and SourceStatusService.admit(self, player_id):
+		return
 	if _is_companies() and not get_company_at(tile_index).is_empty():
 		if final_landing:
 			_resolve_company_visit(player_id, tile)
@@ -4880,7 +4888,7 @@ func _resolve_landing(player_id: int, process_graph_objects: bool = true) -> voi
 				_check_game_over()
 				return
 		_graph_visit_tile(player_id, tile, true)
-		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house"]:
+		if bool(player.get("alive", false)) and state.get("phase", "") not in ["game_over", "await_shop", "await_sale", "await_lottery", "await_minigame", "await_magic_house", "await_status_service"]:
 			state["phase"] = "await_action"
 			_set_action_options(player_id)
 		_check_game_over()
@@ -5403,6 +5411,7 @@ func choose_action(action: String, params: Dictionary = {}) -> Dictionary:
 		return SourceShop.trade(self, normalized, params)
 	if state.get("phase", "") == "await_shop": return _error("請先完成商店操作")
 	if state.get("phase", "") == "await_magic_house": return _error("請先完成魔法屋選擇")
+	if state.get("phase", "") == "await_status_service": return _error("請先完成保釋服務")
 	if state.get("phase", "") == "await_sale": return _error("請先完成販賣操作")
 
 	if normalized == "respond_auction":
@@ -6664,7 +6673,7 @@ func surrender(player_id: int = -1) -> Dictionary:
 		return _error("玩家不在對局中")
 	# Shop, minigame and SALE sessions own the turn until they close; conceding
 	# underneath them would leave a session naming a departed actor.
-	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale", "await_magic_house"]:
+	if str(state.get("phase", "")) in ["await_shop", "await_minigame", "await_sale", "await_magic_house", "await_status_service"]:
 		return _error("請先關閉目前視窗再投降")
 	_declare_bankruptcy(target_id, -1, 0, "surrender")
 	# Bankruptcy advances a moving current actor itself. An action-phase actor
@@ -7091,6 +7100,8 @@ func _run_ai_turn_dispatch() -> Dictionary:
 		return _result(true, "AI 商店操作完成", {"completed": true})
 	if state.get("phase", "") == "await_magic_house":
 		return _result(false, "等待魔法屋選擇", {"awaiting_response": true, "completed": false})
+	if state.get("phase", "") == "await_status_service":
+		return _result(false, "等待保釋服務", {"awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if not AuctionRules.response(self).is_empty():
@@ -7972,6 +7983,8 @@ func run_ai_match(max_turns: int = 10000) -> Dictionary:
 		return _result(false, "等待商店操作", {"completed_turns": 0, "awaiting_response": true})
 	if state.get("phase", "") == "await_magic_house":
 		return _result(false, "等待魔法屋選擇", {"completed_turns": 0, "awaiting_response": true})
+	if state.get("phase", "") == "await_status_service":
+		return _result(false, "等待保釋服務", {"completed_turns": 0, "awaiting_response": true})
 	if _trap_pending():
 		return _error("請先回應陷害卡")
 	if max_turns < 1:
@@ -8643,6 +8656,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 		allowed_phases.append("await_shop")
 	if SourceMagicHouse.supports_save(data):
 		allowed_phases.append("await_magic_house")
+	if SourceStatusService.supports_save(data):
+		allowed_phases.append("await_status_service")
 	if typeof(phase) != TYPE_STRING or not allowed_phases.has(phase):
 		errors.append("invalid phase")
 	var phase_name: String = phase if typeof(phase) == TYPE_STRING else ""
@@ -9936,6 +9951,8 @@ static func validate_save(data: Dictionary) -> Dictionary:
 	if not shop_errors.is_empty(): errors.append_array(shop_errors)
 	var magic_house_errors: Array = SourceMagicHouse.validate(data, SourceMagicHouse.supports_save(data))
 	if not magic_house_errors.is_empty(): errors.append_array(magic_house_errors)
+	var status_service_errors: Array = SourceStatusService.validate(data, SourceStatusService.supports_save(data))
+	if not status_service_errors.is_empty(): errors.append_array(status_service_errors)
 	return {"ok": errors.is_empty(), "errors": errors}
 
 
@@ -9978,6 +9995,8 @@ static func from_dict(data: Dictionary) -> Richman4GameState:
 		SourceSale.initialize(candidate)
 	if SourceMagicHouse.supports_save(candidate) and not candidate.has("magic_house") and not candidate.has("magic_house_sequence"):
 		SourceMagicHouse.initialize(candidate)
+	if SourceStatusService.supports_save(candidate) and not candidate.has("status_service") and not candidate.has("status_service_sequence"):
+		SourceStatusService.initialize(candidate)
 	var validation: Dictionary = validate_save(candidate)
 	if not bool(validation.get("ok", false)):
 		return null
@@ -10162,3 +10181,24 @@ func magic_house_snapshot() -> Dictionary:
 
 func choose_magic_house_effect(visit_id: int, effect_id: int) -> Dictionary:
 	return SourceMagicHouse.choose(self, visit_id, effect_id)
+
+
+func status_service_snapshot() -> Dictionary:
+	var visit := SourceStatusService.current(self)
+	if visit.is_empty():
+		return {}
+	var snapshot: Dictionary = visit.duplicate(true)
+	var rows: Array = []
+	for target_id in SourceStatusService.roster(self, str(visit.kind), int(visit.player_id)):
+		rows.append({"id": int(target_id), "name": str(_player(int(target_id)).get("name", ""))})
+	snapshot["roster"] = rows
+	snapshot["price"] = SourceStatusService.PRICE
+	return snapshot
+
+
+func bail_status_service(visit_id: int, target_id: int) -> Dictionary:
+	return SourceStatusService.bail(self, visit_id, target_id)
+
+
+func leave_status_service(visit_id: int) -> Dictionary:
+	return SourceStatusService.leave(self, visit_id)

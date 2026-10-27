@@ -184,6 +184,12 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	await process_frame
 	_expect(shell.buy_button.has_focus(), "landing picker focuses YES so Enter can answer it")
 	_expect(shell.buy_button.has_theme_stylebox_override("focus"), "focused picker choice shows a visible frame")
+	var before_inspector_buy: String = game.to_json()
+	shell.open_player_inspector(0)
+	shell.buy_button.pressed.emit()
+	shell.end_turn_button.pressed.emit()
+	_expect(game.to_json() == before_inspector_buy, "picker answers are ignored while the player inspector is open")
+	shell.close_player_inspector()
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
 	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
 	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")

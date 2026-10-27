@@ -498,6 +498,11 @@ func _close_bank() -> String:
 
 
 func _checkpoint(game: Object, tag: String) -> void:
+	# The UI never saves mid-minigame (save gate and autosave both exclude
+	# await_minigame), and the session state of a running minigame is not
+	# serialized, so there is no snapshot to check until it resolves.
+	if str(game.state.get("phase", "")) == "await_minigame":
+		return
 	var snapshot: Dictionary = game.to_dict()
 	var validation: Dictionary = GameState.validate_save(snapshot)
 	_check(bool(validation.get("ok", false)), "validate_save at %s: %s" % [tag, str(validation.get("errors", []))])
@@ -523,8 +528,11 @@ func _checkpoint(game: Object, tag: String) -> void:
 	_check(live_restored != null, "live snapshot reloads at %s" % tag)
 	if live_restored == null:
 		return
-	var live_normalized: Dictionary = live_restored.to_dict()
-	var restored_normalized: Dictionary = restored.to_dict()
+	# Canonicalize both sides through JSON: the stored copy has been through
+	# the save file's text form (about 15 significant digits), the live one
+	# has not, so a float can differ by one ulp without any real state loss.
+	var live_normalized: Dictionary = JSON.parse_string(JSON.stringify(live_restored.to_dict()))
+	var restored_normalized: Dictionary = JSON.parse_string(JSON.stringify(restored.to_dict()))
 	if restored_normalized != live_normalized:
 		_check(false, "save->load round-trip restores an identical snapshot at %s (differing keys: %s)" % [tag, str(_differing_keys(live_normalized, restored_normalized))])
 	# The ordinary UI autosave writes AUTO on a day boundary. The shared scratch
@@ -548,7 +556,8 @@ func _checkpoint(game: Object, tag: String) -> void:
 func _differing_keys(left: Dictionary, right: Dictionary) -> Array:
 	var keys: Array = []
 	for key in left.keys():
-		if not right.has(key) or str(right[key]) != str(left[key]):
+		# Dictionary == ignores key order; str() does not.
+		if not right.has(key) or right[key] != left[key]:
 			keys.append(str(key))
 	for key in right.keys():
 		if not left.has(key):

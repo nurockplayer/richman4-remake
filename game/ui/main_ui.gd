@@ -202,6 +202,15 @@ var magic_house_popup: PopupPanel
 var magic_house_prompt_label: Label
 var magic_house_buttons: Array = []
 var _magic_house_busy := false
+var status_service_popup: PopupPanel
+var status_service_prompt_label: Label
+var status_service_rows: VBoxContainer
+var status_service_buttons: Array = []
+var status_service_confirm_row: HBoxContainer
+var status_service_confirm_label: Label
+var status_service_confirm_ok: Button
+var _status_service_busy := false
+var _status_service_target := -1
 var trap_prompt_label: Label
 var trap_target_option: OptionButton
 var trap_redirect_button: Button
@@ -2102,6 +2111,41 @@ func _build_popups() -> void:
 		if not _magic_house_busy: call_deferred("_update_magic_house_popup")
 	)
 
+	# Source events 4/5: the lander may bail other players held in that facility.
+	status_service_popup = _make_popup(Vector2i(520, 320))
+	status_service_popup.name = "StatusServicePopup"
+	status_service_popup.exclusive = true
+	status_service_popup.popup_window = false
+	var service_box := _popup_box(status_service_popup)
+	service_box.add_child(_make_label("保釋服務", 19, TEXT_MAIN))
+	status_service_prompt_label = _make_label("", 13, TEXT_MAIN)
+	status_service_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_service_prompt_label.custom_minimum_size.x = 460
+	service_box.add_child(status_service_prompt_label)
+	status_service_rows = VBoxContainer.new()
+	status_service_rows.add_theme_constant_override("separation", 6)
+	service_box.add_child(status_service_rows)
+	# Confirmation stays inside the exclusive popup: a second window would
+	# fight the exclusive parent for input.
+	status_service_confirm_row = HBoxContainer.new()
+	status_service_confirm_row.name = "StatusServiceConfirm"
+	status_service_confirm_label = _make_label("", 13, TEXT_MAIN)
+	status_service_confirm_row.add_child(status_service_confirm_label)
+	status_service_confirm_ok = _make_button("確定", _confirm_status_service)
+	status_service_confirm_ok.name = "StatusServiceConfirmOk"
+	status_service_confirm_row.add_child(status_service_confirm_ok)
+	status_service_confirm_row.add_child(_make_button("取消", func() -> void:
+		_status_service_target = -1
+		_update_status_service_popup()))
+	status_service_confirm_row.hide()
+	service_box.add_child(status_service_confirm_row)
+	var service_leave := _make_button("離開", _leave_status_service)
+	service_leave.name = "StatusServiceLeave"
+	service_box.add_child(service_leave)
+	status_service_popup.popup_hide.connect(func() -> void:
+		if not _status_service_busy: call_deferred("_update_status_service_popup")
+	)
+
 	audio_folder_dialog = FileDialog.new()
 	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	audio_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -3871,6 +3915,7 @@ func _update_all() -> void:
 	_update_end_overlay(phase)
 	_update_trap_response_popup()
 	_update_magic_house_popup()
+	_update_status_service_popup()
 	_update_financial_popup()
 	_update_auction_popup()
 	news_popup.sync_snapshot(state)
@@ -4483,6 +4528,75 @@ func _choose_magic_house_effect(effect_id: int) -> void:
 	_handle_result(result)
 	_magic_house_busy = false
 	_update_magic_house_popup()
+
+func _status_service_visit() -> Dictionary:
+	if game_state == null or not game_state.has_method("status_service_snapshot"): return {}
+	var visit: Dictionary = game_state.status_service_snapshot()
+	var lander := _current_player()
+	if visit.is_empty() or not bool(lander.get("is_human", false)) or bool(lander.get("is_ai", true)): return {}
+	return visit
+
+func _update_status_service_popup() -> void:
+	if status_service_popup == null: return
+	var visit := _status_service_visit()
+	if visit.is_empty():
+		status_service_popup.hide()
+		return
+	var facility := "監獄" if str(visit.get("kind", "")) == "prison" else "醫院"
+	var price := int(visit.get("price", 30))
+	var points := int(_current_player().get("points", 0))
+	status_service_prompt_label.text = "目前關在%s的人：選一名保釋，每次 %d 點券。" % [facility, price]
+	for button in status_service_buttons:
+		status_service_rows.remove_child(button)
+		button.queue_free()
+	status_service_buttons.clear()
+	for row in _as_array(visit.get("roster", [])):
+		if not row is Dictionary: continue
+		var target_id := int(row.get("id", -1))
+		var target_name := str(row.get("name", ""))
+		var bail := _make_button("保釋 %s（%d 點券）" % [target_name, price], func() -> void: _ask_status_service(target_id, target_name))
+		bail.name = "StatusServiceBail%d" % target_id
+		bail.disabled = points < price or _status_service_target >= 0
+		status_service_rows.add_child(bail)
+		status_service_buttons.append(bail)
+	var confirming := ""
+	for row in _as_array(visit.get("roster", [])):
+		if row is Dictionary and int(row.get("id", -1)) == _status_service_target: confirming = str(row.get("name", ""))
+	if confirming.is_empty(): _status_service_target = -1
+	status_service_confirm_label.text = "花 %d 點券保釋 %s？" % [price, confirming]
+	status_service_confirm_row.visible = not confirming.is_empty()
+	if not status_service_popup.visible: status_service_popup.popup_centered()
+
+func _ask_status_service(target_id: int, target_name: String) -> void:
+	if _status_service_busy: return
+	_status_service_target = target_id
+	# Deferred: the pressed row button is rebuilt by the refresh.
+	call_deferred("_update_status_service_popup")
+
+func _confirm_status_service() -> void:
+	var visit := _status_service_visit()
+	if _status_service_busy or visit.is_empty() or _status_service_target < 0: return
+	_status_service_busy = true
+	var target_id := _status_service_target
+	_status_service_target = -1
+	status_service_popup.hide()
+	var result := _invoke_game("bail_status_service", [int(visit.get("visit_id", -1)), target_id])
+	_append_local_log(_result_text(result, "已保釋。"))
+	_handle_result(result)
+	_status_service_busy = false
+	_update_status_service_popup()
+
+func _leave_status_service() -> void:
+	var visit := _status_service_visit()
+	if _status_service_busy or visit.is_empty(): return
+	_status_service_busy = true
+	_status_service_target = -1
+	status_service_popup.hide()
+	var result := _invoke_game("leave_status_service", [int(visit.get("visit_id", -1))])
+	_append_local_log(_result_text(result, "已離開。"))
+	_handle_result(result)
+	_status_service_busy = false
+	_update_status_service_popup()
 
 func _respond_to_trap(decline: bool) -> void:
 	if _trap_response_busy or not _human_trap_response_pending(): return
@@ -5293,6 +5407,8 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 			return "已從%s醒來" % ("冬眠" if event.get("sleep_kind", "") == "winter" else "夢遊")
 		"status_admitted":
 			return "%s · %s" % ["送往醫院" if event.get("status_kind", "") == "hospital" else "送往監獄", _tile_name(int(event.get("node", -1)))]
+		"status_bailed":
+			return "%s 花 30 點券保釋 %s" % [_player_name(int(event.get("player_id", -1))), _player_name(int(event.get("target_id", -1)))]
 		"magic_house_entered":
 			return "魔法屋抽中「%s」" % str(event.get("group", ""))
 		"magic_house_cast":

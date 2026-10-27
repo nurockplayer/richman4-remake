@@ -259,6 +259,8 @@ run_checked "$GODOT_BIN" --headless --path . --script tests/status_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_flow.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_save.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_ai.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/magic_house.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/magic_house_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/status_ui.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_loader.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/hazard_flow.gd

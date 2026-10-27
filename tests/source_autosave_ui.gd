@@ -49,6 +49,7 @@ func run() -> void:
 	ui.source_monthly_controller.report_panel.continued.emit()
 	await settle()
 	check(FileAccess.file_exists(automatic), "daily checkpoint is written after report ack")
+	check(not ui._source_autosave.pending() and not ui.source_shell.toolbar_buttons["help"].disabled and not ui.source_shell.toolbar_buttons["options"].disabled, "flushed checkpoint re-enables help and options toolbar")
 	if FileAccess.file_exists(automatic):
 		check(Core.from_dict(JSON.parse_string(FileAccess.get_file_as_string(automatic))).to_json() == settled, "automatic file preserves exact admitted ledger and RNG")
 	check(not FileAccess.file_exists(folder.path_join("legacy.json")), "daily auto never writes legacy owner file")

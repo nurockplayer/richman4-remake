@@ -3822,19 +3822,25 @@ func _sync_source_shell(phase: String, current_index: int) -> void:
 	if source_shell.has_method("sync_action_state"):
 		source_shell.call("sync_action_state", roll_button.text, roll_button.disabled, buy_button.text, buy_button.disabled, upgrade_button.text, upgrade_button.disabled, end_turn_button.disabled, action_hint_label.text, _as_array(state.get("route_options", [])), phase, _as_array(state.get("action_options", [])))
 	_sync_waiting_status()
-	if source_shell.has_method("set_toolbar_enabled"):
-		_update_source_help_gate()
-		source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
-		source_shell.call("set_toolbar_enabled", "ai", _source_trustee_operation_allowed())
-		source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
-		source_shell.call("set_toolbar_enabled", "save", game_state != null and _source_save_operation_allowed())
-		source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
-		var inventory_enabled := _source_inventory_operation_allowed()
-		source_shell.call("set_toolbar_enabled", "cards", inventory_enabled)
-		source_shell.call("set_toolbar_enabled", "tools", inventory_enabled)
-		source_shell.call("set_toolbar_enabled", "sale", _source_sale_operation_allowed())
+	_sync_toolbar_gates()
 	_sync_source_sale()
 	_last_rendered_phase = phase
+
+## Toolbar gates read the daily autosave state, so they are re-run once a
+## pending checkpoint is flushed, not only on snapshot refreshes.
+func _sync_toolbar_gates() -> void:
+	if source_shell == null or not source_shell.has_method("set_toolbar_enabled"):
+		return
+	_update_source_help_gate()
+	source_shell.call("set_toolbar_enabled", "options", _source_options_operation_allowed())
+	source_shell.call("set_toolbar_enabled", "ai", _source_trustee_operation_allowed())
+	source_shell.call("set_toolbar_enabled", "load", not _load_blocked_by_presentation())
+	source_shell.call("set_toolbar_enabled", "save", game_state != null and _source_save_operation_allowed())
+	source_shell.call("set_toolbar_enabled", "stocks", not stocks_button.disabled)
+	var inventory_enabled := _source_inventory_operation_allowed()
+	source_shell.call("set_toolbar_enabled", "cards", inventory_enabled)
+	source_shell.call("set_toolbar_enabled", "tools", inventory_enabled)
+	source_shell.call("set_toolbar_enabled", "sale", _source_sale_operation_allowed())
 
 func _update_load_gate() -> void:
 	var enabled := not _load_blocked_by_presentation()
@@ -6162,6 +6168,7 @@ func _flush_source_autosave() -> void:
 		_append_local_log("已完成每日自動存檔（AUTO）。")
 		_refresh_log_only()
 		_sync_waiting_status()
+		_sync_toolbar_gates()
 	elif _source_autosave.failed():
 		_append_local_log("每日自動存檔失敗：" + str(result.get("error", "unknown")))
 		if is_instance_valid(_autosave_failure_dialog):

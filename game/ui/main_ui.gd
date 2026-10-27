@@ -5302,6 +5302,8 @@ func _event_detail(event_type: String, event: Dictionary) -> String:
 				return "%s 用免罪卡擋下魔法" % _player_name(int(event.get("target_id", -1)))
 			if str(event.get("skipped", "")) == "unrestored":
 				return "此魔法尚未還原，沒有效果"
+			if not str(event.get("skipped", "")).is_empty() or (event.has("changed") and not bool(event.get("changed", false))):
+				return "魔法對 %s 沒有作用" % _player_name(int(event.get("target_id", -1)))
 			if event.has("points"):
 				return "%s 變賣得 %d 點券" % [_player_name(int(event.get("target_id", -1))), int(event.get("points", 0))]
 			return "魔法作用在 %s" % _player_name(int(event.get("target_id", -1)))

@@ -162,6 +162,17 @@ func run() -> void:
 	ui._cancel_presentation()
 	await settle()
 	check(not ui._source_modal_open() and auto_accept_quit == prior_quit, "presentation reset releases list lifetime")
+	var before_escape: String = ui.game_state.to_json()
+	ui._on_source_cards_requested()
+	await settle()
+	check(ui.source_inventory_panel.is_open(), "cards list opens for the ESC check")
+	for down in [true,false]:
+		var escape := InputEventKey.new()
+		escape.keycode = KEY_ESCAPE
+		escape.pressed = down
+		view.push_input(escape,true)
+	await settle()
+	check(not ui._source_modal_open() and ui.game_state.to_json() == before_escape, "ESC closes the cards list without changing the game (#204 row 20)")
 	check(ui._new_game(161,4,definition,setup_options), "fresh valid-target confirmation fixture")
 	game = ui.game_state
 	actor = game.state.players[0]

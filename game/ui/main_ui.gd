@@ -3049,9 +3049,23 @@ func _is_cancel_input(event: InputEvent) -> bool:
 	return event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT
 
 
-## Closes the topmost toolbar window (help, options, save/load, inspector).
-## Options with a confirmation on top stays put: that dialog owns the input.
+## Closes the topmost toolbar window (cards/tools, help, options and its
+## date/hotkeys children, save/load, inspector).  A window with a dialog on
+## top stays put: that dialog owns the input.
 func _cancel_toolbar_window() -> bool:
+	if source_inventory_panel != null and source_inventory_panel.is_open():
+		source_inventory_panel.close()
+		return true
+	if source_date_panel != null and source_date_panel.is_open():
+		if source_date_panel.is_input_suspended():
+			return false
+		source_date_panel.close()
+		return true
+	if source_hotkeys_panel != null and source_hotkeys_panel.is_open():
+		if source_hotkeys_panel.is_input_suspended():
+			return false
+		source_hotkeys_panel.close()
+		return true
 	if _source_help_modal_open() and source_help_controller.help_panel != null:
 		source_help_controller.help_panel.close_help()
 		return true

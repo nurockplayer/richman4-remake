@@ -517,13 +517,6 @@ func _build_player_inspector() -> void:
 	player_inspect_panel.name = "SourcePlayerInspect"
 	player_inspect_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	player_inspect_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	# The panel stops mouse events, so MainUI's unhandled cancel never sees a
-	# right-click over it; close on the right release here.
-	player_inspect_panel.gui_input.connect(func(event: InputEvent) -> void:
-		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-			player_inspect_panel.accept_event()
-			if not event.pressed:
-				close_player_inspector())
 	player_inspect_panel.z_index = 40
 	player_inspect_panel.hide()
 	reference_canvas.add_child(player_inspect_panel)
@@ -826,6 +819,13 @@ func _render_turn_controls() -> void:
 # close path hands Enter back to it.  Focus the player moved deliberately is
 # kept; mouse clicks on board chrome do not keep focus (see _drop_click_focus).
 func _input(event: InputEvent) -> void:
+	# The inspector's cards stop mouse events, so MainUI's unhandled cancel
+	# never sees a right-click over them; close on the right release first.
+	if is_player_inspector_visible() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		get_viewport().set_input_as_handled()
+		if not event.pressed:
+			close_player_inspector()
+		return
 	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
 		_focus_turn_choice()
 

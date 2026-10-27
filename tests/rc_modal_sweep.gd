@@ -148,5 +148,33 @@ func _run() -> void:
 				await _key(ui, KEY_ESCAPE)  # best effort so the next key starts clean
 			_expect(game.to_json() == before, "%s open/close via %s leaves the simulation unchanged" % [key, close_input])
 			await _reset_modal(ui)
+	await _sweep_options_children(ui, shell, game)
 	print("RC modal sweep checks: %d, failures: %d" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Options' date and hotkeys children back out to Options on ESC and on a
+## right-click; a second ESC then closes Options itself.
+func _sweep_options_children(ui: Control, shell: Control, game: Object) -> void:
+	for child in ["date", "hotkeys"]:
+		for close_input in ["esc", "right_click"]:
+			var before: String = game.to_json()
+			shell.toolbar_buttons["options"].pressed.emit()
+			await process_frame
+			await process_frame
+			var panel: Control = ui.source_date_panel if child == "date" else ui.source_hotkeys_panel
+			if child == "date":
+				ui._open_source_date_child()
+			else:
+				ui._open_source_hotkeys_child()
+			await process_frame
+			_expect(panel.is_open(), "options %s child opens" % child)
+			if close_input == "esc":
+				await _key(ui, KEY_ESCAPE)
+			else:
+				await _right_click(ui)
+			_expect(not panel.is_open() and ui._source_options_modal_open(), "options %s child backs out to options on %s" % [child, close_input])
+			await _key(ui, KEY_ESCAPE)
+			_expect(not ui._source_modal_open(), "options closes on esc after its %s child (%s)" % [child, close_input])
+			_expect(game.to_json() == before, "options %s child via %s leaves the simulation unchanged" % [child, close_input])
+			await _reset_modal(ui)

@@ -631,6 +631,8 @@ func _build_source_options() -> void:
 	_build_source_options_children(canvas)
 	_source_options_confirmation = ConfirmationDialog.new()
 	_source_options_confirmation.title = "確認"
+	_source_options_confirmation.ok_button_text = "確定"
+	_source_options_confirmation.cancel_button_text = "取消"
 	_source_options_confirmation.confirmed.connect(_confirm_source_options_command)
 	_source_options_confirmation.canceled.connect(_cancel_source_options_command)
 	add_child(_source_options_confirmation)
@@ -3596,6 +3598,7 @@ func _restart_game() -> void:
 			notice = AcceptDialog.new()
 			notice.name = "RestartUnavailableDialog"
 			notice.title = "無法重新開局"
+			notice.ok_button_text = "知道了"
 			add_child(notice)
 		notice.dialog_text = message
 		notice.popup_centered(Vector2i(620, 160))

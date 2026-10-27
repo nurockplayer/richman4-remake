@@ -460,6 +460,11 @@ func _configure_setup(options: Dictionary, player_count: int) -> void:
 		state["original_companies"] = true
 	if bool(options.get("original_statuses", false)):
 		state["original_statuses"] = true
+		# Hospital/prison nodes are live once statuses are on; drop the import's
+		# "not restored" suffix so logs and the HUD name them plainly.
+		for tile in state.get("board", []):
+			if tile is Dictionary and int(tile.get("type_and_idx", -1)) in [8001, 8002]:
+				tile["name"] = str(tile.get("name", "")).replace("（待還原）", "")
 	if bool(options.get("original_hazards", false)):
 		state["original_hazards"] = true
 	if bool(options.get("original_property_cards", false)):

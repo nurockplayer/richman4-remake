@@ -21,11 +21,16 @@ func run() -> void:
 	await process_frame
 	ui.set_process(false)
 	var definition: Dictionary = Fixture.definition()
+	for index in [0, 4]:
+		definition.board[index].name = str(definition.board[index].name) + "（待還原）"  # as original_maps imports them
 	var options: Dictionary = ui._default_setup_options(4,definition)
 	expect(options.get("original_statuses",false),"complete source capability enables status rules in new-game setup")
 	expect(ui._new_game(42,4,definition,options),"status-capable UI new game starts")
 	expect(int(ui.state.get("version",0))==8,"status-capable UI starts v8")
 	var game: Object = ui.game_state
+	for tile in ui.state.get("board", []):
+		if int(tile.get("type_and_idx", -1)) in [8001, 8002]:
+			expect(not str(tile.get("name", "")).contains("待還原"), "live hospital/prison node is not labelled unrestored: %s" % tile.get("name", ""))
 	if int(ui.state.get("version",0))!=8 or not game.has_method("_admit_player_status"):
 		ui.queue_free()
 		await process_frame

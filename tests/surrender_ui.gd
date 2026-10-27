@@ -92,6 +92,7 @@ func run() -> void:
 	await settle()
 	check(ui._source_options_confirmation.visible, "SURRENDER asks for confirmation first")
 	check(str(ui._source_options_confirmation.dialog_text).contains("投降"), "the confirmation states what surrendering does")
+	check(ui._source_options_confirmation.ok_button_text == "確定" and ui._source_options_confirmation.cancel_button_text == "取消", "the confirmation buttons read 確定/取消")
 	check(game.to_json() == before and bool(game.state.players[actor].get("alive", false)), "the prompt alone never concedes")
 	ui._source_options_confirmation.canceled.emit()
 	await settle()

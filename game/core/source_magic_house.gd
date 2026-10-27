@@ -154,6 +154,10 @@ static func _apply(game: Object, effect_id: int, target_id: int, caster_id: int)
 			elif effect_id == 9:
 				# 40ab4a mode 0, shared with the bomb blast: one level down.
 				detail["changed"] = bool(game._hazard_damage_property(node_id).get("damaged", false))
+			elif str(tile.get("kind", "")) == "facility" and int(game._facility_record(node_id).get("building_level", 0)) <= 0:
+				# Source 40b1a6 asks for a facility type first (440aac); that
+				# choice is not presented, so this spell has no effect here.
+				detail["skipped"] = "facility_type_choice"
 			else:
 				detail["changed"] = _build_one_level(game, node_id, tile)
 		_:

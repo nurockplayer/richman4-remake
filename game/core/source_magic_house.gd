@@ -17,10 +17,10 @@ const EFFECT_NAMES := [
 	"變賣所有卡片", "抽取命運三張", "立刻坐牢三天", "原地停留一回合", "存入所有現金", "就地加蓋房屋",
 	"得一張卡片", "向後轉", "變賣所有道具", "就地拆除房屋", "住院檢查三天", "拍賣當格土地",
 ]
-## Effects whose source helpers are not traced yet (build path, demolition
-## helper, auction caller). They resolve as an explicit no-op and are
-## disabled in the human menu; AI never draws 11 and logs 5/9 as skipped.
-const UNRESTORED_EFFECTS := [5, 9, 11]
+## Effect 11 (source 43bde5, the 拍賣卡 auction) would open a bidding round in
+## the middle of the spell; it stays disabled in the human menu and AI never
+## draws it.
+const UNRESTORED_EFFECTS := [11]
 ## Gender byte +0x14 per setup character (SETUP_CHARACTER_NAMES order). The
 ## source table was not traced; values follow the published character roster.
 const CHARACTER_IS_MALE := [true, true, true, false, true, false, true, false, false, false, true, true]
@@ -144,9 +144,40 @@ static func _apply(game: Object, effect_id: int, target_id: int, caster_id: int)
 				game._reverse_player_direction(target_id)
 		8:
 			detail["points"] = game._sell_all_tools_for_points(target_id)
+		5, 9:
+			# Source 431f67/432259: only a target that is not detained and stands
+			# on a lot or facility (object type 2001..5999); no owner check.
+			var node_id := int(target.get("position", -1))
+			var tile: Dictionary = game._tile_at(node_id)
+			if game._status_active(target) or game._sleep_active(target) or str(tile.get("kind", "")) not in ["property", "facility"]:
+				detail["skipped"] = "no_lot"
+			elif effect_id == 9:
+				# 40ab4a mode 0, shared with the bomb blast: one level down.
+				detail["changed"] = bool(game._hazard_damage_property(node_id).get("damaged", false))
+			else:
+				detail["changed"] = _build_one_level(game, node_id, tile)
 		_:
 			detail["skipped"] = "unrestored"
 	game._record_event("magic_house_effect", detail)
+
+## Source 40b110 (also the 福神 bonus build): one level up to the house or
+## chain-store cap. A facility at level 0 first needs its type chosen in the
+## source (440aac); that choice is not presented here, so it does not build.
+static func _build_one_level(game: Object, node_id: int, tile: Dictionary) -> bool:
+	var level := int(tile.get("building_level", 0))
+	if str(tile.get("kind", "")) == "facility":
+		if not game._is_facilities(): return false
+		var facility: Dictionary = game._facility_record(node_id)
+		var facility_type := int(facility.get("facility_type", 0))
+		level = int(facility.get("building_level", 0))
+		if level <= 0 or (facility_type == game.FACILITY_LAB_TYPE and not game._is_research()) or level >= game._facility_type_cap(facility_type): return false
+		game._update_facility_records(int(facility.get("source_object_id", -1)), {"building_level": level + 1})
+	else:
+		if level >= game._property_level_cap(tile, game._is_remodel()): return false
+		tile["building_level"] = level + 1
+		game._update_tile_rent(tile)
+	game._recalculate_property_values()
+	return true
 
 static func group_members(game: Object, group_id: int) -> Array:
 	var members: Array = []

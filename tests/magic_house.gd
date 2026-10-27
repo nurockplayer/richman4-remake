@@ -162,6 +162,27 @@ func run() -> void:
 	game.choose_magic_house_effect(visit_id, 3)
 	expect(int(players[1].get("stay_next", 0)) == stay_before + 1, "stay effect adds one turn to an existing stay")
 
+	# Effects 5/9 build or demolish one level on the target's own lot, owner
+	# or not; a player off any lot is skipped.
+	var lot_game: Object = make_game()
+	var lot := -1
+	for tile in lot_game.state.board:
+		if lot < 0 and str(tile.get("kind", "")) == "property":
+			lot = int(tile.index)
+	lot_game.state.players[1].position = lot
+	var lot_visit := open_visit(lot_game, [1])
+	lot_game.choose_magic_house_effect(lot_visit, 5)
+	expect(int(lot_game.state.board[lot].building_level) == 1, "build spell adds a level to the target's lot")
+	var lot_save: Dictionary = Game.validate_save(JSON.parse_string(lot_game.to_json()))
+	expect(bool(lot_save.get("ok", false)), "built unowned lot keeps the save valid: %s" % [lot_save.get("errors", [])])
+	lot_visit = open_visit(lot_game, [1])
+	lot_game.choose_magic_house_effect(lot_visit, 9)
+	expect(int(lot_game.state.board[lot].building_level) == 0, "demolish spell removes a level")
+	lot_game.state.board[lot].building_level = lot_game._property_level_cap(lot_game.state.board[lot], lot_game._is_remodel())
+	lot_visit = open_visit(lot_game, [1])
+	lot_game.choose_magic_house_effect(lot_visit, 5)
+	expect(int(lot_game.state.board[lot].building_level) == lot_game._property_level_cap(lot_game.state.board[lot], lot_game._is_remodel()), "build spell stops at the level cap")
+
 	# Fate eligibility follows the target, not the caster: a walking target
 	# never resolves a vehicle-only fate drawn for a driving caster.
 	var fate_game: Object = make_game()

@@ -24,10 +24,10 @@ func expect(condition: bool, message: String) -> void:
 		push_error("FAIL: " + message)
 
 
-func make_game() -> Object:
+func make_game(event_code: int = 4) -> Object:
 	var definition: Dictionary = StatusFixture.definition()
 	SERVICE_NODE = 1  # the fixture's points node; ordinary road with no company
-	definition.board[SERVICE_NODE].merge({"kind": "unsupported", "event_code": 4, "source_status_bits": 4, "name": "監獄入口（待還原）"}, true)
+	definition.board[SERVICE_NODE].merge({"kind": "unsupported", "event_code": event_code, "source_status_bits": event_code, "name": ("監獄入口" if event_code == 4 else "醫院入口") + "（待還原）"}, true)
 	definition.board[SERVICE_NODE].erase("points")
 	var game: Object = Game.new_game_on_board(2718, 4, definition, {
 		"original_inventory": true, "original_facilities": true, "original_gods": true,
@@ -103,6 +103,46 @@ func run() -> void:
 	game.state.players[0].points = 100
 	land(game)
 	expect(game.state.phase != "await_status_service" and game.state.status_service.is_empty(), "AI landing never leaves the phase pending")
+
+	# AI draw: a coin flip leaves; a bail needs strictly more than 30 points,
+	# costs exactly 30 and sets the release marker.
+	var bails := 0
+	var leaves := 0
+	for trial in range(24):
+		var ai_game: Object = make_game()
+		ai_game._rng.seed = 1000 + trial
+		ai_game._admit_player_status(1, "prison", 3)
+		ai_game.set_player_ai(0, true)
+		ai_game.state.players[0].points = 100
+		land(ai_game)
+		if int(ai_game.state.players[1].get("prison_days", 0)) == 128:
+			bails += 1
+			expect(int(ai_game.state.players[0].points) == 70, "an AI bail costs exactly 30 points")
+		else:
+			leaves += 1
+			expect(int(ai_game.state.players[0].points) == 100 and int(ai_game.state.players[1].get("prison_days", 0)) == 3, "an AI that leaves changes nothing")
+	expect(bails > 0 and leaves > 0, "AI both bails and leaves across seeds (%d/%d)" % [bails, leaves])
+	for trial in range(12):
+		var poor_game: Object = make_game()
+		poor_game._rng.seed = 2000 + trial
+		poor_game._admit_player_status(1, "prison", 3)
+		poor_game.set_player_ai(0, true)
+		poor_game.state.players[0].points = 30
+		land(poor_game)
+		expect(int(poor_game.state.players[1].get("prison_days", 0)) == 3 and int(poor_game.state.players[0].points) == 30, "an AI with exactly 30 points never bails")
+
+	# Event 5: the hospital entrance bails hospital patients only.
+	var clinic: Object = make_game(5)
+	clinic._admit_player_status(2, "hospital", 3)
+	clinic._admit_player_status(3, "prison", 3)
+	clinic.state.players[0].points = 50
+	land(clinic)
+	var clinic_visit: Dictionary = clinic.status_service_snapshot()
+	var clinic_ids: Array = []
+	for row in clinic_visit.get("roster", []):
+		clinic_ids.append(int(row.id))
+	expect(clinic.state.phase == "await_status_service" and str(clinic_visit.get("kind", "")) == "hospital" and clinic_ids == [2], "hospital entrance lists only hospital patients")
+	expect(bool(clinic.bail_status_service(int(clinic_visit.visit_id), 2).get("ok", false)) and int(clinic.state.players[2].get("hospital_days", 0)) == 128 and int(clinic.state.players[0].points) == 20, "hospital bail sets the release marker and costs 30")
 
 	# Validation rejects a visit outside its phase.
 	var bad: Dictionary = JSON.parse_string(game.to_json())

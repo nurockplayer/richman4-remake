@@ -7090,11 +7090,7 @@ func _run_ai_turn_dispatch() -> Dictionary:
 		SourceShop.ai_turn(self)
 		return _result(true, "AI 商店操作完成", {"completed": true})
 	if state.get("phase", "") == "await_magic_house":
-		var magic_actor: Dictionary = _current_player()
-		if bool(magic_actor.get("is_human", false)) and not bool(magic_actor.get("is_ai", true)):
-			return _result(false, "等待魔法屋選擇", {"awaiting_response": true, "completed": false})
-		SourceMagicHouse.ai_turn(self)
-		return _result(true, "AI 魔法屋完成", {"completed": true})
+		return _result(false, "等待魔法屋選擇", {"awaiting_response": true, "completed": false})
 	if state.get("phase", "") == "game_over":
 		return _error("遊戲已結束")
 	if not AuctionRules.response(self).is_empty():

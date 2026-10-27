@@ -2,7 +2,8 @@ extends RefCounted
 
 ## Source event 16 (魔法屋), docs/original-landing-events.md. A landing draws one
 ## target group, then one effect is applied to every member in player order.
-## Humans choose the effect from all twelve; AI uses the source draw.
+## Humans choose the effect from all twelve; AI uses the source draw. Control
+## cannot switch to AI while a human choice is pending (set_player_ai refuses).
 const Catalogue = preload("res://game/content/original_inventory.gd")
 const Inventory = preload("res://game/core/inventory_rules.gd")
 const EVENT_CODE := 16
@@ -81,13 +82,6 @@ static func choose(game: Object, visit_id: int, effect_id: int) -> Dictionary:
 	_resolve(game, effect_id)
 	return game._result(true, "已施展魔法：" + EFFECT_NAMES[effect_id])
 
-## A pending human visit taken over by AI resolves with the AI draw.
-static func ai_turn(game: Object) -> void:
-	var visit := current(game)
-	if visit.is_empty(): return
-	game.state.phase = "await_action"
-	_resolve(game, ai_effect(game, int(visit.player_id), visit.targets))
-
 static func _resolve(game: Object, effect_id: int) -> void:
 	var visit: Dictionary = game.state.magic_house
 	var caster_id := int(visit.player_id)
@@ -125,7 +119,8 @@ static func _apply(game: Object, effect_id: int, target_id: int, caster_id: int)
 			else:
 				game._admit_player_status(target_id, kind, 3)
 		3:
-			target["stay_next"] = max(1, int(target.get("stay_next", 0)))
+			# Source +0x38: add one stay turn, seven-bit wrap.
+			target["stay_next"] = (int(target.get("stay_next", 0)) + 1) & 127
 		4:
 			# Same ledger as an ATM deposit: the bank holds the cash and owes it.
 			var amount: int = mini(int(target.get("cash", 0)), game.bank_transfer_limit("deposit", target_id))

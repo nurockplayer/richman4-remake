@@ -157,7 +157,24 @@ func run() -> void:
 	# Effect 3 and 7 reuse the card helpers.
 	visit_id = open_visit(game, [1])
 	game.choose_magic_house_effect(visit_id, 3)
-	expect(int(players[1].get("stay_next", 0)) >= 1, "stay effect holds the target one turn")
+	var stay_before := int(players[1].get("stay_next", 0))
+	visit_id = open_visit(game, [1])
+	game.choose_magic_house_effect(visit_id, 3)
+	expect(int(players[1].get("stay_next", 0)) == stay_before + 1, "stay effect adds one turn to an existing stay")
+
+	# Fate eligibility follows the target, not the caster: a walking target
+	# never resolves a vehicle-only fate drawn for a driving caster.
+	var fate_game: Object = make_game()
+	fate_game.state.current_player = 0
+	fate_game.state.players[0].vehicle = "car"
+	fate_game.state.players[1].vehicle = "walking"
+	expect(Game.FateEvents.has_eligible_target(fate_game, 10, 0) and not Game.FateEvents.has_eligible_target(fate_game, 10, 1), "fate eligibility uses the named player")
+	expect(Game.FateEvents.has_eligible_target(fate_game, 10), "fate eligibility still defaults to the mover")
+
+	# Control cannot switch to AI while a human choice is pending.
+	var pending_game: Object = make_game()
+	open_visit(pending_game, [1])
+	expect(not pending_game.set_player_ai(0, true) and pending_game.state.phase == "await_magic_house", "AI takeover is refused while the spell choice is pending")
 
 	# Effect 7 skips detained targets: they keep previous_position -1.
 	expect(int(players[3].get("prison_days", 0)) > 0, "fixture target is still jailed")

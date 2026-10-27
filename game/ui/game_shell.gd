@@ -807,6 +807,25 @@ func _render_turn_controls() -> void:
 	_render_status_toast()
 	if full_map_visible:
 		_hide_turn_controls()
+	elif choice_selector.visible:
+		_focus_turn_choice.call_deferred()
+
+
+## Keyboard players answer the YES/NO picker with Enter: focus its first live
+## choice unless a visible control outside the board chrome already owns focus.
+func _focus_turn_choice() -> void:
+	if choice_selector == null or not choice_selector.is_visible_in_tree():
+		return
+	var owner := get_viewport().gui_get_focus_owner()
+	var chrome: Array = [roll_button]
+	chrome.append_array(toolbar_buttons.values())
+	chrome.append_array(tab_buttons.values())
+	if owner != null and owner.is_visible_in_tree() and not owner in chrome:
+		return
+	for button: Button in [buy_button, upgrade_button, end_turn_button]:
+		if button.visible and not button.disabled:
+			button.grab_focus()
+			return
 
 
 func _hide_turn_controls() -> void:
@@ -1363,6 +1382,8 @@ func _choice_button(text: String, key: String, fill: Color, border: Color, ink: 
 	result.add_theme_stylebox_override("hover", _style(fill.lightened(0.18), border.lightened(0.25), 2, 1))
 	result.add_theme_stylebox_override("pressed", _style(fill.darkened(0.18), border, 2, 1))
 	result.add_theme_stylebox_override("disabled", _style(fill.darkened(0.35), border.darkened(0.35), 2, 1))
+	# Keyboard focus gets the same bright gold frame as the route tiles.
+	result.add_theme_stylebox_override("focus", _style(fill.lightened(0.18), Color("#f0d488"), 2, 2))
 	return result
 
 

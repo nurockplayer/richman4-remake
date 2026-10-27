@@ -181,6 +181,9 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	ui._refresh_from_state()
 	_expect(not shell.roll_button.visible and shell.buy_button.visible and shell.buy_button.text == "YES", "landing source turn exposes only the purchase YES control")
 	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "landing source turn exposes the decline NO control")
+	await process_frame
+	_expect(shell.buy_button.has_focus(), "landing picker focuses YES so Enter can answer it")
+	_expect(shell.buy_button.has_theme_stylebox_override("focus"), "focused picker choice shows a visible frame")
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
 	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
 	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")
@@ -989,7 +992,7 @@ func _run() -> void:
 	var game: Object = ui.game_state
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
-	_test_hud_tabs_and_actions(ui, shell, game)
+	await _test_hud_tabs_and_actions(ui, shell, game)
 	_test_source_purchase_offer(ui, shell, game)
 	_test_source_turn_controls_normal_mode(ui, shell, game)
 	_test_source_hud_detail_values(ui, shell, game)

@@ -556,6 +556,7 @@ func _build_source_shell() -> void:
 		shell.sale_requested.connect(_on_source_sale_requested)
 		shell.stocks_requested.connect(_on_source_stocks_requested)
 		shell.roll_requested.connect(_on_source_roll_requested)
+		shell.focus_blocked = _source_modal_open
 		shell.buy_requested.connect(_on_source_buy_requested)
 		shell.upgrade_requested.connect(_on_source_upgrade_requested)
 		shell.end_turn_requested.connect(_on_source_end_turn_requested)
@@ -1436,15 +1437,16 @@ func _on_source_roll_requested() -> void:
 	_on_roll_pressed()
 
 func _on_source_buy_requested() -> void:
-	if source_save_menu != null and source_save_menu.visible: return
+	# A focused picker button stays live under overlays; only the board may answer it.
+	if _source_modal_open(): return
 	_on_buy_pressed()
 
 func _on_source_upgrade_requested() -> void:
-	if source_save_menu != null and source_save_menu.visible: return
+	if _source_modal_open(): return
 	_on_upgrade_pressed()
 
 func _on_source_end_turn_requested() -> void:
-	if source_save_menu != null and source_save_menu.visible: return
+	if _source_modal_open(): return
 	_on_end_turn_pressed()
 
 func _on_source_route_requested(next_index: int) -> void:

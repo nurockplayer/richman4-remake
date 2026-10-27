@@ -99,6 +99,9 @@ var source_setup_panel: Control
 var title_start_button: Button
 var title_load_button: Button
 var title_option_button: Button
+## MainUI reports whether a source modal owns the screen; the picker never
+## takes keyboard focus from under one.
+var focus_blocked: Callable
 var toolbar_buttons: Dictionary = {}
 var tab_buttons: Dictionary = {}
 var route_buttons: HBoxContainer
@@ -807,6 +810,41 @@ func _render_turn_controls() -> void:
 	_render_status_toast()
 	if full_map_visible:
 		_hide_turn_controls()
+	elif choice_selector.visible:
+		_focus_turn_choice.call_deferred()
+
+
+# Overlays (stocks, inspector, help, ...) drop focus when they hide.  Before a
+# key reaches the GUI, re-seat an orphaned focus on the waiting picker so every
+# close path hands Enter back to it.  Focus the player moved deliberately is
+# kept; mouse clicks on board chrome do not keep focus (see _drop_click_focus).
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
+		_focus_turn_choice()
+
+
+## A mouse click on board chrome must not leave keyboard focus behind, or the
+## next Enter would re-run that command instead of answering the picker.
+func _drop_click_focus(button: Button) -> void:
+	button.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and not event.pressed:
+			button.release_focus.call_deferred())
+
+
+## Keyboard players answer the YES/NO picker with Enter: focus its first live
+## choice unless a visible control already owns focus.
+func _focus_turn_choice() -> void:
+	if choice_selector == null or not choice_selector.is_visible_in_tree():
+		return
+	if focus_blocked.is_valid() and bool(focus_blocked.call()):
+		return
+	var owner := get_viewport().gui_get_focus_owner()
+	if owner != null and owner.is_visible_in_tree():
+		return
+	for button: Button in [buy_button, upgrade_button, end_turn_button]:
+		if button.visible and not button.disabled:
+			button.grab_focus()
+			return
 
 
 func _hide_turn_controls() -> void:
@@ -974,6 +1012,10 @@ func open_player_inspector(player_index := -1) -> void:
 func close_player_inspector() -> void:
 	if player_inspect_panel != null:
 		player_inspect_panel.hide()
+	# Hiding the inspector drops its focused close button; hand Enter back to
+	# the picker that was waiting underneath.
+	if choice_selector != null and choice_selector.visible:
+		_focus_turn_choice.call_deferred()
 
 
 func is_player_inspector_visible() -> bool:
@@ -1336,6 +1378,7 @@ func _toolbar_button(text: String, key: String) -> Button:
 	result.add_theme_color_override("font_hover_color", Color("#ffffff"))
 	result.add_theme_color_override("font_disabled_color", Color("#76827c"))
 	result.add_theme_stylebox_override("hover", _style(Color(0.95, 0.84, 0.45, 0.45), Color("#fff0a5"), 3, 1))
+	_drop_click_focus(result)
 	return result
 
 
@@ -1363,6 +1406,8 @@ func _choice_button(text: String, key: String, fill: Color, border: Color, ink: 
 	result.add_theme_stylebox_override("hover", _style(fill.lightened(0.18), border.lightened(0.25), 2, 1))
 	result.add_theme_stylebox_override("pressed", _style(fill.darkened(0.18), border, 2, 1))
 	result.add_theme_stylebox_override("disabled", _style(fill.darkened(0.35), border.darkened(0.35), 2, 1))
+	# Keyboard focus gets the same bright gold frame as the route tiles.
+	result.add_theme_stylebox_override("focus", _style(fill.lightened(0.18), Color("#f0d488"), 2, 2))
 	return result
 
 

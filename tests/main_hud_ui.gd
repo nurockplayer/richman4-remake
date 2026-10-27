@@ -181,6 +181,53 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	ui._refresh_from_state()
 	_expect(not shell.roll_button.visible and shell.buy_button.visible and shell.buy_button.text == "YES", "landing source turn exposes only the purchase YES control")
 	_expect(shell.end_turn_button.visible and shell.end_turn_button.text == "NO", "landing source turn exposes the decline NO control")
+	await process_frame
+	_expect(shell.buy_button.has_focus(), "landing picker focuses YES so Enter can answer it")
+	_expect(shell.buy_button.has_theme_stylebox_override("focus"), "focused picker choice shows a visible frame")
+	var before_inspector_buy: String = game.to_json()
+	var enter_answers := [0]
+	var count_enter := func() -> void: enter_answers[0] += 1
+	shell.buy_requested.connect(count_enter)
+	shell.open_player_inspector(0)
+	for pressed in [true, false]:
+		var enter := InputEventKey.new()
+		enter.keycode = KEY_ENTER
+		enter.physical_keycode = KEY_ENTER
+		enter.pressed = pressed
+		shell.get_viewport().push_input(enter)
+	shell.buy_requested.disconnect(count_enter)
+	_expect(enter_answers[0] == 1, "Enter activates the focused YES choice")
+	shell.buy_button.release_focus()
+	shell.buy_button.pressed.emit()
+	shell.end_turn_button.pressed.emit()
+	_expect(game.to_json() == before_inspector_buy, "picker answers are ignored while the player inspector is open")
+	shell.close_player_inspector()
+	await process_frame
+	_expect(shell.buy_button.has_focus(), "closing the player inspector returns focus to the picker")
+	shell.open_player_inspector(0)
+	shell.buy_button.release_focus()
+	shell._focus_turn_choice()
+	_expect(not shell.buy_button.has_focus(), "the picker never takes focus from under an open modal")
+	shell.close_player_inspector()
+	await process_frame
+	shell.buy_button.release_focus()
+	var any_key := InputEventKey.new()
+	any_key.keycode = KEY_SHIFT
+	any_key.pressed = true
+	shell.get_viewport().push_input(any_key)
+	_expect(shell.buy_button.has_focus(), "a key press re-seats orphaned focus on the waiting picker")
+	var help_button: Button = shell.toolbar_buttons.get("help") as Button
+	help_button.grab_focus()
+	shell.get_viewport().push_input(any_key)
+	_expect(help_button.has_focus(), "keyboard focus the player moved to the toolbar is kept")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	help_button.gui_input.emit(release)
+	await process_frame
+	_expect(not help_button.has_focus(), "a mouse click on board chrome leaves no keyboard focus behind")
+	shell.get_viewport().push_input(any_key)
+	_expect(shell.buy_button.has_focus(), "the next key re-seats focus on the waiting picker")
 	_expect(not shell.upgrade_button.visible, "landing source turn hides the unrelated upgrade control")
 	_expect(shell.turn_dialog.visible and shell.choice_selector.visible, "landing source turn opens the event box and picker")
 	_expect(shell.turn_dialog.get_node_or_null("SourceTurnDialogBox") != null, "the event box keeps its framed dialog body")
@@ -989,7 +1036,7 @@ func _run() -> void:
 	var game: Object = ui.game_state
 	_test_title_ai_guard(ui, game, shell)
 	game = _set_human_graph_game(ui)
-	_test_hud_tabs_and_actions(ui, shell, game)
+	await _test_hud_tabs_and_actions(ui, shell, game)
 	_test_source_purchase_offer(ui, shell, game)
 	_test_source_turn_controls_normal_mode(ui, shell, game)
 	_test_source_hud_detail_values(ui, shell, game)

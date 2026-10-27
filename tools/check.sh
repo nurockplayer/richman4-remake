@@ -37,6 +37,7 @@ run_checked() {
 run_checked "$GODOT_BIN" --headless --editor --path . --import
 run_checked "$GODOT_BIN" --headless --path . --script tests/run.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_inventory_panel.gd
+run_checked "$GODOT_BIN" --headless --path . --script tests/rc_modal_sweep.gd
 run_checked "$GODOT_BIN" --headless --path . --script tests/source_shop_panel.gd
 run_checked python3 tools/test_prepare_inventory_assets.py
 run_checked python3 tools/test_prepare_minigame_assets.py

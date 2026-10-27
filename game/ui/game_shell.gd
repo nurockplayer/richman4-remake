@@ -819,6 +819,13 @@ func _render_turn_controls() -> void:
 # close path hands Enter back to it.  Focus the player moved deliberately is
 # kept; mouse clicks on board chrome do not keep focus (see _drop_click_focus).
 func _input(event: InputEvent) -> void:
+	# The inspector's cards stop mouse events, so MainUI's unhandled cancel
+	# never sees a right-click over them; close on the right release first.
+	if is_player_inspector_visible() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		get_viewport().set_input_as_handled()
+		if not event.pressed:
+			close_player_inspector()
+		return
 	if event is InputEventKey and event.pressed and not event.echo and get_viewport().gui_get_focus_owner() == null:
 		_focus_turn_choice()
 

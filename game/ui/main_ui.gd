@@ -4590,6 +4590,7 @@ func _leave_status_service() -> void:
 	var visit := _status_service_visit()
 	if _status_service_busy or visit.is_empty(): return
 	_status_service_busy = true
+	_status_service_target = -1
 	status_service_popup.hide()
 	var result := _invoke_game("leave_status_service", [int(visit.get("visit_id", -1))])
 	_append_local_log(_result_text(result, "已離開。"))

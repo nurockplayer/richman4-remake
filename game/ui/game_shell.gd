@@ -993,6 +993,10 @@ func open_player_inspector(player_index := -1) -> void:
 func close_player_inspector() -> void:
 	if player_inspect_panel != null:
 		player_inspect_panel.hide()
+	# Hiding the inspector drops its focused close button; hand Enter back to
+	# the picker that was waiting underneath.
+	if choice_selector != null and choice_selector.visible:
+		_focus_turn_choice.call_deferred()
 
 
 func is_player_inspector_visible() -> bool:

@@ -435,6 +435,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Source title and stock controls own their local input.  Stop the
 		# legacy keyboard shortcuts from reaching the hidden adapter while a
 		# source surface is open; StockPanel still receives its _input() phase.
+		# An ESC or right-click no surface consumed still closes the
+		# toolbar windows, so either input always backs out (#204 row 20).
+		if _is_cancel_input(event) and _cancel_toolbar_window():
+			get_viewport().set_input_as_handled()
 		return
 	if _presentation_busy:
 		return
@@ -3038,6 +3042,30 @@ func _source_save_operation_allowed() -> bool:
 		if popup != null and popup.visible:
 			return false
 	return true
+
+func _is_cancel_input(event: InputEvent) -> bool:
+	if event is InputEventKey:
+		return event.pressed and not event.echo and event.keycode == KEY_ESCAPE
+	return event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT
+
+
+## Closes the topmost toolbar window (help, options, save/load, inspector).
+## Options with a confirmation on top stays put: that dialog owns the input.
+func _cancel_toolbar_window() -> bool:
+	if _source_help_modal_open() and source_help_controller.help_panel != null:
+		source_help_controller.help_panel.close_help()
+		return true
+	if _source_options_modal_open() and not source_options_panel.is_input_suspended():
+		source_options_panel.close()
+		return true
+	if source_save_menu != null and source_save_menu.visible:
+		source_save_menu.cancel()
+		return true
+	if source_shell != null and source_shell.has_method("is_player_inspector_visible") and source_shell.is_player_inspector_visible():
+		source_shell.close_player_inspector()
+		return true
+	return false
+
 
 func _source_modal_open() -> bool:
 	if _source_autosave.pending(): return true

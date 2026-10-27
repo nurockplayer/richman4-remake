@@ -88,12 +88,6 @@ static func leave(game: Object, visit_id: int) -> Dictionary:
 	_finish(game)
 	return game._result(true, "已離開")
 
-## AI takeover runs the same source draw as an AI landing.
-static func ai_turn(game: Object) -> void:
-	var visit := current(game)
-	if visit.is_empty(): return
-	_resolve_ai(game, visit, roster(game, str(visit.kind), int(visit.player_id)))
-
 static func _pay(game: Object, visit: Dictionary, target_id: int) -> void:
 	var lander: Dictionary = game._player(int(visit.player_id))
 	var target: Dictionary = game._player(target_id)

@@ -52,8 +52,8 @@ func run() -> void:
 	expect(ui.status_service_popup.visible, "hiding re-opens the service")
 	ui.status_service_buttons[0].pressed.emit()
 	await process_frame
-	expect(ui.status_service_confirm.visible, "choosing a row asks for confirmation")
-	ui.status_service_confirm.confirmed.emit()
+	expect(ui.status_service_confirm_row.visible and ui.status_service_popup.visible, "choosing a row asks for confirmation inside the service window")
+	ui.status_service_confirm_ok.pressed.emit()
 	await process_frame
 	expect(game.state.phase == "await_action" and int(game.state.players[2].get("prison_days", 0)) == 128 and int(game.state.players[0].points) == 70 and not ui.status_service_popup.visible, "confirming bails the player and closes the service")
 	ui.queue_free()

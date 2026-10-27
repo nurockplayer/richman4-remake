@@ -206,7 +206,9 @@ var status_service_popup: PopupPanel
 var status_service_prompt_label: Label
 var status_service_rows: VBoxContainer
 var status_service_buttons: Array = []
-var status_service_confirm: ConfirmationDialog
+var status_service_confirm_row: HBoxContainer
+var status_service_confirm_label: Label
+var status_service_confirm_ok: Button
 var _status_service_busy := false
 var _status_service_target := -1
 var trap_prompt_label: Label
@@ -2123,19 +2125,26 @@ func _build_popups() -> void:
 	status_service_rows = VBoxContainer.new()
 	status_service_rows.add_theme_constant_override("separation", 6)
 	service_box.add_child(status_service_rows)
+	# Confirmation stays inside the exclusive popup: a second window would
+	# fight the exclusive parent for input.
+	status_service_confirm_row = HBoxContainer.new()
+	status_service_confirm_row.name = "StatusServiceConfirm"
+	status_service_confirm_label = _make_label("", 13, TEXT_MAIN)
+	status_service_confirm_row.add_child(status_service_confirm_label)
+	status_service_confirm_ok = _make_button("確定", _confirm_status_service)
+	status_service_confirm_ok.name = "StatusServiceConfirmOk"
+	status_service_confirm_row.add_child(status_service_confirm_ok)
+	status_service_confirm_row.add_child(_make_button("取消", func() -> void:
+		_status_service_target = -1
+		_update_status_service_popup()))
+	status_service_confirm_row.hide()
+	service_box.add_child(status_service_confirm_row)
 	var service_leave := _make_button("離開", _leave_status_service)
 	service_leave.name = "StatusServiceLeave"
 	service_box.add_child(service_leave)
 	status_service_popup.popup_hide.connect(func() -> void:
 		if not _status_service_busy: call_deferred("_update_status_service_popup")
 	)
-	status_service_confirm = ConfirmationDialog.new()
-	status_service_confirm.exclusive = false
-	status_service_confirm.title = "保釋確認"
-	status_service_confirm.ok_button_text = "確定"
-	status_service_confirm.cancel_button_text = "取消"
-	status_service_confirm.confirmed.connect(_confirm_status_service)
-	add_child(status_service_confirm)
 
 	audio_folder_dialog = FileDialog.new()
 	audio_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
@@ -4539,7 +4548,7 @@ func _update_status_service_popup() -> void:
 	status_service_prompt_label.text = "目前關在%s的人：選一名保釋，每次 %d 點券。" % [facility, price]
 	for button in status_service_buttons:
 		status_service_rows.remove_child(button)
-		button.free()
+		button.queue_free()
 	status_service_buttons.clear()
 	for row in _as_array(visit.get("roster", [])):
 		if not row is Dictionary: continue
@@ -4547,16 +4556,22 @@ func _update_status_service_popup() -> void:
 		var target_name := str(row.get("name", ""))
 		var bail := _make_button("保釋 %s（%d 點券）" % [target_name, price], func() -> void: _ask_status_service(target_id, target_name))
 		bail.name = "StatusServiceBail%d" % target_id
-		bail.disabled = points < price
+		bail.disabled = points < price or _status_service_target >= 0
 		status_service_rows.add_child(bail)
 		status_service_buttons.append(bail)
+	var confirming := ""
+	for row in _as_array(visit.get("roster", [])):
+		if row is Dictionary and int(row.get("id", -1)) == _status_service_target: confirming = str(row.get("name", ""))
+	if confirming.is_empty(): _status_service_target = -1
+	status_service_confirm_label.text = "花 %d 點券保釋 %s？" % [price, confirming]
+	status_service_confirm_row.visible = not confirming.is_empty()
 	if not status_service_popup.visible: status_service_popup.popup_centered()
 
 func _ask_status_service(target_id: int, target_name: String) -> void:
 	if _status_service_busy: return
 	_status_service_target = target_id
-	status_service_confirm.dialog_text = "花 30 點券保釋 %s？" % target_name
-	status_service_confirm.popup_centered()
+	# Deferred: the pressed row button is rebuilt by the refresh.
+	call_deferred("_update_status_service_popup")
 
 func _confirm_status_service() -> void:
 	var visit := _status_service_visit()

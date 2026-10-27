@@ -14,11 +14,20 @@ var enabled := true
 var volume := 0.35
 var player := AudioStreamPlayer.new()
 var _preferred_source_path := ""
+## Board track resumed after a scene cue, or -1 when no cue is playing.
+var _resume_track := -1
+
+## Source music table (rich4.exe 47e773): eight board tracks (RICH08,
+## RICH16..22; CD tracks 02-09) cycled in order by 454d91, then seventeen scene
+## cues (MIDI01..16 with 14-1/14-2; CD tracks 10-26) played once by 4549cf,
+## which then resumes the board track from its start (454bcc).
+const BOARD_TRACKS := 8
+const SOURCE_TRACK_COUNT := 25
 
 
 func _ready() -> void:
 	add_child(player)
-	player.finished.connect(next_track)
+	player.finished.connect(_on_finished)
 	var settings := ConfigFile.new()
 	if settings.load(_settings_path()) == OK:
 		volume = clampf(float(settings.get_value("audio", "volume", 0.35)), 0.0, 1.0)
@@ -83,6 +92,7 @@ func configure(path: String, persist := true) -> bool:
 	source_path = path
 	tracks = found
 	current_track = -1
+	_resume_track = -1
 	if persist:
 		_preferred_source_path = path
 		_save_settings()
@@ -101,10 +111,41 @@ func play_track(index: int) -> bool:
 	if stream == null:
 		return false
 	current_track = index
+	_resume_track = -1
 	player.stream = stream
 	_play_current()
 	playback_changed.emit(tracks[index].get_file())
 	return true
+
+
+## Board tracks in a source-layout library; any other library cycles all.
+func _board_count() -> int:
+	return BOARD_TRACKS if tracks.size() == SOURCE_TRACK_COUNT else tracks.size()
+
+
+## Play source scene cue `cue` (0 = MIDI01) once, then resume the board track.
+## Libraries without the source layout have no cues and keep playing.
+func play_cue(cue: int) -> bool:
+	if not enabled or tracks.size() != SOURCE_TRACK_COUNT or cue < 0 or BOARD_TRACKS + cue >= tracks.size():
+		return false
+	var stream := _load_track(tracks[BOARD_TRACKS + cue])
+	if stream == null:
+		return false
+	if _resume_track < 0:
+		_resume_track = current_track
+	player.stream = stream
+	_play_current()
+	return true
+
+
+func _on_finished() -> void:
+	if _resume_track < 0:
+		next_track()
+		return
+	var board := _resume_track
+	_resume_track = -1
+	if not play_track(board):
+		next_track()
 
 
 ## Narrow loading seam for isolated fixtures; production uses the original Ogg
@@ -120,8 +161,10 @@ func _play_current() -> void:
 func next_track() -> void:
 	if tracks.is_empty() or not enabled:
 		return
-	for offset in range(1, tracks.size() + 1):
-		var index := (current_track + offset) % tracks.size()
+	_resume_track = -1
+	var count := _board_count()
+	for offset in range(1, count + 1):
+		var index := (current_track + offset) % count
 		var stream := _load_track(tracks[index])
 		if stream != null:
 			current_track = index
@@ -163,6 +206,7 @@ func _clear_library() -> void:
 	source_path = ""
 	tracks = []
 	current_track = -1
+	_resume_track = -1
 	if changed:
 		library_changed.emit(0)
 

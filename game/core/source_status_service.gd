@@ -52,6 +52,7 @@ static func admit(game: Object, player_id: int) -> bool:
 	var sequence := int(game.state.get("status_service_sequence", 0)) + 1
 	if sequence > SEQUENCE_LIMIT: return false
 	game.state.status_service_sequence = sequence
+	game._record_event("status_service_entered", {"player_id": player_id, "visit_id": sequence, "status_kind": KIND_BY_EVENT[event_code]})
 	var visit := {"visit_id": sequence, "player_id": player_id, "node_id": int(player.position), "turn": int(game.state.turn), "kind": kind}
 	var human := bool(player.get("is_human", false)) and not bool(player.get("is_ai", true))
 	if human:

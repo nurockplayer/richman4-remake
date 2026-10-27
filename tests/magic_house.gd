@@ -71,6 +71,22 @@ func run() -> void:
 	var restored: Object = Game.from_dict(JSON.parse_string(clean.to_json()))
 	expect(clean.state.phase == "await_magic_house" and bool(saved.get("ok", false)) and restored != null and restored.state.phase == "await_magic_house", "pending magic house survives save/load: %s" % [saved.get("errors", [])])
 
+	# Every restored spell on every player (one jailed, one carrying cards and
+	# tools) keeps the save valid.
+	for effect_id in range(12):
+		if MagicHouse.UNRESTORED_EFFECTS.has(effect_id):
+			continue
+		var probe: Object = make_game()
+		probe._admit_player_status(3, "prison", 3)
+		probe._grant_card(1, "均富")
+		preload("res://game/core/inventory_rules.gd").grant_tool(probe.state.inventory_supply, probe.state.players[2].tools, "路障", 1)
+		for player in probe.state.players:
+			player.cash = int(player.cash) + 1000
+		var probe_visit := open_visit(probe, [0, 1, 2, 3])
+		var cast_result: Dictionary = probe.choose_magic_house_effect(probe_visit, effect_id)
+		var probe_save: Dictionary = Game.validate_save(JSON.parse_string(probe.to_json()))
+		expect(bool(cast_result.get("ok", false)) and bool(probe_save.get("ok", false)), "spell %d on all players keeps the save valid: %s" % [effect_id, probe_save.get("errors", [])])
+
 	# Target groups: highest value with ties; zero only qualifies for wealth.
 	var players: Array = game.state.players
 	for index in range(4):
@@ -104,6 +120,10 @@ func run() -> void:
 	expect(int(players[1].cash) == 0 and int(players[1].deposit) == deposits[0] + 900 and int(players[2].deposit) == deposits[1] + 900, "targets deposit all their cash")
 	expect(int(players[0].cash) == 500, "caster outside the group is untouched")
 	expect(game.state.phase == "await_action" and game.state.magic_house.is_empty(), "choice returns to the action phase")
+	var ledger_total := 0
+	for player in players:
+		ledger_total += int(player.deposit)
+	expect(int(game.state.bank.deposits) == ledger_total, "bank deposit ledger matches player deposits after the spell")
 
 	# Effect 0: cards sell at their listed point price and return to supply.
 	players[1].cards.clear()
@@ -138,6 +158,12 @@ func run() -> void:
 	visit_id = open_visit(game, [1])
 	game.choose_magic_house_effect(visit_id, 3)
 	expect(int(players[1].get("stay_next", 0)) >= 1, "stay effect holds the target one turn")
+
+	# Effect 7 skips detained targets: they keep previous_position -1.
+	expect(int(players[3].get("prison_days", 0)) > 0, "fixture target is still jailed")
+	visit_id = open_visit(game, [3])
+	game.choose_magic_house_effect(visit_id, 7)
+	expect(int(players[3].get("previous_position", -1)) == -1, "reverse spell leaves a jailed target alone")
 
 	# AI: resolves on landing without a pending phase.
 	game.set_player_ai(0, true)

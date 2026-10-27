@@ -127,16 +127,24 @@ static func _apply(game: Object, effect_id: int, target_id: int, caster_id: int)
 		3:
 			target["stay_next"] = max(1, int(target.get("stay_next", 0)))
 		4:
-			var cash := int(target.get("cash", 0))
-			if cash > 0:
-				target.deposit = int(target.get("deposit", 0)) + cash
-				target.cash = 0
-			detail["amount"] = max(cash, 0)
+			# Same ledger as an ATM deposit: the bank holds the cash and owes it.
+			var amount: int = mini(int(target.get("cash", 0)), game.bank_transfer_limit("deposit", target_id))
+			if amount > 0:
+				target.cash = int(target.cash) - amount
+				target.deposit = int(target.get("deposit", 0)) + amount
+				game.state.bank.cash = int(game.state.bank.get("cash", 0)) + amount
+				game.state.bank.deposits = int(game.state.bank.get("deposits", 0)) + amount
+			detail["amount"] = max(amount, 0)
 		6:
 			var draw: Dictionary = Inventory.receive_random_card(game.state.inventory_supply, target.cards, game._rng)
 			detail["card_id"] = str(draw.get("drawn_card_id", ""))
 		7:
-			game._reverse_player_direction(target_id)
+			# Source 40c78c only runs when the status dword is clear; a detained
+			# player keeps no previous node.
+			if game._status_active(target) or game._sleep_active(target):
+				detail["skipped"] = "detained"
+			else:
+				game._reverse_player_direction(target_id)
 		8:
 			detail["points"] = game._sell_all_tools_for_points(target_id)
 		_:

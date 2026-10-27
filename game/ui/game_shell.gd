@@ -99,6 +99,9 @@ var source_setup_panel: Control
 var title_start_button: Button
 var title_load_button: Button
 var title_option_button: Button
+## MainUI reports whether a source modal owns the screen; the picker never
+## takes keyboard focus from under one.
+var focus_blocked: Callable
 var toolbar_buttons: Dictionary = {}
 var tab_buttons: Dictionary = {}
 var route_buttons: HBoxContainer
@@ -823,6 +826,8 @@ func _input(event: InputEvent) -> void:
 ## choice unless a visible control outside the board chrome already owns focus.
 func _focus_turn_choice() -> void:
 	if choice_selector == null or not choice_selector.is_visible_in_tree():
+		return
+	if focus_blocked.is_valid() and bool(focus_blocked.call()):
 		return
 	var owner := get_viewport().gui_get_focus_owner()
 	var chrome: Array = [roll_button]

@@ -556,6 +556,7 @@ func _build_source_shell() -> void:
 		shell.sale_requested.connect(_on_source_sale_requested)
 		shell.stocks_requested.connect(_on_source_stocks_requested)
 		shell.roll_requested.connect(_on_source_roll_requested)
+		shell.focus_blocked = _source_modal_open
 		shell.buy_requested.connect(_on_source_buy_requested)
 		shell.upgrade_requested.connect(_on_source_upgrade_requested)
 		shell.end_turn_requested.connect(_on_source_end_turn_requested)

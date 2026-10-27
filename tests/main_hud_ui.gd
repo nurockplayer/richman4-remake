@@ -185,7 +185,18 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	_expect(shell.buy_button.has_focus(), "landing picker focuses YES so Enter can answer it")
 	_expect(shell.buy_button.has_theme_stylebox_override("focus"), "focused picker choice shows a visible frame")
 	var before_inspector_buy: String = game.to_json()
+	var enter_answers := [0]
+	var count_enter := func() -> void: enter_answers[0] += 1
+	shell.buy_requested.connect(count_enter)
 	shell.open_player_inspector(0)
+	for pressed in [true, false]:
+		var enter := InputEventKey.new()
+		enter.keycode = KEY_ENTER
+		enter.physical_keycode = KEY_ENTER
+		enter.pressed = pressed
+		shell.get_viewport().push_input(enter)
+	shell.buy_requested.disconnect(count_enter)
+	_expect(enter_answers[0] == 1, "Enter activates the focused YES choice")
 	shell.buy_button.release_focus()
 	shell.buy_button.pressed.emit()
 	shell.end_turn_button.pressed.emit()
@@ -193,6 +204,12 @@ func _test_hud_tabs_and_actions(ui: Control, shell: Control, game: Object) -> vo
 	shell.close_player_inspector()
 	await process_frame
 	_expect(shell.buy_button.has_focus(), "closing the player inspector returns focus to the picker")
+	shell.open_player_inspector(0)
+	shell.buy_button.release_focus()
+	shell._focus_turn_choice()
+	_expect(not shell.buy_button.has_focus(), "the picker never takes focus from under an open modal")
+	shell.close_player_inspector()
+	await process_frame
 	shell.buy_button.release_focus()
 	var any_key := InputEventKey.new()
 	any_key.keycode = KEY_SHIFT

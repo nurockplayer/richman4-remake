@@ -962,6 +962,17 @@ func _edition() -> String:
 func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
+	# Like the other source modals, a right release cancels the quantity pad
+	# first and otherwise closes the panel; the press is consumed so it never
+	# starts a board drag underneath.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		get_viewport().set_input_as_handled()
+		if not event.pressed:
+			if _quantity_pad.visible:
+				_quantity_pad.cancel()
+			else:
+				close_panel()
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _quantity_pad.visible:
 		var pad_transform: Transform2D = _quantity_pad.get_global_transform_with_canvas()
 		var pad_point: Vector2 = pad_transform.affine_inverse() * event.position

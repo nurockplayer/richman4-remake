@@ -378,6 +378,10 @@ func _test_quantity_pad_viewport_input(snapshot_value: Dictionary) -> void:
 	expect(not pad.visible and panel.visible, "Escape cancels pad without closing stock panel")
 
 	await _push_control_click(view, buy_button)
+	await _push_right_click(view, panel.get_global_transform_with_canvas() * Vector2(320, 240))
+	expect(not pad.visible and panel.visible, "right-click cancels pad without closing stock panel")
+
+	await _push_control_click(view, buy_button)
 	var exit_button: Button = panel.find_child("StockExit", true, false)
 	await _push_control_click(view, exit_button)
 	expect(not pad.visible and panel.visible, "outside EXIT click cancels pad and is consumed")
@@ -386,8 +390,24 @@ func _test_quantity_pad_viewport_input(snapshot_value: Dictionary) -> void:
 	await _push_viewport_click(view, panel.get_global_transform_with_canvas() * Vector2(630, 455))
 	expect(not pad.visible and panel.visible, "blank table-margin click cancels pad without closing panel")
 	expect(trade_requests.is_empty() and JSON.stringify(panel.get_snapshot()) == unchanged_snapshot, "outside and cancel inputs preserve trade requests and projected account/holdings state")
+	var right_closed := [false]
+	panel.closed.connect(func() -> void: right_closed[0] = true)
+	await _push_right_click(view, panel.get_global_transform_with_canvas() * Vector2(320, 240))
+	expect(right_closed[0] and not panel.visible, "right-click closes stock panel when no pad is open")
+	expect(trade_requests.is_empty(), "right-click close emits no trade request")
 	view.queue_free()
 	await process_frame
+
+
+func _push_right_click(view: SubViewport, point: Vector2) -> void:
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_RIGHT
+		event.pressed = pressed
+		event.position = point
+		event.global_position = point
+		view.push_input(event, true)
+		await process_frame
 
 
 func _push_control_click(view: SubViewport, control: Control) -> void:

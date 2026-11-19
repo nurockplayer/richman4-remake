@@ -97,7 +97,7 @@ RICHMAN4_MAP_CATALOG="$PWD/.local/imported-original/maps/catalog.json" bash tool
 5. 把 `Richman4-private.zip` 先複製到 `<cache>/rc/` 內的暫存檔，核對 SHA-256 與 zip 完整性後才改名為 `Richman4-rc1-<short-sha>.zip` 並寫出 `.sha256`；worktree 的 `build/` 與暫存目錄在結束時刪除。
 
 ```sh
-orb-test --heavy --host -- bash tools/package_rc.sh
+tachi-run --heavy --host -- bash tools/package_rc.sh
 ```
 
 `RICHMAN4_CACHE_ROOT` 可換共用 cache，`RICHMAN4_RC_OUTPUT_DIR` 可換輸出目錄，`RICHMAN4_RC_SKIP_EXPORT=1` 會重用既有 `.local/` 匯出，`RICHMAN4_MINIGAME_MANIFEST` 指定要封裝的小遊戲輸入 manifest（預設 `.local/source-minigames-scene/manifest.json`；不存在時套件保留明確的無輸入 fallback）。`package_macos.sh` 跑 `tools/check.sh` 前會清掉打包用的 `RICHMAN4_MAP_CATALOG`／`RICHMAN4_SCENE_MANIFEST` 等變數，並暫時把 `.local/original-scenes`、`.local/original-help`、`.local/imported-original`、`.local/source-minigames-scene` 移到 `*.gate-hidden`，gate 結束後再還原：需要擁有者 canonical catalog identity 的 lane 與「缺圖時明確 fallback」的測試，不能看到正在打包的私人素材，而 runtime 在變數未設定時會改讀這些 `res://.local` 路徑。catalog 本身仍由 `validate_catalog.gd` 與 `rc_art_report.gd` 的 map 數量驗證。`.local/rc-art-report.txt` 保留最後一次煙霧測試的 presenter → found/fallback 清單。原始素材、衍生 PNG 與 RC zip 都不得提交或推送。
